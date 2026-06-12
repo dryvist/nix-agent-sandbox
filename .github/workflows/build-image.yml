@@ -1,0 +1,71 @@
+name: Build agent image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Flake checks
+        run: nix flake check -L
+
+      - name: Build image
+        run: nix build -L .#agent-image
+
+      - name: Push to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          ARCH: ${{ matrix.arch }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./result | docker load
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker tag ghcr.io/dryvist/nix-agent-sandbox/agent:latest \
+            "ghcr.io/dryvist/nix-agent-sandbox/agent:latest-$ARCH"
+          docker push "ghcr.io/dryvist/nix-agent-sandbox/agent:latest-$ARCH"
+
+  manifest:
+    name: Multi-arch manifest
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Create and push manifest
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker manifest create ghcr.io/dryvist/nix-agent-sandbox/agent:latest \
+            ghcr.io/dryvist/nix-agent-sandbox/agent:latest-amd64 \
+            ghcr.io/dryvist/nix-agent-sandbox/agent:latest-arm64
+          docker manifest push ghcr.io/dryvist/nix-agent-sandbox/agent:latest
