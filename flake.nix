@@ -35,9 +35,12 @@
     in
     {
       lib = {
-        # Egress allowlist consumed by the (phase 2) proxy package, the
-        # docker-host nftables rules, and the architecture docs.
+        # Egress allowlist consumed by the docker-host egress proxy
+        # (ansible-proxmox-apps roles/agent_sandbox) and the architecture docs.
         egressDomains = import ./nix/egress-domains.nix;
+        # Task profiles (secret group + GitHub scope per profile); baked into
+        # the image, exported for the docs and downstream consumers.
+        taskProfiles = import ./nix/task-profiles.nix;
       };
 
       packages = forSystems allSystems (

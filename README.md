@@ -11,9 +11,10 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 | Output | What it is |
 | --- | --- |
-| `packages.<linux>.agent-image` | `dockerTools.streamLayeredImage` with the three CLIs, git/gh/nix, and the autonomous configs baked from `dryvist/nix-ai` `lib.renderAutonomous.files`. Runs as `agent` (uid 1000), no sudo. |
-| `packages.*.agent-cli` | `agent run\|shell` — dispatch via Apple `container` (macOS) or Docker. |
-| `lib.egressDomains` | The egress allowlist shared by the (phase 2) proxy, docker-host nftables, and the docs. |
+| `packages.<linux>.agent-image` | OCI image: the three CLIs, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
+| `packages.*.agent-cli` | `agent run\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on the docker-host VM via `--host`. |
+| `lib.egressDomains` | The egress allowlist enforced by the docker-host CONNECT proxy (ansible-proxmox-apps `agent_sandbox`). |
+| `lib.taskProfiles` | Task profiles: the pre-defined OpenBao secret group + GitHub scope each `--profile` grants. |
 | `.github/workflows/build-image.yml` | Builds both architectures and publishes the multi-arch manifest to GHCR. |
 
 ## Installation
@@ -38,7 +39,16 @@ builder: `nix build .#agent-image`.
 GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
   agent run --tool claude --repo dryvist/some-repo "fix the flaky test in ci.yml"
 
-# Debug shell inside the image
+# Same, on the docker-host VM inside its egress-allowlisted network, with
+# the task profile's secret group fetched from OpenBao and a per-run
+# repo-scoped GitHub App token minted there (no standing PAT). AppRole
+# material defaults to the ambient AI_READONLY_* pair; ai-apply tiers pass
+# a human-minted single-use BAO_WRAPPED_SECRET_ID instead.
+BAO_ADDR=https://openbao.example.internal \
+  agent run --host docker-host.example.internal --profile dev \
+  --repo dryvist/some-repo "fix the flaky test in ci.yml"
+
+# Debug shell inside the image (add --host to debug on the docker host)
 agent shell
 ```
 
@@ -53,5 +63,11 @@ onto a host filesystem by any code path.
   deny list (one shared list in `dryvist/nix-ai`, rendered into all three
   tools' native formats) blocks credential-borne damage like `gh repo
   delete` and force-pushes.
-- **Network** (phase 2): allowlisting CONNECT proxy from `lib.egressDomains`.
+- **Network**: on the docker-host, containers join an internal-only Docker
+  network whose sole route out is a CONNECT proxy allowlisting
+  `lib.egressDomains` (ansible-proxmox-apps `agent_sandbox` role).
+- **Secrets**: `--profile` fetches a pre-defined KV group from OpenBao and
+  mints a per-run repo-scoped GitHub App token (≤1h); AppRole material is
+  unset before any agent tool starts, and write-tier grants are single-use
+  human-wrapped secret_ids.
 - **Durability**: git. The branch/PR is the only thing that survives the run.

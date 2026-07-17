@@ -66,6 +66,12 @@ let
     path: contents: writeTextDir "${lib.removePrefix "/" homeDir}/${path}" contents
   ) renderAutonomous.files;
 
+  # Task profiles (pre-defined secret group + GitHub scope per profile),
+  # consumed by the entrypoint's OpenBao block.
+  profilesFile = writeTextDir "${lib.removePrefix "/" homeDir}/.agent-profiles.json" (
+    builtins.toJSON (import ./task-profiles.nix)
+  );
+
   etcFiles = runCommand "agent-etc" { } ''
     mkdir -p $out/etc
     cat > $out/etc/passwd <<EOF
@@ -85,7 +91,14 @@ dockerTools.streamLayeredImage {
   name = "ghcr.io/dryvist/nix-agent-sandbox/agent";
   tag = "latest";
 
-  contents = toolPackages ++ basePackages ++ configFiles ++ [ etcFiles ];
+  contents =
+    toolPackages
+    ++ basePackages
+    ++ configFiles
+    ++ [
+      profilesFile
+      etcFiles
+    ];
 
   fakeRootCommands = ''
     mkdir -p ./home/agent/work ./tmp

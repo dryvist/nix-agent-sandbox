@@ -8,6 +8,13 @@
 #   AGENT_RUN_ID      optional stable run id (default: timestamp)
 #   AGENT_SHELL=1     drop into bash instead of running an agent (debugging)
 #   GH_TOKEN          scoped token for clone/push/PR when AGENT_REPO is set
+#   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
+#                     requires BAO_ADDR + AppRole material below
+#   BAO_ADDR          OpenBao API address; enables the profile secret fetch
+#   BAO_ROLE_ID       AppRole role_id (ai-readonly / ai-apply-<svc> tier)
+#   BAO_SECRET_ID     AppRole secret_id — or:
+#   BAO_WRAPPED_SECRET_ID  single-use response-wrapping token holding the
+#                     secret_id (the human-minted ai-apply grant path)
 #
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
@@ -40,6 +47,74 @@ fi
 workdir="${HOME}/work"
 mkdir -p "${workdir}"
 cd "${workdir}"
+
+# --- OpenBao: task-profile secrets + per-run GitHub token ------------------
+# The profile names a pre-defined group of secrets; whether this run's
+# AppRole may actually read them is enforced server-side by its policies.
+# AppRole material is consumed here and unset before any agent tool starts.
+if [ -n "${AGENT_PROFILE:-}" ]; then
+  if [ -z "${BAO_ADDR:-}" ]; then
+    echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires BAO_ADDR." >&2
+    exit 64
+  fi
+  profile="$(jq -ce --arg p "${AGENT_PROFILE}" '.[$p]' "${HOME}/.agent-profiles.json")" || {
+    echo "agent-entrypoint: unknown AGENT_PROFILE '${AGENT_PROFILE}'." >&2
+    exit 64
+  }
+
+  if [ -n "${BAO_WRAPPED_SECRET_ID:-}" ]; then
+    BAO_SECRET_ID="$(curl -fsS -X POST -H "X-Vault-Token: ${BAO_WRAPPED_SECRET_ID}" \
+      "${BAO_ADDR}/v1/sys/wrapping/unwrap" | jq -re '.data.secret_id')" || {
+      echo "agent-entrypoint: unwrapping the single-use secret_id failed (already used or expired?)." >&2
+      exit 64
+    }
+  fi
+  if [ -z "${BAO_ROLE_ID:-}" ]; then
+    echo "agent-entrypoint: BAO_ROLE_ID is required with AGENT_PROFILE." >&2
+    exit 64
+  fi
+  bao_token="$(jq -cn --arg r "${BAO_ROLE_ID}" --arg s "${BAO_SECRET_ID:-}" \
+      '{role_id: $r, secret_id: $s}' \
+    | curl -fsS -X POST -d @- "${BAO_ADDR}/v1/auth/approle/login" \
+    | jq -re '.auth.client_token')" || {
+    echo "agent-entrypoint: OpenBao AppRole login failed." >&2
+    exit 64
+  }
+  unset BAO_ROLE_ID BAO_SECRET_ID BAO_WRAPPED_SECRET_ID
+
+  # Export each profile KV field. The KV value wins over caller env: the
+  # profile is the declared source of truth for what this run uses.
+  while IFS=$'\t' read -r kv_path kv_field kv_env; do
+    value="$(curl -fsS -H "X-Vault-Token: ${bao_token}" \
+        "${BAO_ADDR}/v1/secret/data/${kv_path}" \
+      | jq -re --arg f "${kv_field}" '.data.data[$f]')" || {
+      echo "agent-entrypoint: secret/${kv_path}#${kv_field} unreadable (unseeded, or outside this AppRole's policy)." >&2
+      exit 64
+    }
+    export "${kv_env}=${value}"
+  done < <(jq -r '.kv[] | [.path, .field, .env] | @tsv' <<<"${profile}")
+
+  # Per-run GitHub App installation token (<=1h), constrained to AGENT_REPO
+  # when set. A caller-supplied GH_TOKEN wins (offline / non-OpenBao runs).
+  permission_set="$(jq -r '.githubPermissionSet // ""' <<<"${profile}")"
+  if [ -n "${permission_set}" ] && [ -z "${GH_TOKEN:-}" ]; then
+    if [ -n "${AGENT_REPO:-}" ]; then
+      mint_body="$(jq -cn --arg r "${AGENT_REPO##*/}" '{repositories: [$r]}')"
+    else
+      mint_body='{}'
+    fi
+    GH_TOKEN="$(curl -fsS -X POST -H "X-Vault-Token: ${bao_token}" -d "${mint_body}" \
+      "${BAO_ADDR}/v1/github/token/${permission_set}" | jq -re '.data.token')" || {
+      echo "agent-entrypoint: minting the GitHub App token from github/token/${permission_set} failed." >&2
+      exit 64
+    }
+    GITHUB_TOKEN="${GH_TOKEN}"
+    export GH_TOKEN GITHUB_TOKEN
+  fi
+  # ponytail: token dies with its <=1h TTL; add explicit lease revocation on
+  # exit if runs ever outlive their usefulness before the TTL does.
+  unset bao_token
+fi
 
 # --- Workspace -------------------------------------------------------------
 branch=""
