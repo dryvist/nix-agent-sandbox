@@ -1,9 +1,12 @@
 # Egress allowlist for agent containers.
 #
-# Single source of truth for every enforcement point: the (phase 2)
-# allowlisting CONNECT proxy package, the docker-host nftables rules
-# (ansible-proxmox-apps), and docs.jacobpevans.com/autonomous-agents.
-# Agent containers get no other route out.
+# Single source of truth for every enforcement point: the docker-host
+# allowlisting CONNECT proxy (ansible-proxmox-apps roles/agent_sandbox —
+# regenerate its committed copy with
+# `nix eval .#lib.egressDomains --json`) and
+# docs.jacobpevans.com/autonomous-agents. Agent containers get no other
+# route out. Internal FQDNs (OpenBao's ingress route) are appended on the
+# ansible side from the inventory domain — never as literals here.
 {
   # Model APIs
   modelApis = [
