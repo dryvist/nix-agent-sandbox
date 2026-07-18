@@ -68,13 +68,14 @@ env_flags() {
 
 # --- GitHub write-token minting (launcher-side; the container never holds
 # github-write reach — see entrypoint.sh). One repo per request, parameter-
-# pinned server-side by the github-write OpenBao policy. Claim-before-work:
-# a CAS-guarded KV lease at secret/locks/github-write/<installation>/<repo>
-# stops two concurrent runs writing the same repo; it self-expires (~15m
-# deadman) rather than being explicitly released, since a run's GH_TOKEN
-# stays valid on its own ~1h App-installation TTL regardless of the lease.
+# pinned server-side by the github-write OpenBao policy. No coordination
+# lock: each run clones fresh and pushes its own uniquely-named branch, so
+# there is no shared git state for concurrent same-repo runs to race on —
+# git's own non-fast-forward push rejection is what would catch a real
+# collision, and GitHub Apps support any number of simultaneously-valid
+# installation tokens, so serializing the mint itself protects nothing.
 mint_github_token() {
-  local repo="$1" bao_addr owner iid role_id secret_id bao_tok cur ver acquire_code resp
+  local repo="$1" bao_addr owner iid role_id secret_id bao_tok resp
   bao_addr="${BAO_ADDR:-${VAULT_ADDR:-}}"
   [ -n "${bao_addr}" ] || {
     echo "agent: --repo requires BAO_ADDR (or VAULT_ADDR) to mint a GitHub write token." >&2
@@ -104,25 +105,6 @@ mint_github_token() {
     exit 64
   }
 
-  # CAS-acquire the per-repo lease: read current version, write with cas=<that
-  # version> so a concurrent claim (which changed the version first) loses.
-  curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
-    -d "{\"delete_version_after\":\"15m\"}" \
-    "${bao_addr}/v1/secret/metadata/locks/github-write/${iid}/${repo##*/}" >/dev/null 2>&1 || true
-  cur="$(curl -fsS --max-time 10 -H "X-Vault-Token: ${bao_tok}" \
-    "${bao_addr}/v1/secret/data/locks/github-write/${iid}/${repo##*/}" 2>/dev/null || echo '{}')"
-  ver="$(jq -r '.data.metadata.version // 0' <<<"${cur}")"
-  acquire_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST \
-    -H "X-Vault-Token: ${bao_tok}" \
-    -d "$(jq -cn --arg h "agent-cli@$(date -u +%Y%m%dT%H%M%SZ)" --argjson v "${ver}" \
-          '{options:{cas:$v},data:{holder:$h}}')" \
-    "${bao_addr}/v1/secret/data/locks/github-write/${iid}/${repo##*/}")"
-  [ "${acquire_code}" = "200" ] || {
-    echo "agent: could not claim the write lease for ${repo} (held by a concurrent run? HTTP ${acquire_code})" >&2
-    unset bao_tok role_id secret_id
-    exit 75
-  }
-
   resp="$(curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
       -d "$(jq -cn --argjson i "${iid}" --arg r "${repo##*/}" '{installation_id:$i,repositories:[$r]}')" \
       "${bao_addr}/v1/github/token")" || {
@@ -139,7 +121,7 @@ mint_github_token() {
   export GH_TOKEN GITHUB_TOKEN
   # Bootstrap material dies here — it must never reach the container (the
   # exec below only forwards what env_flags() explicitly enumerates).
-  unset bao_tok role_id secret_id resp cur ver
+  unset bao_tok role_id secret_id resp
 }
 
 # --host: run on that Docker host and join its egress-allowlisted network.

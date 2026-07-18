@@ -46,9 +46,8 @@ GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
 #
 # --repo additionally has the *launcher* (not the container) mint a
 # per-run repo-scoped GitHub App token via the github-write OpenBao
-# identity — a claim-before-work write-lease stops two runs writing the
-# same repo at once. Needs OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID
-# and the matching OPENBAO_GITHUB_<DRYVIST|PERSONAL>_INSTALLATION_ID.
+# identity. Needs OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID and the
+# matching OPENBAO_GITHUB_<DRYVIST|PERSONAL>_INSTALLATION_ID.
 BAO_ADDR=https://openbao.example.internal \
   agent run --host docker-host.example.internal --profile dev \
   --repo dryvist/some-repo "fix the flaky test in ci.yml"
