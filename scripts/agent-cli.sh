@@ -20,13 +20,20 @@ the only durable output is a pushed branch/PR when --repo is given).
 attaches the container to its egress-allowlisted network (AGENT_NETWORK,
 default "agents"; proxy AGENT_PROXY_URL, default http://proxy:3128).
 
---profile selects a task profile baked into the image: its secret group is
-fetched from OpenBao and a per-run repo-scoped GitHub token is minted.
-Requires BAO_ADDR plus AppRole material — BAO_ROLE_ID/BAO_SECRET_ID
-(defaulting to the ambient AI_READONLY_* pair) or a human-minted
-single-use BAO_WRAPPED_SECRET_ID for the ai-apply tiers.
+--profile selects a task profile baked into the image: its KV secret group
+is fetched from OpenBao. Requires BAO_ADDR plus AppRole material —
+BAO_ROLE_ID/BAO_SECRET_ID (defaulting to the ambient AI_READONLY_* pair) or
+a human-minted single-use BAO_WRAPPED_SECRET_ID for the ai-apply tiers.
 
-Without --profile, pass credentials via environment as before:
+--repo additionally mints a per-run, single-repo-scoped GitHub App token via
+OpenBao's github-write identity (a claim-before-work write-lease, ~15m,
+prevents two concurrent runs from both writing the same repo) — unless a
+caller-supplied GH_TOKEN is already in the environment, which always wins.
+Requires BAO_ADDR, OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID, and the
+matching OPENBAO_GITHUB_<DRYVIST|PERSONAL>_INSTALLATION_ID for the repo's
+owner.
+
+Without --profile/--repo, pass credentials via environment as before:
 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY for the model,
 GH_TOKEN (repo-scoped) for --repo. Override the image with AGENT_IMAGE.
 EOF
@@ -57,6 +64,82 @@ env_flags() {
       printf -- '-e\n%s=%s\n' "$var" "${!var}"
     fi
   done
+}
+
+# --- GitHub write-token minting (launcher-side; the container never holds
+# github-write reach — see entrypoint.sh). One repo per request, parameter-
+# pinned server-side by the github-write OpenBao policy. Claim-before-work:
+# a CAS-guarded KV lease at secret/locks/github-write/<installation>/<repo>
+# stops two concurrent runs writing the same repo; it self-expires (~15m
+# deadman) rather than being explicitly released, since a run's GH_TOKEN
+# stays valid on its own ~1h App-installation TTL regardless of the lease.
+mint_github_token() {
+  local repo="$1" bao_addr owner iid role_id secret_id bao_tok cur ver acquire_code resp
+  bao_addr="${BAO_ADDR:-${VAULT_ADDR:-}}"
+  [ -n "${bao_addr}" ] || {
+    echo "agent: --repo requires BAO_ADDR (or VAULT_ADDR) to mint a GitHub write token." >&2
+    exit 64
+  }
+  owner="${repo%%/*}"
+  case "${owner}" in
+    dryvist) iid="${OPENBAO_GITHUB_DRYVIST_INSTALLATION_ID:-}" ;;
+    *) iid="${OPENBAO_GITHUB_PERSONAL_INSTALLATION_ID:-}" ;;
+  esac
+  [ -n "${iid}" ] || {
+    echo "agent: no installation id for owner '${owner}' (set OPENBAO_GITHUB_${owner^^}_INSTALLATION_ID)." >&2
+    exit 64
+  }
+  role_id="${OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID:-}"
+  secret_id="${OPENBAO_APPROLE_GITHUB_WRITE_SECRET_ID:-}"
+  [ -n "${role_id}" ] && [ -n "${secret_id}" ] || {
+    echo "agent: --repo requires OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID." >&2
+    exit 64
+  }
+
+  bao_tok="$(curl -fsS --max-time 10 -X POST \
+      -d "$(jq -cn --arg r "${role_id}" --arg s "${secret_id}" '{role_id:$r,secret_id:$s}')" \
+      "${bao_addr}/v1/auth/approle/login" \
+    | jq -re '.auth.client_token')" || {
+    echo "agent: github-write AppRole login failed." >&2
+    exit 64
+  }
+
+  # CAS-acquire the per-repo lease: read current version, write with cas=<that
+  # version> so a concurrent claim (which changed the version first) loses.
+  curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
+    -d "{\"delete_version_after\":\"15m\"}" \
+    "${bao_addr}/v1/secret/metadata/locks/github-write/${iid}/${repo##*/}" >/dev/null 2>&1 || true
+  cur="$(curl -fsS --max-time 10 -H "X-Vault-Token: ${bao_tok}" \
+    "${bao_addr}/v1/secret/data/locks/github-write/${iid}/${repo##*/}" 2>/dev/null || echo '{}')"
+  ver="$(jq -r '.data.metadata.version // 0' <<<"${cur}")"
+  acquire_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST \
+    -H "X-Vault-Token: ${bao_tok}" \
+    -d "$(jq -cn --arg h "agent-cli@$(date -u +%Y%m%dT%H%M%SZ)" --argjson v "${ver}" \
+          '{options:{cas:$v},data:{holder:$h}}')" \
+    "${bao_addr}/v1/secret/data/locks/github-write/${iid}/${repo##*/}")"
+  [ "${acquire_code}" = "200" ] || {
+    echo "agent: could not claim the write lease for ${repo} (held by a concurrent run? HTTP ${acquire_code})" >&2
+    unset bao_tok role_id secret_id
+    exit 75
+  }
+
+  resp="$(curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
+      -d "$(jq -cn --argjson i "${iid}" --arg r "${repo##*/}" '{installation_id:$i,repositories:[$r]}')" \
+      "${bao_addr}/v1/github/token")" || {
+    echo "agent: minting the github-write token for ${repo} failed (repo not on the allowlist?)." >&2
+    unset bao_tok role_id secret_id
+    exit 64
+  }
+  GH_TOKEN="$(jq -re '.data.token' <<<"${resp}")" || {
+    echo "agent: no token in the github-write mint response for ${repo}." >&2
+    unset bao_tok role_id secret_id resp
+    exit 64
+  }
+  GITHUB_TOKEN="${GH_TOKEN}"
+  export GH_TOKEN GITHUB_TOKEN
+  # Bootstrap material dies here — it must never reach the container (the
+  # exec below only forwards what env_flags() explicitly enumerates).
+  unset bao_tok role_id secret_id resp cur ver
 }
 
 # --host: run on that Docker host and join its egress-allowlisted network.
@@ -117,6 +200,10 @@ case "$cmd" in
     # Ambient ai-readonly AppRole is the estate default for profile runs.
     : "${BAO_ROLE_ID:=${AI_READONLY_ROLE_ID:-}}"
     : "${BAO_SECRET_ID:=${AI_READONLY_SECRET_ID:-}}"
+
+    if [ -n "${repo}" ] && [ -z "${GH_TOKEN:-}" ]; then
+      mint_github_token "${repo}"
+    fi
 
     rt="$(runtime)"
     flags=()
