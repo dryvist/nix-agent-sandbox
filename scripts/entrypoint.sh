@@ -94,25 +94,11 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
     export "${kv_env}=${value}"
   done < <(jq -r '.kv[] | [.path, .field, .env] | @tsv' <<<"${profile}")
 
-  # Per-run GitHub App installation token (<=1h), constrained to AGENT_REPO
-  # when set. A caller-supplied GH_TOKEN wins (offline / non-OpenBao runs).
-  permission_set="$(jq -r '.githubPermissionSet // ""' <<<"${profile}")"
-  if [ -n "${permission_set}" ] && [ -z "${GH_TOKEN:-}" ]; then
-    if [ -n "${AGENT_REPO:-}" ]; then
-      mint_body="$(jq -cn --arg r "${AGENT_REPO##*/}" '{repositories: [$r]}')"
-    else
-      mint_body='{}'
-    fi
-    GH_TOKEN="$(curl -fsS -X POST -H "X-Vault-Token: ${bao_token}" -d "${mint_body}" \
-      "${BAO_ADDR}/v1/github/token/${permission_set}" | jq -re '.data.token')" || {
-      echo "agent-entrypoint: minting the GitHub App token from github/token/${permission_set} failed." >&2
-      exit 64
-    }
-    GITHUB_TOKEN="${GH_TOKEN}"
-    export GH_TOKEN GITHUB_TOKEN
-  fi
-  # ponytail: token dies with its <=1h TTL; add explicit lease revocation on
-  # exit if runs ever outlive their usefulness before the TTL does.
+  # GitHub write access is NOT minted here. The container's AppRole
+  # (ai-readonly / ai-apply-<svc>) only ever gets `github-mint`, which is
+  # read-tier only by design (github-write is a separate, workstation-only
+  # ambient identity) — this block is KV-fetch only; GH_TOKEN is whatever
+  # the launcher already minted and passed in via -e (see agent-cli.sh).
   unset bao_token
 fi
 
