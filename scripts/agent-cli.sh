@@ -105,8 +105,12 @@ mint_github_token() {
     exit 64
   }
 
+  # String forms are load-bearing: OpenBao's github-write ACL cannot
+  # element-match a LIST parameter and only matches installation_id as a
+  # string (ansible-proxmox-apps#1104, verified live 2026-07-18) — the
+  # number/list shape is denied server-side.
   resp="$(curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
-      -d "$(jq -cn --argjson i "${iid}" --arg r "${repo##*/}" '{installation_id:$i,repositories:[$r]}')" \
+      -d "$(jq -cn --arg i "${iid}" --arg r "${repo##*/}" '{installation_id:$i,repositories:$r}')" \
       "${bao_addr}/v1/github/token")" || {
     echo "agent: minting the github-write token for ${repo} failed (repo not on the allowlist?)." >&2
     unset bao_tok role_id secret_id
