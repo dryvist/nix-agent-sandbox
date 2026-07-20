@@ -35,6 +35,16 @@ if [ "${AGENT_SHELL:-}" = "1" ]; then
   exec bash
 fi
 
+# Subscription-OAuth creds (agent-cli.sh inject_oauth_creds) land via
+# `docker cp` before this entrypoint runs; tighten perms in case the copy
+# didn't already chmod 600 (e.g. re-homed under a different tar impl).
+for f in "${HOME}/.claude/.credentials.json" "${HOME}/.codex/auth.json" \
+  "${HOME}/.gemini/oauth_creds.json" "${HOME}/.gemini/installation_id" \
+  "${HOME}/.gemini/google_accounts.json"; do
+  [ -e "$f" ] || continue
+  chmod 600 "$f"
+done
+
 # --- Inputs ----------------------------------------------------------------
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 AGENT_RUN_ID="${AGENT_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
