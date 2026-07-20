@@ -35,9 +35,15 @@ builder: `nix build .#agent-image`.
 ## Usage
 
 ```sh
-# One-shot autonomous run against a repo; output is a branch + PR
-GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
+# One-shot autonomous run against a repo; output is a branch + PR. The
+# workstation's subscription-OAuth credentials for --tool claude are
+# injected into the container automatically (no ANTHROPIC_API_KEY needed).
+GH_TOKEN=<repo-scoped token> \
   agent run --tool claude --repo dryvist/some-repo "fix the flaky test in ci.yml"
+
+# API-key auth instead of subscription OAuth: skip injection with --no-oauth
+GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
+  agent run --tool claude --no-oauth --repo dryvist/some-repo "fix the flaky test in ci.yml"
 
 # Same, on the docker-host VM inside its egress-allowlisted network, with
 # the task profile's KV secret group fetched from OpenBao inside the
@@ -63,10 +69,22 @@ onto a host filesystem by any code path.
 ## Safety model
 
 - **Filesystem/process**: disposable container, non-root, `--rm`.
-- **Credentials**: short-lived scoped tokens injected per run; the residual
-  deny list (one shared list in `dryvist/nix-ai`, rendered into all three
-  tools' native formats) blocks credential-borne damage like `gh repo
-  delete` and force-pushes.
+- **Credentials**: subscription-OAuth creds for the selected `--tool` are read
+  from the workstation (claude: `~/.claude/.credentials.json` or the macOS
+  Keychain; codex: `~/.codex/auth.json`; gemini: `~/.gemini/oauth_creds.json`
+  and its companion files) and streamed into the container via `docker cp`
+  between create and start — never baked into the image, never passed via
+  `-e`/`docker run -e` (which would leak into `docker inspect` and remote
+  shell history).
+  `--no-oauth` skips this for API-key auth instead. The residual deny list
+  (one shared list in `dryvist/nix-ai`, rendered into all three tools'
+  native formats) blocks credential-borne damage like `gh repo delete` and
+  force-pushes regardless of which auth path is used.
+  Risk: an OAuth refresh occurring inside the container could rotate the
+  token and leave the workstation's copy stale, since both would then be
+  racing to hold the current refresh token. Not yet observed in canary use;
+  treat a "please re-authenticate" prompt on the workstation after an agent
+  run as the signal to watch for.
 - **Network**: on the docker-host, containers join an internal-only Docker
   network whose sole route out is a CONNECT proxy allowlisting
   `lib.egressDomains` (ansible-proxmox-apps `agent_sandbox` role).

@@ -10,11 +10,20 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   agent run [--tool claude|codex|gemini] [--repo owner/name]
-            [--host fqdn] [--profile name] <prompt...>
+            [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
 Runs the prompt fully autonomously inside a disposable container (--rm;
 the only durable output is a pushed branch/PR when --repo is given).
+
+The workstation's subscription-OAuth credentials for the selected --tool
+are injected into the container per run (never baked into the image, never
+passed via -e): claude reads ~/.claude/.credentials.json or the macOS
+Keychain "Claude Code-credentials" item; codex reads
+${CODEX_HOME:-~/.codex}/auth.json; gemini reads ~/.gemini/oauth_creds.json
+(+ installation_id, google_accounts.json if present). This needs the
+docker runtime — Apple `container` has no stdin-tar `cp`, so injection is
+refused there. --no-oauth skips injection (for API-key profiles instead).
 
 --host runs on that Docker host over SSH (DOCKER_HOST=ssh://fqdn) and
 attaches the container to its egress-allowlisted network (AGENT_NETWORK,
@@ -33,9 +42,10 @@ Requires BAO_ADDR, OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID, and the
 matching OPENBAO_GITHUB_<DRYVIST|PERSONAL>_INSTALLATION_ID for the repo's
 owner.
 
-Without --profile/--repo, pass credentials via environment as before:
-ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY for the model,
-GH_TOKEN (repo-scoped) for --repo. Override the image with AGENT_IMAGE.
+With --no-oauth (or for --tool values with no OAuth path), pass credentials
+via environment instead: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+for the model, GH_TOKEN (repo-scoped) for --repo. Override the image with
+AGENT_IMAGE.
 EOF
   exit 64
 }
@@ -128,6 +138,67 @@ mint_github_token() {
   unset bao_tok role_id secret_id resp
 }
 
+# --- Subscription-OAuth credential injection (launcher-side only; the
+# container never bakes these in and never receives them via -e/`docker run
+# -e`, which would leak into `docker inspect` and shell history on any
+# remote host). One tar stream, written only for the selected --tool, piped
+# into the container's home dir between `docker create` and `docker start`
+# via `docker cp -`. Requires docker: Apple `container copy` has no
+# stdin-tar form, so callers on that runtime must pass --no-oauth.
+oauth_paths() { # tool -> "src\tdest" lines; dest is relative to /home/agent
+  case "$1" in
+    claude)
+      printf '%s\t%s\n' "${HOME}/.claude/.credentials.json" .claude/.credentials.json
+      ;;
+    codex)
+      printf '%s\t%s\n' "${CODEX_HOME:-${HOME}/.codex}/auth.json" .codex/auth.json
+      ;;
+    gemini)
+      printf '%s\t%s\n' "${HOME}/.gemini/oauth_creds.json" .gemini/oauth_creds.json
+      printf '%s\t%s\n' "${HOME}/.gemini/installation_id" .gemini/installation_id
+      printf '%s\t%s\n' "${HOME}/.gemini/google_accounts.json" .gemini/google_accounts.json
+      ;;
+  esac
+}
+
+inject_oauth_creds() {
+  local cid="$1" tool="$2" tmp found=0 blob
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  chmod 700 "$tmp"
+
+  while IFS=$'\t' read -r src dest; do
+    if [ -f "$src" ]; then
+      mkdir -p "$tmp/$(dirname "$dest")"
+      cp "$src" "$tmp/$dest"
+      found=1
+    fi
+  done < <(oauth_paths "$tool")
+
+  # claude has no auth.json-on-disk guarantee outside a logged-in CLI
+  # session; the desktop app's login instead lands in Keychain.
+  if [ "$tool" = claude ] && [ "$found" -eq 0 ]; then
+    blob="$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)" || true
+    if [ -n "$blob" ]; then
+      mkdir -p "$tmp/.claude"
+      printf '%s' "$blob" >"$tmp/.claude/.credentials.json"
+      found=1
+    fi
+  fi
+
+  if [ "$found" -eq 0 ]; then
+    echo "agent: no subscription-OAuth credentials found for --tool ${tool}; running without injection (pass --no-oauth to silence this)." >&2
+    return 0
+  fi
+
+  chmod -R go-rwx "$tmp"
+  # --owner/--group re-home the archive to the container's non-root agent
+  # user (uid/gid 1000) so the entrypoint can read what root's docker cp
+  # wrote — see nix/agent-image.nix homeDir and its uid 1000 `agent` user.
+  tar --owner=1000:1000 --group=1000:1000 -C "$tmp" -cf - . \
+    | docker cp - "${cid}:/home/agent/"
+}
+
 # --host: run on that Docker host and join its egress-allowlisted network.
 host_flags=()
 apply_host() {
@@ -150,6 +221,7 @@ case "$cmd" in
     tool=claude
     repo=""
     profile=""
+    no_oauth=0
     while [ $# -gt 0 ]; do
       case "$1" in
         --tool)
@@ -167,6 +239,10 @@ case "$cmd" in
         --profile)
           profile="$2"
           shift 2
+          ;;
+        --no-oauth)
+          no_oauth=1
+          shift
           ;;
         --)
           shift
@@ -194,14 +270,25 @@ case "$cmd" in
     rt="$(runtime)"
     flags=()
     while IFS= read -r line; do flags+=("$line"); done < <(env_flags)
-    exec "$rt" run --rm \
-      -e AGENT_TOOL="$tool" \
-      -e AGENT_REPO="$repo" \
-      -e AGENT_PROFILE="$profile" \
-      -e AGENT_PROMPT="$prompt" \
-      "${host_flags[@]}" \
-      "${flags[@]}" \
-      "$IMAGE"
+    run_flags=(
+      -e "AGENT_TOOL=$tool"
+      -e "AGENT_REPO=$repo"
+      -e "AGENT_PROFILE=$profile"
+      -e "AGENT_PROMPT=$prompt"
+      "${host_flags[@]}"
+      "${flags[@]}"
+    )
+
+    if [ "${no_oauth}" -eq 1 ]; then
+      exec "$rt" run --rm "${run_flags[@]}" "$IMAGE"
+    fi
+    [ "$rt" = docker ] || {
+      echo "agent: OAuth credential injection needs the docker runtime (got '${rt}'); pass --no-oauth to run without it." >&2
+      exit 64
+    }
+    cid="$(docker create --rm "${run_flags[@]}" "$IMAGE")"
+    inject_oauth_creds "$cid" "$tool"
+    exec docker start -a "$cid"
     ;;
   shell)
     while [ $# -gt 0 ]; do
