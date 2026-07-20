@@ -3,9 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # TODO(repin): point at github:dryvist/nix-ai once dryvist/nix-ai#939
-    # (lib.renderAutonomous) merges to main.
-    nix-ai.url = "github:dryvist/nix-ai/feat/autonomy-profiles";
+    nix-ai.url = "github:dryvist/nix-ai/main";
   };
 
   outputs =
