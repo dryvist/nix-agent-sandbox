@@ -131,8 +131,10 @@ case "${AGENT_TOOL}" in
     ;;
   codex)
     # approval_policy=never + sandbox_mode=danger-full-access come from the
-    # baked config.toml; the container is the sandbox.
-    codex exec "${AGENT_PROMPT}" || status=$?
+    # baked config.toml; the container is the sandbox. --skip-git-repo-check
+    # is required for a --repo-less run (cwd is $HOME/work, not a git repo);
+    # harmless with AGENT_REPO set too, since that cwd is a real clone.
+    codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
   gemini)
     gemini --approval-mode yolo -p "${AGENT_PROMPT}" || status=$?
