@@ -178,7 +178,9 @@ inject_oauth_creds() {
     return 0
   fi
 
-  now_ms="$(date +%s%3N)"
+  # +%3N is GNU-only; BSD/macOS date lacks it. Whole-seconds*1000 keeps the
+  # claude/gemini ms-epoch comparisons correct to within 1s.
+  now_ms="$(( $(date +%s) * 1000 ))"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   chmod 700 "$tmp"
