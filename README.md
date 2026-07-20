@@ -38,6 +38,8 @@ builder: `nix build .#agent-image`.
 # One-shot autonomous run against a repo; output is a branch + PR. The
 # workstation's subscription-OAuth credentials for --tool claude are
 # injected into the container automatically (no ANTHROPIC_API_KEY needed).
+# Prefer `claude setup-token` once and export CLAUDE_CODE_OAUTH_TOKEN — a
+# long-lived token, so no per-run file copy and no refresh-rotation risk.
 GH_TOKEN=<repo-scoped token> \
   agent run --tool claude --repo dryvist/some-repo "fix the flaky test in ci.yml"
 
@@ -70,12 +72,16 @@ onto a host filesystem by any code path.
 
 - **Filesystem/process**: disposable container, non-root, `--rm`.
 - **Credentials**: subscription-OAuth creds for the selected `--tool` are read
-  from the workstation (claude: `~/.claude/.credentials.json` or the macOS
-  Keychain; codex: `~/.codex/auth.json`; gemini: `~/.gemini/oauth_creds.json`
-  and its companion files) and streamed into the container via `docker cp`
-  between create and start — never baked into the image, never passed via
-  `-e`/`docker run -e` (which would leak into `docker inspect` and remote
-  shell history).
+  from the workstation (claude: an exported `CLAUDE_CODE_OAUTH_TOKEN` from
+  `claude setup-token` if present, else `~/.claude/.credentials.json`, else
+  the macOS Keychain; codex: `~/.codex/auth.json`; gemini:
+  `~/.gemini/oauth_creds.json` and its companion files) and streamed into the
+  container via `docker cp` between create and start — never baked into the
+  image, never passed via `-e`/`docker run -e` (which would leak into
+  `docker inspect` and remote shell history). A missing source credential, or
+  (for claude/gemini, which expose a checkable expiry) one already expired,
+  is a hard failure naming what to refresh — not a silent no-op that burns a
+  whole run before failing inside the container.
   `--no-oauth` skips this for API-key auth instead. The residual deny list
   (one shared list in `dryvist/nix-ai`, rendered into all three tools'
   native formats) blocks credential-borne damage like `gh repo delete` and

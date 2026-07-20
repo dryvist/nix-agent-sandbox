@@ -18,12 +18,16 @@ the only durable output is a pushed branch/PR when --repo is given).
 
 The workstation's subscription-OAuth credentials for the selected --tool
 are injected into the container per run (never baked into the image, never
-passed via -e): claude reads ~/.claude/.credentials.json or the macOS
-Keychain "Claude Code-credentials" item; codex reads
-${CODEX_HOME:-~/.codex}/auth.json; gemini reads ~/.gemini/oauth_creds.json
-(+ installation_id, google_accounts.json if present). This needs the
-docker runtime — Apple `container` has no stdin-tar `cp`, so injection is
-refused there. --no-oauth skips injection (for API-key profiles instead).
+passed via -e): claude prefers an exported CLAUDE_CODE_OAUTH_TOKEN (from
+`claude setup-token`; a long-lived token, so no per-run file copy needed),
+else ~/.claude/.credentials.json, else the macOS Keychain "Claude
+Code-credentials" item; codex reads ${CODEX_HOME:-~/.codex}/auth.json;
+gemini reads ~/.gemini/oauth_creds.json (+ installation_id,
+google_accounts.json if present). This needs the docker runtime — Apple
+`container` has no stdin-tar `cp`, so injection is refused there. Missing
+or (for claude/gemini) expired source credentials are a hard failure
+naming what to refresh, not a silent skip. --no-oauth opts out entirely,
+for API-key auth instead.
 
 --host runs on that Docker host over SSH (DOCKER_HOST=ssh://fqdn) and
 attaches the container to its egress-allowlisted network (AGENT_NETWORK,
@@ -69,6 +73,7 @@ runtime() {
 # bare-name env passthrough the way docker does.
 env_flags() {
   for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY \
+    CLAUDE_CODE_OAUTH_TOKEN \
     GH_TOKEN GITHUB_TOKEN BAO_ADDR BAO_ROLE_ID BAO_SECRET_ID BAO_WRAPPED_SECRET_ID; do
     if [ -n "${!var:-}" ]; then
       printf -- '-e\n%s=%s\n' "$var" "${!var}"
@@ -162,7 +167,20 @@ oauth_paths() { # tool -> "src\tdest" lines; dest is relative to /home/agent
 }
 
 inject_oauth_creds() {
-  local cid="$1" tool="$2" tmp found=0 blob
+  local cid="$1" tool="$2" tmp found=0 blob now_ms exp
+
+  # `claude setup-token` mints a long-lived token meant for exactly this
+  # (headless/CI) use case — prefer it over the interactive session's
+  # credentials file when the caller already has one exported, since it
+  # sidesteps both the file-injection path and the refresh-rotation risk
+  # noted in the README. env_flags() forwards it; nothing to inject here.
+  if [ "$tool" = claude ] && [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    return 0
+  fi
+
+  # +%3N is GNU-only; BSD/macOS date lacks it. Whole-seconds*1000 keeps the
+  # claude/gemini ms-epoch comparisons correct to within 1s.
+  now_ms="$(( $(date +%s) * 1000 ))"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   chmod 700 "$tmp"
@@ -187,9 +205,36 @@ inject_oauth_creds() {
   fi
 
   if [ "$found" -eq 0 ]; then
-    echo "agent: no subscription-OAuth credentials found for --tool ${tool}; running without injection (pass --no-oauth to silence this)." >&2
-    return 0
+    echo "agent: no subscription-OAuth credentials found for --tool ${tool}." >&2
+    case "$tool" in
+      claude) echo "agent: run 'claude setup-token' and export CLAUDE_CODE_OAUTH_TOKEN, or log into Claude Code interactively." >&2 ;;
+      codex) echo "agent: run 'codex login' to populate ${CODEX_HOME:-${HOME}/.codex}/auth.json." >&2 ;;
+      gemini) echo "agent: log into the gemini CLI to populate ~/.gemini/oauth_creds.json." >&2 ;;
+    esac
+    echo "agent: or pass --no-oauth to run with API-key auth instead." >&2
+    exit 64
   fi
+
+  # Reject a known-dead refresh token here rather than shipping it into
+  # the container to fail loudly there after burning a whole run. Only
+  # claude/gemini expose a checkable expiry on disk; codex's auth.json has
+  # none (nothing to compare against), and is refreshed by the CLI itself.
+  case "$tool" in
+    claude)
+      exp="$(jq -re '.claudeAiOauth.refreshTokenExpiresAt // empty' "${tmp}/.claude/.credentials.json" 2>/dev/null)" || exp=""
+      if [ -n "$exp" ] && [ "$exp" -lt "$now_ms" ]; then
+        echo "agent: claude's stored refresh token expired; run 'claude setup-token' and export CLAUDE_CODE_OAUTH_TOKEN, or log in interactively." >&2
+        exit 64
+      fi
+      ;;
+    gemini)
+      exp="$(jq -re '.expiry_date // empty' "${tmp}/.gemini/oauth_creds.json" 2>/dev/null)" || exp=""
+      if [ -n "$exp" ] && [ "$exp" -lt "$now_ms" ]; then
+        echo "agent: gemini's stored OAuth token expired; log into the gemini CLI to refresh ~/.gemini/oauth_creds.json." >&2
+        exit 64
+      fi
+      ;;
+  esac
 
   chmod -R go-rwx "$tmp"
   # --owner/--group re-home the archive to the container's non-root agent
