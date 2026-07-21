@@ -24,6 +24,7 @@
   gemini-cli,
   gh,
   git,
+  gitleaks,
   gnugrep,
   jq,
   nix,
@@ -47,6 +48,7 @@ let
     curl
     gh
     git
+    gitleaks # pre-push staged-diff secret scan in the entrypoint
     gnugrep
     jq
     nix
