@@ -149,6 +149,15 @@ esac
 # The branch/PR is the only durable output; the container is destroyed.
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
+  # Pre-push secret scan on exactly the staged diff (gitleaks is baked into
+  # the image). Redacted output only. Any finding — or a scanner error /
+  # missing binary (the `!` catches non-zero either way) — aborts before the
+  # commit reaches origin. `git --staged` is the current form of the
+  # deprecated `protect --staged`.
+  if ! gitleaks git --staged --redact --no-banner; then
+    echo "agent-entrypoint: gitleaks flagged the staged diff (or failed to run); refusing to commit/push." >&2
+    exit 65
+  fi
   git commit -m "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}
 
 Prompt: ${AGENT_PROMPT}

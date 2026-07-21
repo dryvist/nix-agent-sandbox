@@ -80,7 +80,13 @@ onto a host filesystem by any code path.
 
 ## Safety model
 
-- **Filesystem/process**: disposable container, non-root, `--rm`.
+- **Filesystem/process**: disposable container, non-root, `--rm`. On the
+  docker runtime, runs are resource-capped (`--memory` / `--cpus` /
+  `--pids-limit`), hardened (`--security-opt no-new-privileges`,
+  `--cap-drop ALL`), and wall-clock-bounded (`AGENT_TIMEOUT`, default 3600s,
+  then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
+- **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
+  staged diff and aborts the commit/push (redacted output) on a finding.
 - **Transcripts**: a `--host` run bind-mounts a per-run host spool dir onto each
   CLI's transcript subdir (`~/.claude/projects`, `~/.codex/sessions`,
   `~/.gemini/tmp`) under `/var/lib/agent-sandbox/spool/<run-id>/`, so the session

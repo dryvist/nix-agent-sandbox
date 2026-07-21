@@ -67,6 +67,13 @@ With --no-oauth (or for --tool values with no OAuth path), pass credentials
 via environment instead: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
 for the model, GH_TOKEN (repo-scoped) for --repo. Override the image with
 AGENT_IMAGE.
+
+On the docker runtime, autonomous runs are capped and hardened (defaults
+baked in nix/agent-cli.nix, overridable per run): AGENT_MEMORY (8g),
+AGENT_CPUS (4), AGENT_PIDS_LIMIT (512), plus no-new-privileges + cap-drop
+ALL, and a wall-clock AGENT_TIMEOUT (3600s) after which the container is
+killed. The container also runs a gitleaks scan on its staged diff before
+any push and aborts on a finding.
 EOF
   exit 64
 }
@@ -381,22 +388,56 @@ case "$cmd" in
       "${flags[@]}"
     )
 
-    if [ "${no_oauth}" -eq 1 ]; then
+    # Resource ceilings + hardening. These are Docker/cgroup+cap flags;
+    # Apple `container` isolates via its own VM-per-container and does not
+    # accept them, so they apply only on the docker runtime (which is also
+    # the only remote/multi-tenant path — see --host). The entrypoint runs
+    # as non-root uid 1000, so --cap-drop ALL leaves nothing it needs.
+    hardening=()
+    if [ "$rt" = docker ]; then
+      hardening=(
+        --memory "${AGENT_MEMORY:-${AGENT_MEMORY_DEFAULT}}"
+        --cpus "${AGENT_CPUS:-${AGENT_CPUS_DEFAULT}}"
+        --pids-limit "${AGENT_PIDS_LIMIT:-${AGENT_PIDS_LIMIT_DEFAULT}}"
+        --security-opt no-new-privileges
+        --cap-drop ALL
+      )
+    fi
+
+    # ponytail: Apple `container` local runs stay simple (no hardening, no
+    # timeout) — its VM boundary covers isolation and the wall-clock kill
+    # below is docker-specific. Autonomous/remote runs are always docker.
+    if [ "${no_oauth}" -eq 1 ] && [ "$rt" != docker ]; then
       exec "$rt" run --rm "${run_flags[@]}" "$IMAGE"
     fi
     [ "$rt" = docker ] || {
       echo "agent: OAuth credential injection needs the docker runtime (got '${rt}'); pass --no-oauth to run without it." >&2
       exit 64
     }
-    cid="$(docker create --rm "${run_flags[@]}" "$IMAGE")"
-    # --rm/AutoRemove only fires when a *started* container exits, so a
-    # create-then-fail path (e.g. inject_oauth_creds exiting on missing or
-    # expired credentials) would strand this container in `Created` state
-    # forever. Remove it on any exit before the exec below; the exec replaces
-    # this shell on success, so the trap never fires for a run that started.
-    trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-    inject_oauth_creds "$cid" "$tool"
-    exec docker start -a "$cid"
+    cid="$(docker create --rm "${hardening[@]}" "${run_flags[@]}" "$IMAGE")"
+    # --rm/AutoRemove only reaps a *started* container, so a create-then-fail
+    # path (inject_oauth_creds exiting on missing/expired creds) would strand
+    # this one in `Created` forever (#14). The EXIT trap removes it on any exit
+    # and cancels the timeout watchdog if one was started. The flow no longer
+    # `exec`s, so the trap also fires after a normal run — there `docker rm -f`
+    # is a harmless no-op on the already-reaped container.
+    trap '[ -n "${watchdog:-}" ] && { kill "${watchdog}" 2>/dev/null; wait "${watchdog}" 2>/dev/null; }; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+    if [ "${no_oauth}" -ne 1 ]; then
+      inject_oauth_creds "$cid" "$tool"
+    fi
+
+    # Wall-clock timeout: a background watchdog kills the container after
+    # AGENT_TIMEOUT (--rm then reaps it); macOS has no `timeout` coreutil, so
+    # this is the portable equivalent. The EXIT trap cancels it.
+    timeout="${AGENT_TIMEOUT:-${AGENT_TIMEOUT_DEFAULT}}"
+    (
+      sleep "$timeout" && docker kill "$cid" >/dev/null 2>&1
+    ) &
+    watchdog=$!
+    status=0
+    docker start -a "$cid" || status=$?
+    exit "$status"
     ;;
   sweep)
     # Launcher-side fan-out: one `agent run --repo` per group member. Each
