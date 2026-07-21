@@ -6,6 +6,12 @@
 
 IMAGE="${AGENT_IMAGE:-ghcr.io/dryvist/nix-agent-sandbox/agent:latest}"
 
+# Per-run transcript spool root on a --host docker daemon. A Cribl Edge on the
+# host tails this tree to ship each run's session records to Splunk before the
+# --rm container is destroyed; the host-side ansible role (ansible-proxmox-apps
+# agent_sandbox) creates the root and prunes runs older than 7 days.
+SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
+
 usage() {
   cat >&2 <<'EOF'
 usage:
@@ -269,6 +275,35 @@ apply_host() {
   )
 }
 
+# Persist the run's transcripts on a remote --host daemon: bind-mount per-run
+# host spool dirs onto each CLI's transcript SUBDIRECTORY — never its state-home
+# root. The roots hold the baked autonomous configs (~/.codex/config.toml etc.)
+# and the OAuth creds injected by inject_oauth_creds; mounting a root would
+# shadow the configs and spill the creds onto the host disk. The subdirs
+# (~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp) hold only session
+# records, which a host-side Cribl Edge tails to Splunk before --rm teardown.
+#
+# docker auto-creates a missing bind source as root, but the agent runs as uid
+# 1000 and could not then write it. So the leaves are pre-created by a throwaway
+# container that runs as that same uid 1000 (image default) — the leaves come
+# out 1000-owned and agent-writable, cribl-readable, with no world-writable
+# chmod and no second channel beyond the docker protocol --host already speaks.
+# The 1777 spool root (created by the ansible agent_sandbox role) is what lets
+# uid 1000 mkdir here; if it is absent the prepare fails and the run proceeds
+# WITHOUT capture rather than aborting.
+spool_mount_flags() {
+  local run_id="$1"
+  local rd="${SPOOL_DIR}/${run_id}"
+  if ! docker run --rm -v "${SPOOL_DIR}:/spool" --entrypoint mkdir "$IMAGE" \
+    -p "/spool/${run_id}/claude" "/spool/${run_id}/codex" "/spool/${run_id}/gemini" >&2; then
+    echo "agent: could not prepare the transcript spool at ${rd} (is /var/lib/agent-sandbox/spool present on the host?); this run's transcripts will not be captured." >&2
+    return 0
+  fi
+  printf -- '-v\n%s\n' "${rd}/claude:/home/agent/.claude/projects"
+  printf -- '-v\n%s\n' "${rd}/codex:/home/agent/.codex/sessions"
+  printf -- '-v\n%s\n' "${rd}/gemini:/home/agent/.gemini/tmp"
+}
+
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 
@@ -326,12 +361,23 @@ case "$cmd" in
     rt="$(runtime)"
     flags=()
     while IFS= read -r line; do flags+=("$line"); done < <(env_flags)
+
+    # Stable id shared by the entrypoint (branch name) and the transcript spool
+    # path. Only a remote --host run has a host daemon with the spool to mount.
+    run_id="$(date +%Y%m%d-%H%M%S)-$$"
+    spool_flags=()
+    if [ -n "${DOCKER_HOST:-}" ]; then
+      while IFS= read -r line; do spool_flags+=("$line"); done < <(spool_mount_flags "$run_id")
+    fi
+
     run_flags=(
       -e "AGENT_TOOL=$tool"
       -e "AGENT_REPO=$repo"
       -e "AGENT_PROFILE=$profile"
       -e "AGENT_PROMPT=$prompt"
+      -e "AGENT_RUN_ID=$run_id"
       "${host_flags[@]}"
+      "${spool_flags[@]}"
       "${flags[@]}"
     )
 
