@@ -11,10 +11,21 @@ usage() {
 usage:
   agent run [--tool claude|codex|gemini] [--repo owner/name]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
+  agent sweep --group name [--concurrency N] [--tool claude|codex|gemini]
+            [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
 Runs the prompt fully autonomously inside a disposable container (--rm;
 the only durable output is a pushed branch/PR when --repo is given).
+
+`sweep` fans the same prompt out across every repo in a named group (see
+lib.repoGroups / nix/repo-groups.nix), one disposable container per repo —
+each cloning, branching, and PR'ing its own repo with its own repo-scoped
+GitHub token, exactly like `agent run --repo`. At most --concurrency runs
+(default 4) execute at once; an end-of-run table lists each repo, its base
+branch, and the PR URL or exit code. A group's `profile` is the default
+unless --profile overrides it. Per-repo github-write material is required
+just as for `run --repo`.
 
 The workstation's subscription-OAuth credentials for the selected --tool
 are injected into the container per run (never baked into the image, never
@@ -334,6 +345,130 @@ case "$cmd" in
     cid="$(docker create --rm "${run_flags[@]}" "$IMAGE")"
     inject_oauth_creds "$cid" "$tool"
     exec docker start -a "$cid"
+    ;;
+  sweep)
+    # Launcher-side fan-out: one `agent run --repo` per group member. Each
+    # member re-invokes this same CLI ("$0"), so it reuses the identical
+    # token-mint + OAuth-injection + container path — one repo per run, the
+    # law held. Nothing about the container changes for a sweep.
+    group=""
+    concurrency=4
+    tool=claude
+    profile=""
+    host=""
+    no_oauth=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --group)
+          group="$2"
+          shift 2
+          ;;
+        --concurrency)
+          concurrency="$2"
+          shift 2
+          ;;
+        --tool)
+          tool="$2"
+          shift 2
+          ;;
+        --host)
+          host="$2"
+          shift 2
+          ;;
+        --profile)
+          profile="$2"
+          shift 2
+          ;;
+        --no-oauth)
+          no_oauth=1
+          shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        -*)
+          usage
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    [ -n "${group}" ] || usage
+    [ $# -gt 0 ] || usage
+    prompt="$*"
+
+    case "${concurrency}" in
+      '' | *[!0-9]*) usage ;;
+    esac
+    [ "${concurrency}" -ge 1 ] || concurrency=1
+
+    [ -n "${AGENT_REPO_GROUPS:-}" ] || {
+      echo "agent: no repo-group table baked in; run the nix-built 'agent' (not the raw script)." >&2
+      exit 70
+    }
+    group_json="$(jq -ce --arg g "${group}" '.[$g]' <<<"${AGENT_REPO_GROUPS}")" || group_json="null"
+    if [ "${group_json}" = "null" ]; then
+      echo "agent: unknown group '${group}'. Known groups:" >&2
+      jq -r 'keys[]' <<<"${AGENT_REPO_GROUPS}" | sed 's/^/  /' >&2
+      exit 64
+    fi
+    # Group profile is the default; an explicit --profile wins.
+    [ -n "${profile}" ] || profile="$(jq -re '.profile // ""' <<<"${group_json}")"
+
+    repos=()
+    while IFS= read -r entry; do repos+=("${entry}"); done \
+      < <(jq -r '.repos[] | [.name, .branch] | @tsv' <<<"${group_json}")
+    [ "${#repos[@]}" -gt 0 ] || {
+      echo "agent: group '${group}' has no repos." >&2
+      exit 64
+    }
+
+    sweep_tmp="$(mktemp -d)"
+    trap 'rm -rf "${sweep_tmp}"' EXIT
+
+    # Every member is owner dryvist (repo-groups.nix records name only).
+    run_member() {
+      local name="$1" idx="$2" args rc=0
+      args=(run --repo "dryvist/${name}" --tool "${tool}")
+      [ -n "${profile}" ] && args+=(--profile "${profile}")
+      [ -n "${host}" ] && args+=(--host "${host}")
+      [ "${no_oauth}" -eq 1 ] && args+=(--no-oauth)
+      args+=(-- "${prompt}")
+      "$0" "${args[@]}" >"${sweep_tmp}/${idx}.out" 2>&1 || rc=$?
+      echo "${rc}" >"${sweep_tmp}/${idx}.rc"
+    }
+
+    # Fan out in batches of --concurrency (portable; no `wait -n` needed).
+    idx=0
+    for entry in "${repos[@]}"; do
+      IFS=$'\t' read -r name _branch <<<"${entry}"
+      run_member "${name}" "${idx}" &
+      idx=$((idx + 1))
+      [ "$((idx % concurrency))" -eq 0 ] && wait
+    done
+    wait
+
+    # Summary table + overall exit: nonzero if any member failed.
+    printf '\n%-30s %-10s %s\n' "REPO" "BRANCH" "RESULT"
+    overall=0
+    idx=0
+    for entry in "${repos[@]}"; do
+      IFS=$'\t' read -r name branch <<<"${entry}"
+      rc="$(cat "${sweep_tmp}/${idx}.rc" 2>/dev/null || echo '?')"
+      pr="$(grep -Eom1 'https://github\.com/[^ ]+/pull/[0-9]+' \
+        "${sweep_tmp}/${idx}.out" 2>/dev/null || true)"
+      if [ -n "${pr}" ]; then
+        result="${pr}"
+      else
+        result="exit ${rc}"
+      fi
+      [ "${rc}" = 0 ] || overall=1
+      printf '%-30s %-10s %s\n' "dryvist/${name}" "${branch}" "${result}"
+      idx=$((idx + 1))
+    done
+    exit "${overall}"
     ;;
   shell)
     while [ $# -gt 0 ]; do

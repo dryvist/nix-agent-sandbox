@@ -39,6 +39,9 @@
         # Task profiles (secret group + GitHub scope per profile); baked into
         # the image, exported for the docs and downstream consumers.
         taskProfiles = import ./nix/task-profiles.nix;
+        # Repo groups: named fan-out sets for `agent sweep`. Baked into the
+        # CLI as JSON (agent-cli.nix), exported for docs and consumers.
+        repoGroups = import ./nix/repo-groups.nix;
       };
 
       packages = forSystems allSystems (
