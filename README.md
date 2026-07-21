@@ -12,9 +12,10 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | Output | What it is |
 | --- | --- |
 | `packages.<linux>.agent-image` | OCI image: the three CLIs, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
-| `packages.*.agent-cli` | `agent run\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on the docker-host VM via `--host`. |
+| `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on the docker-host VM via `--host`. |
 | `lib.egressDomains` | The egress allowlist enforced by the docker-host CONNECT proxy (ansible-proxmox-apps `agent_sandbox`). |
 | `lib.taskProfiles` | Task profiles: the pre-defined OpenBao KV secret group each `--profile` grants. |
+| `lib.repoGroups` | Named repo groups for `agent sweep` fan-out (baked into the CLI as JSON). |
 | `.github/workflows/build-image.yml` | Builds both architectures and publishes the multi-arch manifest to GHCR. |
 
 ## Installation
@@ -59,6 +60,15 @@ GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
 BAO_ADDR=https://openbao.example.internal \
   agent run --host docker-host.example.internal --profile dev \
   --repo dryvist/some-repo "fix the flaky test in ci.yml"
+
+# Fan the same task across every repo in a named group (lib.repoGroups),
+# one disposable container per repo — each with its own repo-scoped token,
+# just like `agent run --repo`. At most --concurrency run at once (default
+# 4); an end-of-run table lists each repo, base branch, and PR URL or exit
+# code. The group's profile is the default unless --profile overrides it.
+BAO_ADDR=https://openbao.example.internal \
+  agent sweep --group nix --host docker-host.example.internal \
+  "bump the flake.lock and open a PR"
 
 # Debug shell inside the image (add --host to debug on the docker host)
 agent shell
