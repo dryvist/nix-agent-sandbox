@@ -81,6 +81,13 @@ onto a host filesystem by any code path.
 ## Safety model
 
 - **Filesystem/process**: disposable container, non-root, `--rm`.
+- **Transcripts**: a `--host` run bind-mounts a per-run host spool dir onto each
+  CLI's transcript subdir (`~/.claude/projects`, `~/.codex/sessions`,
+  `~/.gemini/tmp`) under `/var/lib/agent-sandbox/spool/<run-id>/`, so the session
+  records outlive `--rm`. A host-side Cribl Edge tails them to Splunk; the
+  ansible `agent_sandbox` role creates the spool root and prunes runs older than
+  7 days. Only the transcript subdirs are mounted — never the state-home roots,
+  which hold the baked autonomous configs and the injected OAuth creds.
 - **Credentials**: subscription-OAuth creds for the selected `--tool` are read
   from the workstation (claude: an exported `CLAUDE_CODE_OAUTH_TOKEN` from
   `claude setup-token` if present, else `~/.claude/.credentials.json`, else
