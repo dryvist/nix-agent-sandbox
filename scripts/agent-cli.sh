@@ -343,6 +343,12 @@ case "$cmd" in
       exit 64
     }
     cid="$(docker create --rm "${run_flags[@]}" "$IMAGE")"
+    # --rm/AutoRemove only fires when a *started* container exits, so a
+    # create-then-fail path (e.g. inject_oauth_creds exiting on missing or
+    # expired credentials) would strand this container in `Created` state
+    # forever. Remove it on any exit before the exec below; the exec replaces
+    # this shell on success, so the trap never fires for a run that started.
+    trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
     inject_oauth_creds "$cid" "$tool"
     exec docker start -a "$cid"
     ;;
