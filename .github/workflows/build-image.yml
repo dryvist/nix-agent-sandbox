@@ -12,6 +12,10 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.arch }})
+    # Intentionally non-negotiable: a Nix image build past 20 minutes is a
+    # dependency or closure regression. Do not raise this cap; fix the root
+    # cause so the failed required check blocks the regression instead.
+    timeout-minutes: 20
     strategy:
       matrix:
         include:
