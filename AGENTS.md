@@ -1,3 +1,7 @@
+---
+skill-groups: [core, nix]
+---
+
 # nix-agent-sandbox conventions
 
 Read [README.md](README.md) first for what this repo is.
