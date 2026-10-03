@@ -13,6 +13,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | --- | --- |
 | `packages.<linux>.agent-image` | OCI image: the three CLIs, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
+| `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
 | `lib.taskProfiles` | Task profiles: the environment variables each `--profile` requires. |
 | `lib.repoGroups` | Named repo groups for `agent sweep` fan-out (baked into the CLI as JSON). |
@@ -72,6 +73,91 @@ agent shell
 The entrypoint refuses to start unless `AGENT_SANDBOX=1` (set only by the
 image) and the uid is non-root. The autonomous configs are never rendered
 onto a host filesystem by any code path.
+
+## Host dispatcher
+
+`agent-dispatch` runs on the sandbox Docker host. A job is one disposable
+container plus one named Docker volume, `agent-job-<id>`, mounted at
+`/home/agent/work`. Each verb prints one JSON object.
+
+```sh
+agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+agent-dispatch continue <job-id> <message>
+agent-dispatch status <job-id>
+agent-dispatch cancel <job-id>
+agent-dispatch refresh
+```
+
+- **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
+  hex digits.
+- **Output**: the container pushes `agent/<tool>/<job-id>` and opens a draft
+  PR. The dispatcher records the PR URL only when it points at the job's repo.
+- **`continue`** starts a new container on the same workspace and branch.
+- **`cancel`** kills the container. **`refresh`** settles runs whose waiter
+  has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
+- **`--interactive`** (zcode, opencode) serves the tool's web session on
+  port 8080 inside the container. The container also joins the ingress
+  network and carries Traefik labels for `https://<job-id>.<AGENT_DISPATCH_INGRESS_DOMAIN>`.
+  `start` prints that address and a web token once.
+- **Results**: each finished run posts a fixed six-line result (job, tool,
+  repo, state, PR URL, duration) to a Vikunja project and an ntfy topic. No
+  model output goes into it.
+
+`dispatch-ssh` is the forced command for an `authorized_keys` entry. It
+reads `SSH_ORIGINAL_COMMAND` and accepts only the five verbs. It passes each
+word to `agent-dispatch` as its own argument, and the prompt is the rest of
+the line. No shell evaluates the line, and `agent-dispatch` validates every
+value: the tool allowlist, the `owner/repo` pattern, the job-id pattern and
+the prompt (16 KiB, no control characters other than tab and newline).
+
+### Credentials
+
+Each `start` and `continue`:
+
+1. logs in to OpenBao with an AppRole;
+2. reads the `secret/apps/open-llm` bucket;
+3. mints a GitHub token from `github-agents/token` for the job's repo only,
+   with `contents` and `pull_requests` write;
+4. checks that the token lists exactly that repo, and fails the job closed
+   when it does not.
+
+The container receives the GitHub token, the tool's model key and the prompt
+as files copied in with `docker cp` before it starts. It never receives an
+OpenBao address, AppRole material, a host path or the Docker socket. The
+login token owns the lease behind the GitHub token, so the run is capped at
+the login token's lifetime and the token is revoked when the run ends.
+
+### Environment
+
+| Name | Use |
+| --- | --- |
+| `BAO_ADDR` | OpenBao address |
+| `OPENBAO_APPROLE_OPEN_LLM_ROLE_ID`, `OPENBAO_APPROLE_OPEN_LLM_SECRET_ID` | AppRole login |
+| `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
+| `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
+| `AGENT_DISPATCH_INGRESS_DOMAIN` | parent domain of interactive sessions; required for `--interactive` |
+| `AGENT_DISPATCH_INGRESS_NETWORK` | Docker network shared with the ingress proxy (default `agents-ingress`) |
+| `AGENT_DISPATCH_INGRESS_MIDDLEWARES` | Traefik middlewares for the session route (optional) |
+| `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
+| `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
+| `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
+
+Bucket fields read: `GITHUB_AGENTS_INSTALLATION_ID`; each tool's task-profile
+variables (`ZAI_SUBSCRIPTION_KEY`, `CURSOR_API_KEY`); `VIKUNJA_URL`,
+`VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and `NTFY_AI_JOBS_TOKEN`. The host
+provides `docker`, `curl` and `setsid`.
+
+### Container inputs
+
+| Input | Meaning |
+| --- | --- |
+| `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
+| `AGENT_PR_DRAFT=1` | open the PR as a draft |
+| `AGENT_CONTINUE=1` | a continued run on an existing workspace |
+| `AGENT_INTERACTIVE=1`, `AGENT_PORT` | serve the web session on that port |
+| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables and, for `--interactive`, `AGENT_WEB_TOKEN` |
+| `~/.agent-prompt` | the prompt or message |
+| `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
 
 ## Safety model
 

@@ -22,7 +22,7 @@ Read [README.md](README.md) first for what this repo is.
 ## Build & verify
 
 ```sh
-nix flake check -L          # all systems' checks for this host
+nix flake check -L          # all systems' checks for this host (incl. the agent-dispatch bats suite)
 nix build .#agent-image     # Linux only (CI builds both arches)
 nix run .#agent-cli -- run --tool claude "hello"   # needs container/docker + image
 ```
