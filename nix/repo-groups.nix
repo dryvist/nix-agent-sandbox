@@ -51,7 +51,7 @@
 
   # Homelab infrastructure-as-code (Proxmox + UniFi + Ansible).
   # tofu-unifi is the one private member; every other repo here is public.
-  # It is included because it is core homelab IaC and the github-write mint
+  # It is included because it is core homelab IaC and a repo-scoped token
   # already handles private clones — flagged for reviewer to drop if the
   # public-only convention should win.
   homelab-iac = {

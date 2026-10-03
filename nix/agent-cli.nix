@@ -24,6 +24,7 @@ writeShellApplication {
   # hardening defaults are injected the same way (baked here, env-overridable).
   text = ''
     AGENT_REPO_GROUPS=${lib.escapeShellArg (builtins.toJSON (import ./repo-groups.nix))}
+    AGENT_TASK_PROFILES=${lib.escapeShellArg (builtins.toJSON (import ./task-profiles.nix))}
     AGENT_MEMORY_DEFAULT=${lib.escapeShellArg hardeningDefaults.memory}
     AGENT_CPUS_DEFAULT=${lib.escapeShellArg hardeningDefaults.cpus}
     AGENT_PIDS_LIMIT_DEFAULT=${lib.escapeShellArg hardeningDefaults.pidsLimit}

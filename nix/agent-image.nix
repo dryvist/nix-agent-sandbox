@@ -1,7 +1,7 @@
 # The agent runtime image.
 #
 # One OCI image, two consumers: Apple `container` on macOS (aarch64-linux)
-# and Docker on the Proxmox docker-host VM (x86_64-linux). Runs as the
+# and Docker on a remote Linux host (x86_64-linux). Runs as the
 # non-root `agent` user (uid 1000) — Claude Code hard-rejects bypass mode
 # as root, and nothing in here needs root. No sudo in the image.
 #
@@ -68,8 +68,8 @@ let
     path: contents: writeTextDir "${lib.removePrefix "/" homeDir}/${path}" contents
   ) renderAutonomous.files;
 
-  # Task profiles (pre-defined secret group + GitHub scope per profile),
-  # consumed by the entrypoint's OpenBao block.
+  # Task profiles (the environment variables each profile requires),
+  # checked by the entrypoint.
   profilesFile = writeTextDir "${lib.removePrefix "/" homeDir}/.agent-profiles.json" (
     builtins.toJSON (import ./task-profiles.nix)
   );

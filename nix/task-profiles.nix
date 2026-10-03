@@ -1,33 +1,26 @@
 # Task profiles: the pre-defined group of secrets a run is granted, selected
 # at launch with `agent run --profile <name>`. Baked into the image as
-# /home/agent/.agent-profiles.json and consumed by the entrypoint's OpenBao
-# block; which profiles a given AppRole can actually satisfy is decided
-# server-side by that role's OpenBao policies (ai-readonly / ai-apply-<svc>,
-# see ansible-proxmox-apps roles/openbao).
+# /home/agent/.agent-profiles.json and injected into the launcher.
 #
-# GitHub write access is NOT part of a profile — it's minted by the launcher
-# (agent-cli.sh) via the workstation-only `github-write` OpenBao identity
-# whenever `--repo` is given, independent of which profile is selected.
+# The launcher forwards each named variable from the caller's environment
+# (typically loaded from a `.env` file) into the container, and refuses to
+# start when one is unset. Nothing else from the caller's environment is
+# forwarded beyond the fixed credential list in agent-cli.sh.
+#
+# GitHub write access is NOT part of a profile — `--repo` uses GH_TOKEN, or
+# the token printed by AGENT_GH_TOKEN_CMD (see agent-cli.sh).
 #
 # Shape per profile:
-#   kv   list of { path, field, env }: KV v2 path under the `secret/` mount
-#        (no data/ segment), the field to read, and the environment variable
-#        it becomes.
+#   env  list of environment variable names the run requires.
 {
   # Estate-context reads only. No secrets exported; model keys come from the
   # caller's environment exactly as before.
   readonly = {
-    kv = [ ];
+    env = [ ];
   };
 
-  # Standard autonomous dev run: model key from the paid-SaaS provider area.
+  # Standard autonomous dev run: requires a model API key.
   dev = {
-    kv = [
-      {
-        path = "ai/saas/anthropic";
-        field = "ANTHROPIC_API_KEY";
-        env = "ANTHROPIC_API_KEY";
-      }
-    ];
+    env = [ "ANTHROPIC_API_KEY" ];
   };
 }

@@ -33,11 +33,11 @@
     in
     {
       lib = {
-        # Egress allowlist consumed by the docker-host egress proxy
-        # (ansible-proxmox-apps roles/agent_sandbox) and the architecture docs.
+        # Egress allowlist consumed by the Docker host's egress proxy and the
+        # architecture docs.
         egressDomains = import ./nix/egress-domains.nix;
-        # Task profiles (secret group + GitHub scope per profile); baked into
-        # the image, exported for the docs and downstream consumers.
+        # Task profiles (required environment variables per profile); baked
+        # into the image and the CLI, exported for docs and consumers.
         taskProfiles = import ./nix/task-profiles.nix;
         # Repo groups: named fan-out sets for `agent sweep`. Baked into the
         # CLI as JSON (agent-cli.nix), exported for docs and consumers.

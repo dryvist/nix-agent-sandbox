@@ -6,10 +6,10 @@
 
 IMAGE="${AGENT_IMAGE:-ghcr.io/dryvist/nix-agent-sandbox/agent:latest}"
 
-# Per-run transcript spool root on a --host docker daemon. A Cribl Edge on the
-# host tails this tree to ship each run's session records to Splunk before the
-# --rm container is destroyed; the host-side ansible role (ansible-proxmox-apps
-# agent_sandbox) creates the root and prunes runs older than 7 days.
+# Per-run transcript spool root on a --host docker daemon. A host-side log
+# shipper can tail this tree to keep each run's session records after the
+# --rm container is destroyed; the host provisioning creates the root and
+# prunes old runs.
 SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
 
 usage() {
@@ -30,8 +30,8 @@ each cloning, branching, and PR'ing its own repo with its own repo-scoped
 GitHub token, exactly like `agent run --repo`. At most --concurrency runs
 (default 4) execute at once; an end-of-run table lists each repo, its base
 branch, and the PR URL or exit code. A group's `profile` is the default
-unless --profile overrides it. Per-repo github-write material is required
-just as for `run --repo`.
+unless --profile overrides it. Each member gets its GitHub token just as
+`run --repo` does.
 
 The workstation's subscription-OAuth credentials for the selected --tool
 are injected into the container per run (never baked into the image, never
@@ -50,18 +50,14 @@ for API-key auth instead.
 attaches the container to its egress-allowlisted network (AGENT_NETWORK,
 default "agents"; proxy AGENT_PROXY_URL, default http://proxy:3128).
 
---profile selects a task profile baked into the image: its KV secret group
-is fetched from OpenBao. Requires BAO_ADDR plus AppRole material —
-BAO_ROLE_ID/BAO_SECRET_ID (defaulting to the ambient AI_READONLY_* pair) or
-a human-minted single-use BAO_WRAPPED_SECRET_ID for the ai-apply tiers.
+--profile selects a task profile (lib.taskProfiles): each environment
+variable it names is forwarded from the caller's environment (for example a
+`.env` file) and must be set.
 
---repo additionally mints a per-run, single-repo-scoped GitHub App token via
-OpenBao's github-write identity (a claim-before-work write-lease, ~15m,
-prevents two concurrent runs from both writing the same repo) — unless a
-caller-supplied GH_TOKEN is already in the environment, which always wins.
-Requires BAO_ADDR, OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID, and the
-matching OPENBAO_GITHUB_<DRYVIST|PERSONAL>_INSTALLATION_ID for the repo's
-owner.
+--repo uses a repo-scoped GH_TOKEN from the environment. When GH_TOKEN is
+unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
+`$AGENT_GH_TOKEN_CMD owner/name` once per run and uses the token it prints
+on stdout.
 
 With --no-oauth (or for --tool values with no OAuth path), pass credentials
 via environment instead: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
@@ -92,79 +88,46 @@ runtime() {
   fi
 }
 
-# Forward only the credentials that are actually set. Values are passed
+# Forward only the credentials that are actually set, plus any extra names
+# passed as arguments (a task profile's variables). Values are passed
 # explicitly (KEY=VALUE) because Apple `container` does not support
 # bare-name env passthrough the way docker does.
 env_flags() {
   for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY \
-    CLAUDE_CODE_OAUTH_TOKEN \
-    GH_TOKEN GITHUB_TOKEN BAO_ADDR BAO_ROLE_ID BAO_SECRET_ID BAO_WRAPPED_SECRET_ID; do
+    CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN "$@"; do
     if [ -n "${!var:-}" ]; then
       printf -- '-e\n%s=%s\n' "$var" "${!var}"
     fi
   done
 }
 
-# --- GitHub write-token minting (launcher-side; the container never holds
-# github-write reach — see entrypoint.sh). One repo per request, parameter-
-# pinned server-side by the github-write OpenBao policy. No coordination
-# lock: each run clones fresh and pushes its own uniquely-named branch, so
-# there is no shared git state for concurrent same-repo runs to race on —
-# git's own non-fast-forward push rejection is what would catch a real
-# collision, and GitHub Apps support any number of simultaneously-valid
-# installation tokens, so serializing the mint itself protects nothing.
-mint_github_token() {
-  local repo="$1" bao_addr owner iid role_id secret_id bao_tok resp
-  bao_addr="${BAO_ADDR:-${VAULT_ADDR:-}}"
-  [ -n "${bao_addr}" ] || {
-    echo "agent: --repo requires BAO_ADDR (or VAULT_ADDR) to mint a GitHub write token." >&2
-    exit 64
-  }
-  owner="${repo%%/*}"
-  case "${owner}" in
-    dryvist) iid="${OPENBAO_GITHUB_DRYVIST_INSTALLATION_ID:-}" ;;
-    *) iid="${OPENBAO_GITHUB_PERSONAL_INSTALLATION_ID:-}" ;;
-  esac
-  [ -n "${iid}" ] || {
-    echo "agent: no installation id for owner '${owner}' (set OPENBAO_GITHUB_${owner^^}_INSTALLATION_ID)." >&2
-    exit 64
-  }
-  role_id="${OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID:-}"
-  secret_id="${OPENBAO_APPROLE_GITHUB_WRITE_SECRET_ID:-}"
-  [ -n "${role_id}" ] && [ -n "${secret_id}" ] || {
-    echo "agent: --repo requires OPENBAO_APPROLE_GITHUB_WRITE_ROLE_ID/_SECRET_ID." >&2
-    exit 64
-  }
+# Variable names a task profile requires (empty for no profile).
+# Call as `vars="$(profile_vars "$profile")" || exit 64`.
+profile_vars() {
+  [ -n "$1" ] || return 0
+  jq -r --arg p "$1" \
+    'if has($p) then .[$p].env[] else error("agent: unknown --profile \($p)") end' \
+    <<<"${AGENT_TASK_PROFILES:?run the nix-built agent, which bakes in the task profiles}"
+}
 
-  bao_tok="$(curl -fsS --max-time 10 -X POST \
-      -d "$(jq -cn --arg r "${role_id}" --arg s "${secret_id}" '{role_id:$r,secret_id:$s}')" \
-      "${bao_addr}/v1/auth/approle/login" \
-    | jq -re '.auth.client_token')" || {
-    echo "agent: github-write AppRole login failed." >&2
+# --- GitHub token for --repo (launcher-side). GH_TOKEN from the environment
+# wins; otherwise AGENT_GH_TOKEN_CMD prints a repo-scoped token. No
+# coordination lock: each run clones fresh and pushes its own uniquely-named
+# branch, so concurrent same-repo runs share no git state to race on.
+github_token() {
+  local repo="$1" token_cmd
+  [ -n "${AGENT_GH_TOKEN_CMD:-}" ] || {
+    echo "agent: --repo needs GH_TOKEN, or AGENT_GH_TOKEN_CMD to print one." >&2
     exit 64
   }
-
-  # String forms are load-bearing: OpenBao's github-write ACL cannot
-  # element-match a LIST parameter and only matches installation_id as a
-  # string (ansible-proxmox-apps#1104, verified live 2026-07-18) — the
-  # number/list shape is denied server-side.
-  resp="$(curl -fsS --max-time 10 -X POST -H "X-Vault-Token: ${bao_tok}" \
-      -d "$(jq -cn --arg i "${iid}" --arg r "${repo##*/}" '{installation_id:$i,repositories:$r}')" \
-      "${bao_addr}/v1/github/token")" || {
-    echo "agent: minting the github-write token for ${repo} failed (repo not on the allowlist?)." >&2
-    unset bao_tok role_id secret_id
+  # The command may carry its own arguments.
+  read -ra token_cmd <<<"$AGENT_GH_TOKEN_CMD"
+  GH_TOKEN="$("${token_cmd[@]}" "$repo")" && [ -n "$GH_TOKEN" ] || {
+    echo "agent: AGENT_GH_TOKEN_CMD printed no token for $repo." >&2
     exit 64
   }
-  GH_TOKEN="$(jq -re '.data.token' <<<"${resp}")" || {
-    echo "agent: no token in the github-write mint response for ${repo}." >&2
-    unset bao_tok role_id secret_id resp
-    exit 64
-  }
-  GITHUB_TOKEN="${GH_TOKEN}"
+  GITHUB_TOKEN=$GH_TOKEN
   export GH_TOKEN GITHUB_TOKEN
-  # Bootstrap material dies here — it must never reach the container (the
-  # exec below only forwards what env_flags() explicitly enumerates).
-  unset bao_tok role_id secret_id resp
 }
 
 # --- Subscription-OAuth credential injection (launcher-side only; the
@@ -288,14 +251,14 @@ apply_host() {
 # and the OAuth creds injected by inject_oauth_creds; mounting a root would
 # shadow the configs and spill the creds onto the host disk. The subdirs
 # (~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp) hold only session
-# records, which a host-side Cribl Edge tails to Splunk before --rm teardown.
+# records, which a host-side log shipper can tail before --rm teardown.
 #
 # docker auto-creates a missing bind source as root, but the agent runs as uid
 # 1000 and could not then write it. So the leaves are pre-created by a throwaway
 # container that runs as that same uid 1000 (image default) — the leaves come
-# out 1000-owned and agent-writable, cribl-readable, with no world-writable
+# out 1000-owned and agent-writable, shipper-readable, with no world-writable
 # chmod and no second channel beyond the docker protocol --host already speaks.
-# The 1777 spool root (created by the ansible agent_sandbox role) is what lets
+# The 1777 spool root (created by the host provisioning) is what lets
 # uid 1000 mkdir here; if it is absent the prepare fails and the run proceeds
 # WITHOUT capture rather than aborting.
 spool_mount_flags() {
@@ -357,17 +320,17 @@ case "$cmd" in
     [ $# -gt 0 ] || usage
     prompt="$*"
 
-    # Ambient ai-readonly AppRole is the estate default for profile runs.
-    : "${BAO_ROLE_ID:=${AI_READONLY_ROLE_ID:-}}"
-    : "${BAO_SECRET_ID:=${AI_READONLY_SECRET_ID:-}}"
+    pvars_list="$(profile_vars "${profile}")" || exit 64
+    pvars=()
+    [ -z "${pvars_list}" ] || mapfile -t pvars <<<"${pvars_list}"
 
     if [ -n "${repo}" ] && [ -z "${GH_TOKEN:-}" ]; then
-      mint_github_token "${repo}"
+      github_token "${repo}"
     fi
 
     rt="$(runtime)"
     flags=()
-    while IFS= read -r line; do flags+=("$line"); done < <(env_flags)
+    while IFS= read -r line; do flags+=("$line"); done < <(env_flags "${pvars[@]}")
 
     # Stable id shared by the entrypoint (branch name) and the transcript spool
     # path. Only a remote --host run has a host daemon with the spool to mount.
