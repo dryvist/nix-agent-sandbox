@@ -14,6 +14,8 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | `packages.<linux>.agent-image` | OCI image: the three CLIs, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
+| `packages.*.zcode-job` | ZCode-only SSH client with JSON output and an approved repository subset. |
+| `homeManagerModules.zcode-job` | Optional client package and configuration for a restricted SSH alias and native Web/Server URL. |
 | `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
 | `lib.taskProfiles` | Task profiles: the environment variables each `--profile` requires. |
 | `lib.repoGroups` | Named repo groups for `agent sweep` fan-out (baked into the CLI as JSON). |
@@ -33,6 +35,38 @@ The agent image itself is published by CI to
 `ghcr.io/dryvist/nix-agent-sandbox/agent:latest` (multi-arch); the CLI
 pulls it on first use. Building the image locally requires a Linux
 builder: `nix build .#agent-image`.
+
+## ZCode client
+
+`zcode-job` submits batch work to the restricted dispatcher. Its configuration
+contains the SSH alias, approved non-sensitive repository subset, and the SSO
+URL of the always-on native Web/Server session. The Home Manager module is
+disabled by default and requires an explicit repository list when enabled.
+
+```sh
+zcode-job repos
+zcode-job start "$repo" "$prompt"
+zcode-job status "$job_id"
+zcode-job result "$job_id"
+zcode-job continue "$job_id" "$message"
+zcode-job cancel "$job_id"
+zcode-job live
+```
+
+Every command prints JSON. `result` requires a terminal job and includes the
+fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
+`live` returns the configured SSO URL; `repos` returns the approved subset.
+Unapproved start requests fail before SSH. Continuations and cancellations
+check the existing job's tool and repository before sending a mutation.
+The dispatcher independently checks its current repository access.
+
+Requests contain the repository or job id and task text. Each SSH call has
+a five-minute deadline. Exit 64 indicates invalid input or configuration;
+exit 1 indicates an invalid response or unavailable result; transport failures
+preserve the SSH or timeout exit code. Errors are JSON objects with `error`.
+
+The shared `ai-delegation` plugin's `delegate-to-ai` skill owns content
+eligibility and trusted verification of the returned draft PR.
 
 ## Usage
 
