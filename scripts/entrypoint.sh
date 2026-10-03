@@ -9,12 +9,8 @@
 #   AGENT_SHELL=1     drop into bash instead of running an agent (debugging)
 #   GH_TOKEN          scoped token for clone/push/PR when AGENT_REPO is set
 #   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
-#                     requires BAO_ADDR + AppRole material below
-#   BAO_ADDR          OpenBao API address; enables the profile secret fetch
-#   BAO_ROLE_ID       AppRole role_id (ai-readonly / ai-apply-<svc> tier)
-#   BAO_SECRET_ID     AppRole secret_id — or:
-#   BAO_WRAPPED_SECRET_ID  single-use response-wrapping token holding the
-#                     secret_id (the human-minted ai-apply grant path)
+#                     every variable it names must be set (the launcher
+#                     forwards them from the caller's environment)
 #
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
@@ -58,58 +54,20 @@ workdir="${HOME}/work"
 mkdir -p "${workdir}"
 cd "${workdir}"
 
-# --- OpenBao: task-profile secrets + per-run GitHub token ------------------
-# The profile names a pre-defined group of secrets; whether this run's
-# AppRole may actually read them is enforced server-side by its policies.
-# AppRole material is consumed here and unset before any agent tool starts.
+# --- Task profile: required environment ------------------------------------
+# The profile names the variables this run needs; the launcher forwards them
+# from the caller's environment. GH_TOKEN for --repo arrives the same way.
 if [ -n "${AGENT_PROFILE:-}" ]; then
-  if [ -z "${BAO_ADDR:-}" ]; then
-    echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires BAO_ADDR." >&2
-    exit 64
-  fi
   profile="$(jq -ce --arg p "${AGENT_PROFILE}" '.[$p]' "${HOME}/.agent-profiles.json")" || {
     echo "agent-entrypoint: unknown AGENT_PROFILE '${AGENT_PROFILE}'." >&2
     exit 64
   }
-
-  if [ -n "${BAO_WRAPPED_SECRET_ID:-}" ]; then
-    BAO_SECRET_ID="$(curl -fsS -X POST -H "X-Vault-Token: ${BAO_WRAPPED_SECRET_ID}" \
-      "${BAO_ADDR}/v1/sys/wrapping/unwrap" | jq -re '.data.secret_id')" || {
-      echo "agent-entrypoint: unwrapping the single-use secret_id failed (already used or expired?)." >&2
+  while IFS= read -r var; do
+    [ -n "${!var:-}" ] || {
+      echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
       exit 64
     }
-  fi
-  if [ -z "${BAO_ROLE_ID:-}" ]; then
-    echo "agent-entrypoint: BAO_ROLE_ID is required with AGENT_PROFILE." >&2
-    exit 64
-  fi
-  bao_token="$(jq -cn --arg r "${BAO_ROLE_ID}" --arg s "${BAO_SECRET_ID:-}" \
-      '{role_id: $r, secret_id: $s}' \
-    | curl -fsS -X POST -d @- "${BAO_ADDR}/v1/auth/approle/login" \
-    | jq -re '.auth.client_token')" || {
-    echo "agent-entrypoint: OpenBao AppRole login failed." >&2
-    exit 64
-  }
-  unset BAO_ROLE_ID BAO_SECRET_ID BAO_WRAPPED_SECRET_ID
-
-  # Export each profile KV field. The KV value wins over caller env: the
-  # profile is the declared source of truth for what this run uses.
-  while IFS=$'\t' read -r kv_path kv_field kv_env; do
-    value="$(curl -fsS -H "X-Vault-Token: ${bao_token}" \
-        "${BAO_ADDR}/v1/secret/data/${kv_path}" \
-      | jq -re --arg f "${kv_field}" '.data.data[$f]')" || {
-      echo "agent-entrypoint: secret/${kv_path}#${kv_field} unreadable (unseeded, or outside this AppRole's policy)." >&2
-      exit 64
-    }
-    export "${kv_env}=${value}"
-  done < <(jq -r '.kv[] | [.path, .field, .env] | @tsv' <<<"${profile}")
-
-  # GitHub write access is NOT minted here. The container's AppRole
-  # (ai-readonly / ai-apply-<svc>) only ever gets `github-mint`, which is
-  # read-tier only by design (github-write is a separate, workstation-only
-  # ambient identity) — this block is KV-fetch only; GH_TOKEN is whatever
-  # the launcher already minted and passed in via -e (see agent-cli.sh).
-  unset bao_token
+  done < <(jq -r '.env[]' <<<"${profile}")
 fi
 
 # --- Workspace -------------------------------------------------------------
