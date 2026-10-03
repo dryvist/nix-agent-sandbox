@@ -384,7 +384,7 @@ case "$cmd" in
     # and cancels the timeout watchdog if one was started. The flow no longer
     # `exec`s, so the trap also fires after a normal run — there `docker rm -f`
     # is a harmless no-op on the already-reaped container.
-    trap '[ -n "${watchdog:-}" ] && { kill "${watchdog}" 2>/dev/null; wait "${watchdog}" 2>/dev/null; }; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+    trap '[ -n "${watchdog:-}" ] && { kill "${watchdog}" 2>/dev/null; wait "${watchdog}" 2>/dev/null || true; }; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
     if [ "${no_oauth}" -ne 1 ]; then
       inject_oauth_creds "$cid" "$tool"
