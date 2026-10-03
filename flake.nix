@@ -44,6 +44,8 @@
         repoGroups = import ./nix/repo-groups.nix;
       };
 
+      homeManagerModules.zcode-job = import ./nix/zcode-job-module.nix;
+
       packages = forSystems allSystems (
         system:
         let
@@ -52,6 +54,7 @@
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
           agent-dispatch = pkgs.callPackage ./nix/agent-dispatch.nix { };
+          zcode-job = pkgs.callPackage ./nix/zcode-job.nix { };
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
@@ -104,7 +107,28 @@
                 patchShebangs tests
                 AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
                   ENTRYPOINT=${./scripts/entrypoint.sh} \
-                  bats tests
+                  bats tests/agent-dispatch.bats
+                touch $out
+              '';
+          zcode-job =
+            let
+              sshStub = pkgs.writeShellApplication {
+                name = "ssh";
+                runtimeInputs = [ pkgs.jq ];
+                text = builtins.readFile ./tests/ssh-stub.sh;
+              };
+              client = self.packages.${system}.zcode-job.override { openssh = sshStub; };
+            in
+            pkgs.runCommand "zcode-job-tests"
+              {
+                nativeBuildInputs = with pkgs; [
+                  bats
+                  coreutils
+                  jq
+                ];
+              }
+              ''
+                ZCODE_JOB_BIN=${client}/bin bats ${./tests/zcode-job.bats}
                 touch $out
               '';
         }
