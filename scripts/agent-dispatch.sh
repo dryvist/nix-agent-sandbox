@@ -14,9 +14,10 @@
 # OPENBAO_APPROLE_OPEN_LLM_ROLE_ID / OPENBAO_APPROLE_OPEN_LLM_SECRET_ID, reads
 # secret/apps/open-llm, and mints a GitHub token for the job's repo from
 # github-agents/token. The token must cover exactly that one repo, or the job
-# fails closed. The login token owns the lease behind the GitHub token, so it
-# is revoked when the run ends, which also ends the GitHub token. The run is
-# capped at the login token's lifetime for the same reason.
+# fails closed. The login token owns the lease behind the GitHub token, so a
+# waiter renews it every half TTL while the container runs and revokes it
+# when the run ends, which also ends the GitHub token. The run ends by the
+# token's max TTL, and a failed renewal fails the run.
 #
 # The container receives the GitHub token, the tool's model key and the
 # prompt as files copied in with `docker cp` between create and start. It
@@ -390,8 +391,8 @@ run_job() {
   fi
 
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
-  if [ "$lease" -gt 0 ] && [ "$lease" -lt "$budget" ]; then budget=$lease; fi
   echo "$budget" >"$rdir/budget"
+  echo "$lease" >"$rdir/ttl"
   container_args "$id" "$run" "$tool" "$repo" "$interactive" "$cont"
   cid=$(docker create "${args[@]}") || {
     abort "$id" "$run" "container create failed" "$tok"
@@ -426,17 +427,54 @@ run_job() {
   fi
 }
 
+# wait_run <id> <run>: wait for the container in slices of half the login
+# token's TTL and renew the token between slices. The run ends when the
+# container exits. It ends as a timeout when AGENT_TIMEOUT passes or when the
+# token cannot be renewed past its max TTL. A failed renewal kills the
+# container and fails the run. The token is revoked on every path.
 wait_run() {
-  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" tok="" cid code="" rc=0
+  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" tok="" cid code rc ttl step
+  local now end deadline expiry slice renewed lease
   IFS= read -r tok || true
   cid=$(cat "$rdir/cid")
-  code=$(timeout "$(cat "$rdir/budget")" docker wait "$cid") || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    echo "$code" >"$rdir/exit"
-  elif [ "$rc" -eq 124 ]; then
-    : >"$rdir/timeout"
-    docker kill "$cid" >/dev/null 2>&1 || true
-  fi
+  ttl=$(cat "$rdir/ttl")
+  now=$(date +%s)
+  deadline=$((now + $(cat "$rdir/budget")))
+  expiry=$deadline
+  if [ "$ttl" -gt 0 ]; then expiry=$((now + ttl)); fi
+  step=$((ttl / 2))
+  if [ "$step" -lt 1 ]; then step=1; fi
+  while :; do
+    now=$(date +%s)
+    end=$((deadline < expiry ? deadline : expiry))
+    if [ "$now" -ge "$end" ]; then
+      : >"$rdir/timeout"
+      docker kill "$cid" >/dev/null 2>&1 || true
+      break
+    fi
+    slice=$((end - now))
+    if [ "$ttl" -gt 0 ] && [ "$slice" -gt "$step" ]; then slice=$step; fi
+    rc=0
+    code=$(timeout "$slice" docker wait "$cid") || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "$code" >"$rdir/exit"
+      break
+    fi
+    # Anything but a slice running out is a docker error: finalize fails it.
+    [ "$rc" -eq 124 ] || break
+    # Renew only a renewable token with time left before this run's end.
+    if [ "$ttl" -le 0 ] || [ "$(date +%s)" -ge "$end" ]; then continue; fi
+    renewed=$(bao_req POST auth/token/renew-self "$tok" '{}') || renewed=""
+    lease=$(jq -r '.auth.lease_duration // 0' <<<"$renewed" 2>/dev/null) || lease=0
+    if [ "${lease:-0}" -le 0 ]; then
+      echo "openbao token renewal failed" >"$rdir/reason"
+      docker kill "$cid" >/dev/null 2>&1 || true
+      break
+    fi
+    # At the max TTL the renewal comes back short; the run then ends with
+    # the token.
+    expiry=$(($(date +%s) + lease))
+  done
   if [ -n "$tok" ]; then bao_revoke "$tok"; fi
   finalize "$id" "$run"
 }
