@@ -29,10 +29,10 @@ payloads are retained past normal job retention. `status` never sends metrics.
 Every point has `job`, `run`, `tool`, `repo`, and `outcome` attributes. Token
 points also have `token_type=total`. One run has one fixed completion timestamp;
 retries replay the same point rather than incrementing a counter. Daily queries
-use `sum(max_over_time(metric[1d1ms]))`, with a one-day step and calendar-day
+use `sum(max_over_time(metric[1d] offset 1ms))`, with a one-day step and calendar-day
 alignment. The per-run maximum prevents duplicate delivery from adding spend;
-the extra millisecond includes exact-midnight integer-second timestamps.
-Token coverage is `count(max_over_time(agent_dispatch_tokens[1d1ms]))` divided by completed
+the offset assigns exact-midnight timestamps to the following calendar day.
+Token coverage is `count(max_over_time(agent_dispatch_tokens[1d] offset 1ms))` divided by completed
 runs. Zero reported tokens are distinct from unknown usage. Cache-read tokens
 are not added to the native total a second time.
 
