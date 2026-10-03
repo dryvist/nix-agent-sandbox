@@ -76,6 +76,13 @@ case "$url" in
   */installation/repositories)
     resp="{\"total_count\":${STUB_SCOPE_COUNT:-1},\"repositories\":[{\"full_name\":\"${STUB_SCOPE_REPO:-dryvist/nix-ai}\"}]}"
     ;;
+  */v1/metrics)
+    if [ -n "${STUB_METRICS_REJECT:-}" ]; then
+      resp='{"partialSuccess":{"rejectedDataPoints":"3"}}'
+    else
+      resp='{}'
+    fi
+    ;;
   *) resp='{}' ;;
 esac
 printf '%s\n' "$resp" >"$out"

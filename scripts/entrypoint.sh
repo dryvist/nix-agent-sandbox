@@ -124,8 +124,19 @@ case "${AGENT_TOOL}" in
   gemini)
     gemini --approval-mode yolo -p "${AGENT_PROMPT}" || status=$?
     ;;
+  zcode)
+    zcode_args=(--output-format json -p "${AGENT_PROMPT}")
+    [ "${AGENT_CONTINUE:-}" != 1 ] || zcode_args+=(--continue)
+    usage_file=$(mktemp)
+    zcode "${zcode_args[@]}" | tee "$usage_file" || status=$?
+    if [[ ${AGENT_DISPATCH_RUN:-} =~ ^[0-9]+$ ]]; then
+      mv -f "$usage_file" "$workdir/.agent-usage-$AGENT_DISPATCH_RUN.json"
+    else
+      rm -f "$usage_file"
+    fi
+    ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|gemini)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|gemini|zcode)" >&2
     exit 64
     ;;
 esac

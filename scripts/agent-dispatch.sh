@@ -33,6 +33,14 @@ BUCKET=secret/data/apps/open-llm
 GITHUB_API=https://api.github.com
 WEB_PORT=8080 # in-container port of an interactive web session
 MAX_TEXT=16384
+telemetry_config=${AGENT_DISPATCH_TELEMETRY_CONFIG:-/etc/agent-dispatch/telemetry.json}
+if [ -z "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] && [ -f "$telemetry_config" ]; then
+  AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=$(jq -er '.endpoint | select(type == "string" and length > 0)' "$telemetry_config") || {
+    echo 'agent-dispatch: invalid telemetry configuration' >&2
+    AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=''
+  }
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT
+fi
 
 usage() {
   cat >&2 <<'EOF'
@@ -155,8 +163,9 @@ job_json() {
   jq -c --arg state "$(cat "$rdir/state" 2>/dev/null || echo starting)" \
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
+    --argjson tokens "$(cat "$rdir/tokens" 2>/dev/null || echo null)" \
     --argjson runs "$run" --argjson duration "$((ended - started))" \
-    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration}' \
+    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, tokens: $tokens}' \
     "$dir/job.json"
 }
 
@@ -169,6 +178,52 @@ result_lines() {
   printf 'job: %s\ntool: %s\nrepo: %s\nstate: %s\npr: %s\nduration: %ss\n' \
     "$1" "$(job_get "$1" .tool)" "$(job_get "$1" .repo)" "$(cat "$rdir/state")" \
     "$(cat "$dir/pr_url" 2>/dev/null || echo none)" "$((ended - started))"
+  printf 'tokens: %s\n' "$(cat "$rdir/tokens" 2>/dev/null | sed 's/^null$/unknown/' || echo unknown)"
+}
+
+# One event gauge per run, using its immutable completion time on retries.
+# Status is read-only; refresh retries an unsuccessful delivery of this payload.
+emit_metrics() (
+  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" response
+  [ ! -f "$rdir/metrics.sent" ] || return 0
+  [ -n "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] || return 0
+  mkdir "$rdir/metrics.lock" 2>/dev/null || return 0
+  trap 'rmdir "$rdir/metrics.lock"' EXIT
+  if [ ! -f "$rdir/metrics.json" ]; then
+    jq -n --slurpfile job "$STATE_DIR/$id/job.json" \
+      --arg run "$run" --arg outcome "$(cat "$rdir/state")" \
+      --arg time "$(cat "$rdir/ended")000000000" \
+      --argjson duration "$(($(cat "$rdir/ended") - $(cat "$rdir/started")))" \
+      --argjson tokens "$(cat "$rdir/tokens" 2>/dev/null || echo null)" '
+      def attr($k; $v): {key:$k,value:{stringValue:$v}};
+      [attr("job";$job[0].job),attr("run";$run),attr("tool";$job[0].tool),
+       attr("repo";$job[0].repo),attr("outcome";$outcome)] as $attrs |
+      def metric($name; $value; $extra): {name:$name,gauge:{dataPoints:[{
+        attributes:($attrs + $extra),timeUnixNano:$time,asDouble:$value}]}};
+      {resourceMetrics:[{resource:{attributes:[attr("service.name";"agent-dispatch")]},
+        scopeMetrics:[{scope:{name:"agent-dispatch"},metrics:[
+          metric("agent_dispatch_runs";1;[]),
+          metric("agent_dispatch_duration_seconds";$duration;[]),
+          (if $tokens != null then metric("agent_dispatch_tokens";$tokens;
+            [attr("token_type";"total")]) else empty end)]}]}]}' >"$rdir/metrics.json"
+  fi
+  response=$(curl -sS --fail-with-body --max-time 30 -X POST \
+    -H @<(printf 'Content-Type: application/json\n';
+      if [ -n "${AGENT_DISPATCH_OTLP_HEADERS_FILE:-}" ]; then cat "$AGENT_DISPATCH_OTLP_HEADERS_FILE"; fi) \
+    --data-binary @"$rdir/metrics.json" "$AGENT_DISPATCH_OTLP_METRICS_ENDPOINT") || return 1
+  [ -n "$response" ] || response='{}'
+  jq -e '(.partialSuccess.rejectedDataPoints // "0" | tonumber) == 0' \
+    <<<"$response" >/dev/null || return 1
+  touch "$rdir/metrics.sent"
+)
+
+read_tokens() {
+  local raw
+  raw=$(docker cp "$1:/home/agent/work/.agent-usage-$2.json" - 2>/dev/null |
+    tar -xOf - 2>/dev/null | head -c 1048576) || true
+  jq -ser 'select(length == 1) | .[0] | select(type == "object") | select((.turnResponses // [] | length) <= 1) |
+    .usage.totalTokens | select(type == "number" and . >= 0 and . <= 9007199254740991 and . == floor)' \
+    <<<"$raw" 2>/dev/null || echo null
 }
 
 notify() {
@@ -249,10 +304,14 @@ finalize() {
   if [ -n "$cid" ]; then
     pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
     if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
+    if [ "$(job_get "$id" .tool)" = zcode ]; then
+      read_tokens "$cid" "$run" >"$rdir/tokens"
+    fi
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
   date +%s >"$rdir/ended"
   echo "$state" >"$rdir/state"
+  emit_metrics "$id" "$run" || echo "agent-dispatch: $id: metrics delivery incomplete" >&2
   notify "$id" "$run" || echo "agent-dispatch: $id: result notification incomplete" >&2
 }
 
@@ -281,6 +340,7 @@ container_args() {
     -e "AGENT_PROFILE=$3"
     -e "AGENT_REPO=$4"
     -e "AGENT_RUN_ID=$1"
+    -e "AGENT_DISPATCH_RUN=$2"
     -e AGENT_PR_DRAFT=1
     -v "agent-job-$1:/home/agent/work"
     --memory "${AGENT_MEMORY:-$AGENT_MEMORY_DEFAULT}"
@@ -557,7 +617,7 @@ cmd_cancel() {
 # refresh: settle runs whose waiter is gone, then prune finished jobs older
 # than AGENT_DISPATCH_RETENTION seconds (container, volume and state).
 cmd_refresh() {
-  local now dir id rdir cid status ended keep="${AGENT_DISPATCH_RETENTION:-86400}"
+  local now dir id rdir cid status ended pending unsent keep="${AGENT_DISPATCH_RETENTION:-86400}"
   local -a settled=() pruned=()
   now=$(date +%s)
   for dir in "$STATE_DIR"/j-*; do
@@ -580,6 +640,14 @@ cmd_refresh() {
       finalize "$id" "${rdir##*/}"
       settled+=("$id")
     else
+      unsent=0
+      for pending in "$dir"/runs/*; do
+        if [ -f "$pending/ended" ]; then
+          emit_metrics "$id" "${pending##*/}" || echo "agent-dispatch: $id: metrics delivery incomplete" >&2
+          if [ -n "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] && [ ! -f "$pending/metrics.sent" ]; then unsent=1; fi
+        fi
+      done
+      [ "$unsent" = 0 ] || continue
       ended=$(cat "$rdir/ended" 2>/dev/null || echo "$now")
       if [ $((now - ended)) -ge "$keep" ]; then
         docker volume rm -f "agent-job-$id" >/dev/null 2>&1 || true

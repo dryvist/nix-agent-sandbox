@@ -68,6 +68,87 @@ http_rec() {
 
 line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
+@test "completion sends native total once and continue emits a distinct run" {
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
+  export STUB_USAGE='{"usage":{"totalTokens":123,"cacheReadTokens":90}}'
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  local id rec first
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -r .tokens <<<"$output")" = 123 ]
+  rec=$(http_rec "POST $AGENT_DISPATCH_OTLP_METRICS_ENDPOINT")
+  jq -e '.resourceMetrics[0].scopeMetrics[0].metrics |
+    length == 3 and .[0].gauge.dataPoints[0].asDouble == 1 and
+    .[2].name == "agent_dispatch_tokens" and .[2].gauge.dataPoints[0].asDouble == 123' "$rec.body"
+  first=$(cat "$rec.body")
+  run --separate-stderr dispatch status "$id"
+  run --separate-stderr dispatch refresh
+  [ "$(grep -l 'POST https://metrics.test/v1/metrics' "$STUB_DIR"/http.*.req | wc -l)" -eq 1 ]
+  run --separate-stderr dispatch continue "$id" more
+  [ "$status" -eq 0 ]
+  [ "$(grep -l 'POST https://metrics.test/v1/metrics' "$STUB_DIR"/http.*.req | wc -l)" -eq 2 ]
+  [ "$first" != "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/metrics.json")" ]
+  run ! grep -q 'OTLP' "$STUB_DIR/create.1"
+}
+
+@test "absent malformed negative and multi-turn usage remain unknown" {
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
+  local sample rec
+  for sample in '{}' 'broken' '{"usage":{"totalTokens":-1}}' \
+    '{"usage":{"totalTokens":"23"}}' '{"usage":{"totalTokens":1.2}}' \
+    '{"usage":{"totalTokens":12},"turnResponses":["one","two"]}'; do
+    STUB_USAGE=$sample run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+    [ "$status" -eq 0 ]
+    [ "$(jq -r .tokens <<<"$output")" = null ]
+    rec=$(http_rec "POST $AGENT_DISPATCH_OTLP_METRICS_ENDPOINT")
+    jq -e '.resourceMetrics[0].scopeMetrics[0].metrics | length == 2' "$rec.body"
+  done
+}
+
+@test "entrypoint captures each native summary and preserves CLI failure" {
+  local task_home="$BATS_TEST_TMPDIR/zcode-home"
+  mkdir -p "$task_home"
+  run env -i PATH="$PATH" HOME="$task_home" STUB_DIR="$STUB_DIR" \
+    STUB_USAGE='{"usage":{"totalTokens":42}}' STUB_EXIT=7 \
+    AGENT_SANDBOX=1 AGENT_TOOL=zcode AGENT_PROMPT=hello AGENT_CONTINUE=1 AGENT_DISPATCH_RUN=2 \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 7 ]
+  jq -e '.usage.totalTokens == 42' "$task_home/work/.agent-usage-2.json"
+  grep -qx -- --continue "$STUB_DIR/zcode.args"
+  grep -qx -- --output-format "$STUB_DIR/zcode.args"
+  [ ! -e "$task_home/work/.agent-usage-1.json" ]
+}
+
+@test "host telemetry config supplies endpoint and explicit environment overrides it" {
+  export AGENT_DISPATCH_TELEMETRY_CONFIG="$BATS_TEST_TMPDIR/telemetry.json"
+  printf '%s\n' '{"endpoint":"https://configured.test/v1/metrics"}' > "$AGENT_DISPATCH_TELEMETRY_CONFIG"
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  http_rec "POST https://configured.test/v1/metrics"
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://override.test/v1/metrics
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  http_rec "POST https://override.test/v1/metrics"
+}
+
+@test "rejected metrics retry the identical timestamp and payload on refresh" {
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
+  export STUB_METRICS_REJECT=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  local id before rec
+  id=$(jq -r .job <<<"$output")
+  rec=$(http_rec "POST $AGENT_DISPATCH_OTLP_METRICS_ENDPOINT")
+  before=$(cat "$rec.body")
+  [ ! -f "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/metrics.sent" ]
+  unset STUB_METRICS_REJECT
+  run --separate-stderr dispatch refresh
+  [ "$status" -eq 0 ]
+  rec=$(http_rec "POST $AGENT_DISPATCH_OTLP_METRICS_ENDPOINT")
+  [ "$before" = "$(cat "$rec.body")" ]
+  [ -f "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/metrics.sent" ]
+}
+
 @test "dispatch-ssh refuses hostile or malformed commands before any side effect" {
   local long c
   long=$(head -c 16385 /dev/zero | tr '\0' a)
@@ -139,7 +220,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
       -e)
         case "${a[i + 1]%%=*}" in
           HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | AGENT_TOOL | AGENT_PROFILE | \
-            AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_INTERACTIVE | AGENT_PORT) ;;
+            AGENT_REPO | AGENT_RUN_ID | AGENT_DISPATCH_RUN | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_INTERACTIVE | AGENT_PORT) ;;
           *)
             echo "unexpected -e ${a[i + 1]%%=*}" >&2
             return 1
@@ -258,7 +339,7 @@ tool: zcode
 repo: dryvist/nix-ai
 state: succeeded
 pr: $pr" ]
-  [ "$(grep -c '' "$rec.body")" -eq 6 ]
+  [ "$(grep -c '' "$rec.body")" -eq 7 ]
   grep -Eqx 'duration: [0-9]+s' "$rec.body"
   grep -qx 'Authorization: Bearer ntfy-secret-value' "$rec.hdr"
   grep -qx "Title: ai-job $id succeeded" "$rec.hdr"
@@ -267,7 +348,7 @@ pr: $pr" ]
   rec=$(http_rec "PUT https://vikunja.test/api/v1/projects/55/tasks")
   grep -qx 'Authorization: Bearer vikunja-secret-value' "$rec.hdr"
   [ "$(jq -r .title "$rec.body")" = "ai-job $id succeeded" ]
-  [[ $(jq -r .description "$rec.body") == "<p>job: $id<br>tool: zcode<br>repo: dryvist/nix-ai<br>state: succeeded<br>pr: $pr<br>duration: "*"s</p>" ]]
+  [[ $(jq -r .description "$rec.body") == "<p>job: $id<br>tool: zcode<br>repo: dryvist/nix-ai<br>state: succeeded<br>pr: $pr<br>duration: "*"s<br>tokens: unknown</p>" ]]
   no_secret_on_a_command_line
 }
 

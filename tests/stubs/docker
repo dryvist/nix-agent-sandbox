@@ -26,7 +26,11 @@ case "$1" in
   cp)
     if [ "$2" = - ]; then
       cat >"$STUB_DIR/cp.$(next cp).tar"
-    elif [ -n "${STUB_PR_URL:-}" ]; then
+    elif [[ $2 == *'/.agent-usage-'* ]] && [ -n "${STUB_USAGE:-}" ]; then
+      d=$(mktemp -d)
+      printf '%s\n' "$STUB_USAGE" >"$d/usage.json"
+      tar -C "$d" -cf - usage.json
+    elif [[ $2 == *'/.agent-pr-url' ]] && [ -n "${STUB_PR_URL:-}" ]; then
       d=$(mktemp -d)
       printf '%s\n' "$STUB_PR_URL" >"$d/.agent-pr-url"
       tar -C "$d" -cf - .agent-pr-url

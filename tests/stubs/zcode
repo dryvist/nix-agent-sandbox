@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"$STUB_DIR/zcode.args"
+printf '%s\n' "${STUB_USAGE:-null}"
+exit "${STUB_EXIT:-0}"
