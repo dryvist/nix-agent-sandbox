@@ -131,6 +131,36 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   http_rec "POST https://override.test/v1/metrics"
 }
 
+@test "kernel telemetry lock releases after its owning process is killed" {
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
+  export STUB_METRICS_REJECT=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  local id rdir lock_pid i
+  id=$(jq -r .job <<<"$output")
+  rdir="$AGENT_DISPATCH_STATE_DIR/$id/runs/1"
+  unset STUB_METRICS_REJECT
+  python3 -c 'import fcntl, sys, time
+with open(sys.argv[1], "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    print("locked", flush=True)
+    time.sleep(30)
+' "$rdir/metrics.lock" >"$STUB_DIR/lock-ready" &
+  lock_pid=$!
+  for i in {1..100}; do
+    [ ! -s "$STUB_DIR/lock-ready" ] || break
+    sleep 0.05
+  done
+  [ -s "$STUB_DIR/lock-ready" ]
+  run --separate-stderr dispatch refresh
+  [ ! -f "$rdir/metrics.sent" ]
+  kill -KILL "$lock_pid"
+  wait "$lock_pid" || true
+  run --separate-stderr dispatch refresh
+  [ "$status" -eq 0 ]
+  [ -f "$rdir/metrics.sent" ]
+}
+
 @test "rejected metrics retry the identical timestamp and payload on refresh" {
   export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
   export STUB_METRICS_REJECT=1

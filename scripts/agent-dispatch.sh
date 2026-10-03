@@ -183,12 +183,25 @@ result_lines() {
 
 # One event gauge per run, using its immutable completion time on retries.
 # Status is read-only; refresh retries an unsuccessful delivery of this payload.
-emit_metrics() (
+emit_metrics() {
+  local rdir="$STATE_DIR/$1/runs/$2"
+  [ ! -f "$rdir/metrics.sent" ] || return 0
+  [ -n "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] || return 0
+  python3 -c 'import fcntl, os, sys
+fd = os.open(sys.argv[2], os.O_CREAT | os.O_RDWR, 0o600)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(0)
+os.set_inheritable(fd, True)
+os.execv(sys.argv[1], [sys.argv[1], "__metrics", *sys.argv[3:]])
+' "$0" "$rdir/metrics.lock" "$1" "$2"
+}
+
+emit_metrics_locked() (
   local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2"
   [ ! -f "$rdir/metrics.sent" ] || return 0
   [ -n "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] || return 0
-  mkdir "$rdir/metrics.lock" 2>/dev/null || return 0
-  trap 'rmdir "$rdir/metrics.lock"' EXIT
   if [ ! -f "$rdir/metrics.json" ]; then
     jq -n --slurpfile job "$STATE_DIR/$id/job.json" \
       --arg run "$run" --arg outcome "$(cat "$rdir/state")" \
@@ -692,6 +705,10 @@ case "$cmd" in
     # Internal: the detached waiter run_job starts. Not reachable over SSH.
     if [ $# -ne 2 ] || ! valid_job "$1" || [[ ! $2 =~ ^[0-9]+$ ]]; then usage; fi
     wait_run "$1" "$2"
+    ;;
+  __metrics)
+    if [ $# -ne 2 ] || ! valid_job "$1" || [[ ! $2 =~ ^[0-9]+$ ]]; then usage; fi
+    emit_metrics_locked "$1" "$2"
     ;;
   *) usage ;;
 esac
