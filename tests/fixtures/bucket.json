@@ -1,0 +1,13 @@
+{
+  "data": {
+    "data": {
+      "GITHUB_AGENTS_INSTALLATION_ID": "4242",
+      "ZAI_SUBSCRIPTION_KEY": "zai-secret-value",
+      "CURSOR_API_KEY": "cursor-secret-value",
+      "VIKUNJA_URL": "https://vikunja.test/api/v1",
+      "VIKUNJA_AI_JOBS_TOKEN": "vikunja-secret-value",
+      "NTFY_URL": "https://ntfy.test",
+      "NTFY_AI_JOBS_TOKEN": "ntfy-secret-value"
+    }
+  }
+}

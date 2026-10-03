@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test stand-in for setsid: runs the waiter in the foreground so a test sees
+# the finished run, or drops it (STUB_NO_WAITER) to leave the run in flight.
+set -euo pipefail
+
+{
+  printf 'setsid'
+  printf ' %q' "$@"
+  printf '\n'
+} >>"$STUB_DIR/argv.log"
+
+[ "$1" != -f ] || shift
+if [ -n "${STUB_NO_WAITER:-}" ]; then
+  cat >/dev/null
+  exit 0
+fi
+exec "$@"

@@ -11,6 +11,9 @@
 #   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
 #                     every variable it names must be set (the launcher
 #                     forwards them from the caller's environment)
+#   AGENT_PR_DRAFT=1  open the PR as a draft
+#   ~/.agent-env      optional NAME=value lines, exported (agent-dispatch)
+#   ~/.agent-prompt   optional file that sets AGENT_PROMPT (agent-dispatch)
 #
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
@@ -40,6 +43,24 @@ for f in "${HOME}/.claude/.credentials.json" "${HOME}/.codex/auth.json" \
   [ -e "$f" ] || continue
   chmod 600 "$f"
 done
+
+# agent-dispatch copies a run's secrets and prompt in as files (`docker cp`),
+# never as -e values. Each .agent-env line is NAME=value; the value is
+# exported verbatim, never evaluated. Both files are read once and removed.
+# Without them the run is unchanged.
+if [ -f "${HOME}/.agent-env" ]; then
+  while IFS= read -r line; do
+    case "${line%%=*}" in
+      '' | [0-9]* | *[!A-Za-z0-9_]*) continue ;;
+    esac
+    export "${line?}"
+  done <"${HOME}/.agent-env"
+  rm -f "${HOME}/.agent-env"
+fi
+if [ -f "${HOME}/.agent-prompt" ]; then
+  AGENT_PROMPT="$(cat "${HOME}/.agent-prompt")"
+  rm -f "${HOME}/.agent-prompt"
+fi
 
 # --- Inputs ----------------------------------------------------------------
 AGENT_TOOL="${AGENT_TOOL:-claude}"
@@ -73,12 +94,18 @@ fi
 # --- Workspace -------------------------------------------------------------
 branch=""
 if [ -n "${AGENT_REPO:-}" ]; then
-  gh repo clone "${AGENT_REPO}" repo -- --depth 50
-  cd repo
   branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
-  git checkout -b "${branch}"
-  git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
-  git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
+  if [ -d repo/.git ]; then
+    # A continued run (agent-dispatch `continue`) reuses its workspace clone.
+    cd repo
+    git checkout "${branch}"
+  else
+    gh repo clone "${AGENT_REPO}" repo -- --depth 50
+    cd repo
+    git checkout -b "${branch}"
+    git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
+    git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
+  fi
 fi
 
 # --- Run -------------------------------------------------------------------
@@ -105,6 +132,12 @@ esac
 
 # --- Publish ---------------------------------------------------------------
 # The branch/PR is the only durable output; the container is destroyed.
+# Only this step writes the PR URL file agent-dispatch reads, so anything the
+# tool left at that path is removed first.
+pr_file="${workdir}/.agent-pr-url"
+rm -rf "${pr_file}"
+draft=()
+[ "${AGENT_PR_DRAFT:-}" != 1 ] || draft=(--draft)
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
   # Pre-push secret scan on exactly the staged diff (gitleaks is baked into
@@ -122,7 +155,7 @@ Prompt: ${AGENT_PROMPT}
 
 Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox autonomous run)"
   git push -u origin "${branch}"
-  gh pr create \
+  if url="$(gh pr create "${draft[@]}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 
@@ -134,8 +167,14 @@ Prompt:
 
 \`\`\`
 ${AGENT_PROMPT}
-\`\`\`" \
-    || echo "agent-entrypoint: PR creation failed; branch ${branch} was pushed." >&2
+\`\`\`")"; then
+    printf '%s\n' "${url}" | tee "${pr_file}"
+  elif url="$(gh pr view "${branch}" --json url --jq .url)"; then
+    # A continued run pushes to the branch of the PR it already opened.
+    printf '%s\n' "${url}" | tee "${pr_file}"
+  else
+    echo "agent-entrypoint: PR creation failed; branch ${branch} was pushed." >&2
+  fi
 fi
 
 exit "${status}"

@@ -23,4 +23,17 @@
   dev = {
     env = [ "ANTHROPIC_API_KEY" ];
   };
+
+  # agent-dispatch tools: each job uses the profile named after its tool.
+  # The dispatcher copies each named field of its secret bucket into the
+  # container under the same name.
+  zcode = {
+    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+  };
+  opencode = {
+    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+  };
+  cursor-agent = {
+    env = [ "CURSOR_API_KEY" ];
+  };
 }

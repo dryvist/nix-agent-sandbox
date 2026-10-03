@@ -6,15 +6,7 @@
 { lib, writeShellApplication }:
 
 let
-  # Docker resource ceilings + wall-clock timeout defaults for autonomous
-  # runs. Each is env-overridable at call time (AGENT_MEMORY / AGENT_CPUS /
-  # AGENT_PIDS_LIMIT / AGENT_TIMEOUT); the script reads AGENT_*:-AGENT_*_DEFAULT.
-  hardeningDefaults = {
-    memory = "8g";
-    cpus = "4";
-    pidsLimit = "512";
-    timeout = "3600"; # seconds
-  };
+  hardeningDefaults = import ./hardening.nix;
 in
 writeShellApplication {
   name = "agent";

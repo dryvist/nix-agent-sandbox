@@ -51,6 +51,7 @@
         in
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
+          agent-dispatch = pkgs.callPackage ./nix/agent-dispatch.nix { };
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
@@ -68,6 +69,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              bats
               nixfmt-rfc-style
               shellcheck
             ];
@@ -79,8 +81,32 @@
 
       checks = forSystems allSystems (
         system:
+        let
+          pkgs = pkgsFor system;
+        in
         {
           agent-cli = self.packages.${system}.agent-cli;
+          # Builds (shellchecks) the dispatcher and runs its bats suite
+          # against the built binaries, with docker/curl/setsid stubbed.
+          agent-dispatch =
+            pkgs.runCommand "agent-dispatch-tests"
+              {
+                nativeBuildInputs = with pkgs; [
+                  bats
+                  coreutils
+                  gnutar
+                  jq
+                ];
+              }
+              ''
+                cp -r ${./tests} tests
+                chmod -R u+w tests
+                patchShebangs tests
+                AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
+                  ENTRYPOINT=${./scripts/entrypoint.sh} \
+                  bats tests
+                touch $out
+              '';
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           # Building the image derivation also validates the rendered
