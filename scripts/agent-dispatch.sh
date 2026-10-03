@@ -218,7 +218,8 @@ emit_metrics_locked() (
           metric("agent_dispatch_runs";1;[]),
           metric("agent_dispatch_duration_seconds";$duration;[]),
           (if $tokens != null then metric("agent_dispatch_tokens";$tokens;
-            [attr("token_type";"total")]) else empty end)]}]}]}' >"$rdir/metrics.json"
+            [attr("token_type";"total")]) else empty end)]}]}]}' >"$rdir/metrics.json.tmp" || return 1
+    mv "$rdir/metrics.json.tmp" "$rdir/metrics.json" || return 1
   fi
   python3 -c 'import json, sys
 from google.protobuf.json_format import ParseDict

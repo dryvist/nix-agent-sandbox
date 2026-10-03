@@ -131,6 +131,23 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   http_rec "POST https://override.test/v1/metrics"
 }
 
+@test "partial temporary payload is replaced before the event is committed" {
+  export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
+  export STUB_NO_WAITER=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai hello
+  [ "$status" -eq 0 ]
+  local id rdir
+  id=$(jq -r .job <<<"$output")
+  rdir="$AGENT_DISPATCH_STATE_DIR/$id/runs/1"
+  printf '{"resource' >"$rdir/metrics.json.tmp"
+  unset STUB_NO_WAITER
+  run --separate-stderr dispatch refresh
+  [ "$status" -eq 0 ]
+  jq -e '.resourceMetrics[0].scopeMetrics[0].metrics | length == 2' "$rdir/metrics.json"
+  [ ! -e "$rdir/metrics.json.tmp" ]
+  [ -f "$rdir/metrics.sent" ]
+}
+
 @test "kernel telemetry lock releases after its owning process is killed" {
   export AGENT_DISPATCH_OTLP_METRICS_ENDPOINT=https://metrics.test/v1/metrics
   export STUB_METRICS_REJECT=1
