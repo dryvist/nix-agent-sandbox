@@ -3,8 +3,7 @@
 # /home/agent/.agent-profiles.json and injected into the launcher.
 #
 # The launcher forwards each named variable from the caller's environment
-# (typically loaded from a `.env` file) into the container, and refuses to
-# start when one is unset. Nothing else from the caller's environment is
+# into the container, and refuses to start when one is unset. Nothing else from the caller's environment is
 # forwarded beyond the fixed credential list in agent-cli.sh.
 #
 # GitHub write access is NOT part of a profile — `--repo` uses GH_TOKEN, or

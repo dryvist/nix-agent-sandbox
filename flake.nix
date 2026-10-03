@@ -70,14 +70,14 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               bats
-              nixfmt-rfc-style
+              nixfmt
               shellcheck
             ];
           };
         }
       );
 
-      formatter = forSystems allSystems (system: (pkgsFor system).nixfmt-rfc-style);
+      formatter = forSystems allSystems (system: (pkgsFor system).nixfmt);
 
       checks = forSystems allSystems (
         system:

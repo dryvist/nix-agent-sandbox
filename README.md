@@ -51,9 +51,8 @@ GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
 
 # Same, on a remote Docker host inside its egress-allowlisted network. The
 # `dev` profile forwards the variables it names (here ANTHROPIC_API_KEY)
-# from your environment, for example a `.env` file. Without GH_TOKEN, the
-# launcher runs `$AGENT_GH_TOKEN_CMD owner/name` and uses the token it prints.
-set -a; . ./.env; set +a
+# from your environment. Without GH_TOKEN, the launcher runs
+# `$AGENT_GH_TOKEN_CMD owner/name` and uses the token it prints.
 AGENT_GH_TOKEN_CMD=./mint-repo-token \
   agent run --host docker-host.example.internal --profile dev \
   --repo dryvist/some-repo "fix the flaky test in ci.yml"
@@ -200,7 +199,7 @@ provides `docker`, `curl` and `setsid`.
   Docker network whose sole route out is a CONNECT proxy allowlisting
   `lib.egressDomains`.
 - **Secrets**: the container receives only the fixed credential list and the
-  variables its `--profile` names, from the caller's environment (for example
-  a `.env` file). `--repo` uses a repo-scoped `GH_TOKEN`, or the token that
+  variables its `--profile` names, from the caller's environment. `--repo`
+  uses a repo-scoped `GH_TOKEN`, or the token that
   `AGENT_GH_TOKEN_CMD owner/name` prints.
 - **Durability**: git. The branch/PR is the only thing that survives the run.

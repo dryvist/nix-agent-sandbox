@@ -51,8 +51,8 @@ attaches the container to its egress-allowlisted network (AGENT_NETWORK,
 default "agents"; proxy AGENT_PROXY_URL, default http://proxy:3128).
 
 --profile selects a task profile (lib.taskProfiles): each environment
-variable it names is forwarded from the caller's environment (for example a
-`.env` file) and must be set.
+variable it names is forwarded from the caller's environment and must be
+set.
 
 --repo uses a repo-scoped GH_TOKEN from the environment. When GH_TOKEN is
 unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
