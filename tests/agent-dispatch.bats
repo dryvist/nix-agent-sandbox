@@ -448,3 +448,41 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ ! -e "$home/.agent-env" ]
   [ ! -e "$home/.agent-prompt" ]
 }
+
+assert_nofile() {
+  local label=$1 n=$2
+  create_args "$n"
+  has_pair --ulimit "nofile=${EXPECTED_NOFILE}:${EXPECTED_NOFILE}"
+  [ "$(grep -c '^--ulimit$' "$STUB_DIR/create.$n")" -eq 1 ]
+  if [ -n "${NOFILE_EVIDENCE_DIR:-}" ]; then
+    cp "$STUB_DIR/create.$n" "$NOFILE_EVIDENCE_DIR/$label.args"
+  fi
+}
+
+@test "CLI nofile limits use the rendered policy despite a caller override" {
+  : "${AGENT_CLI_BIN:?set AGENT_CLI_BIN to the agent-cli bin dir}"
+  : "${EXPECTED_NOFILE:?set EXPECTED_NOFILE to the shared policy}"
+  export AGENT_NOFILE=17 AGENT_TIMEOUT=1 DOCKER_HOST=unix:///test/docker.sock
+  run "$AGENT_CLI_BIN/agent" run --no-oauth "check limits"
+  [ "$status" -eq 0 ]
+  assert_nofile cli 1
+  STUB_START_EXIT=42 run "$AGENT_CLI_BIN/agent" run --no-oauth "check failure"
+  [ "$status" -eq 42 ]
+  assert_nofile cli-failure 2
+}
+
+@test "OpenCode nofile limits cover start, continue and interactive dispatch" {
+  : "${EXPECTED_NOFILE:?set EXPECTED_NOFILE to the shared policy}"
+  local id
+  export AGENT_NOFILE=17
+  run --separate-stderr dispatch start opencode dryvist/nix-ai "check limits"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  assert_nofile dispatch-start 1
+  run --separate-stderr dispatch continue "$id" "check again"
+  [ "$status" -eq 0 ]
+  assert_nofile dispatch-continue 2
+  run --separate-stderr dispatch start --interactive opencode dryvist/nix-ai "check web"
+  [ "$status" -eq 0 ]
+  assert_nofile dispatch-interactive 3
+}

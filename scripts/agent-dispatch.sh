@@ -286,6 +286,7 @@ container_args() {
     --memory "${AGENT_MEMORY:-$AGENT_MEMORY_DEFAULT}"
     --cpus "${AGENT_CPUS:-$AGENT_CPUS_DEFAULT}"
     --pids-limit "${AGENT_PIDS_LIMIT:-$AGENT_PIDS_LIMIT_DEFAULT}"
+    --ulimit "nofile=${AGENT_NOFILE}:${AGENT_NOFILE}"
     --security-opt no-new-privileges
     --cap-drop ALL
   )

@@ -35,6 +35,9 @@ case "$1" in
       exit 1
     fi
     ;;
+  start)
+    exit "${STUB_START_EXIT:-0}"
+    ;;
   wait)
     # The container exits on wait call number STUB_WAIT_CALLS (default 1);
     # earlier calls block until the dispatcher's slice timeout kills them.

@@ -169,6 +169,8 @@ provides `docker`, `curl` and `setsid`.
   `--pids-limit`), hardened (`--security-opt no-new-privileges`,
   `--cap-drop ALL`), and wall-clock-bounded (`AGENT_TIMEOUT`, default 3600s,
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
+  Both Docker dispatch entrypoints set equal soft and hard open-file limits
+  from `nix-ai.lib.agentNofile`; this policy is fixed at build time.
 - **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
   staged diff and aborts the commit/push (redacted output) on a finding.
 - **Transcripts**: a `--host` run bind-mounts a per-run host spool dir onto each

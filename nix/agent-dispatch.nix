@@ -10,7 +10,10 @@
   coreutils,
   gnutar,
   jq,
+  agentNofile,
 }:
+
+assert builtins.isInt agentNofile && agentNofile > 0;
 
 let
   hardeningDefaults = import ./hardening.nix;
@@ -26,6 +29,7 @@ let
     # table the image bakes for the entrypoint's profile check.
     text = ''
       AGENT_TASK_PROFILES=${lib.escapeShellArg (builtins.toJSON (import ./task-profiles.nix))}
+      AGENT_NOFILE=${toString agentNofile}
       AGENT_MEMORY_DEFAULT=${lib.escapeShellArg hardeningDefaults.memory}
       AGENT_CPUS_DEFAULT=${lib.escapeShellArg hardeningDefaults.cpus}
       AGENT_PIDS_LIMIT_DEFAULT=${lib.escapeShellArg hardeningDefaults.pidsLimit}

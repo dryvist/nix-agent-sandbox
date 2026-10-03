@@ -3,7 +3,13 @@
 # Thin wrapper that launches the agent image with Apple `container`
 # (preferred on macOS) or Docker. Replaces the gh-claude-* launcher zoo:
 # autonomy comes from the image, not from how the host shell was blessed.
-{ lib, writeShellApplication }:
+{
+  lib,
+  writeShellApplication,
+  agentNofile,
+}:
+
+assert builtins.isInt agentNofile && agentNofile > 0;
 
 let
   hardeningDefaults = import ./hardening.nix;
@@ -17,6 +23,7 @@ writeShellApplication {
   text = ''
     AGENT_REPO_GROUPS=${lib.escapeShellArg (builtins.toJSON (import ./repo-groups.nix))}
     AGENT_TASK_PROFILES=${lib.escapeShellArg (builtins.toJSON (import ./task-profiles.nix))}
+    AGENT_NOFILE=${toString agentNofile}
     AGENT_MEMORY_DEFAULT=${lib.escapeShellArg hardeningDefaults.memory}
     AGENT_CPUS_DEFAULT=${lib.escapeShellArg hardeningDefaults.cpus}
     AGENT_PIDS_LIMIT_DEFAULT=${lib.escapeShellArg hardeningDefaults.pidsLimit}

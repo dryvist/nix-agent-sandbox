@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-ai.url = "github:dryvist/nix-ai/main";
+    nix-ai.url = "github:dryvist/nix-ai/afbfa0a8c92f5d723d9264af8efb337e4b2186f4";
   };
 
   outputs =
@@ -50,8 +50,12 @@
           pkgs = pkgsFor system;
         in
         {
-          agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
-          agent-dispatch = pkgs.callPackage ./nix/agent-dispatch.nix { };
+          agent-cli = pkgs.callPackage ./nix/agent-cli.nix {
+            agentNofile = nix-ai.lib.agentNofile;
+          };
+          agent-dispatch = pkgs.callPackage ./nix/agent-dispatch.nix {
+            agentNofile = nix-ai.lib.agentNofile;
+          };
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
@@ -83,12 +87,8 @@
         system:
         let
           pkgs = pkgsFor system;
-        in
-        {
-          agent-cli = self.packages.${system}.agent-cli;
-          # Builds (shellchecks) the dispatcher and runs its bats suite
-          # against the built binaries, with docker/curl/setsid stubbed.
-          agent-dispatch =
+          dispatchCheck =
+            agentNofile: filter:
             pkgs.runCommand "agent-dispatch-tests"
               {
                 nativeBuildInputs = with pkgs; [
@@ -102,11 +102,33 @@
                 cp -r ${./tests} tests
                 chmod -R u+w tests
                 patchShebangs tests
-                AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
-                  ENTRYPOINT=${./scripts/entrypoint.sh} \
-                  bats tests
-                touch $out
+                mkdir -p $out
+                export NOFILE_EVIDENCE_DIR=$out
+                export EXPECTED_NOFILE=${toString agentNofile}
+                export AGENT_CLI_BIN=${self.packages.${system}.agent-cli.override { inherit agentNofile; }}/bin
+                export AGENT_DISPATCH_BIN=${
+                  self.packages.${system}.agent-dispatch.override { inherit agentNofile; }
+                }/bin
+                export ENTRYPOINT=${./scripts/entrypoint.sh}
+                set -o pipefail
+                bats ${filter} tests | tee $out/tests.tap
               '';
+        in
+        {
+          agent-cli = self.packages.${system}.agent-cli;
+          # Exercise built binaries against docker/curl/setsid stand-ins.
+          agent-dispatch = dispatchCheck nix-ai.lib.agentNofile "";
+          agent-nofile-override = dispatchCheck (nix-ai.lib.agentNofile + 1) "--filter nofile";
+          agent-nofile-no-literals = pkgs.runCommand "agent-nofile-no-literals" { } ''
+            if grep -nE '(AGENT_NOFILE[[:space:]]*=|agentNofile[[:space:]]*[?=]|nofile=).*[0-9]' \
+              ${./nix/agent-cli.nix} ${./nix/agent-dispatch.nix} \
+              ${./scripts/agent-cli.sh} ${./scripts/agent-dispatch.sh} \
+              <(sed '/^      checks =/,$d' ${./flake.nix}); then
+              echo "consumer defines a numeric nofile policy" >&2
+              exit 1
+            fi
+            echo "No numeric nofile policy in consumers" > $out
+          '';
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           # Building the image derivation also validates the rendered
