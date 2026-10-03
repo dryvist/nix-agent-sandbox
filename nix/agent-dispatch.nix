@@ -10,6 +10,7 @@
   coreutils,
   gnutar,
   jq,
+  python3,
 }:
 
 let
@@ -21,6 +22,7 @@ let
       coreutils
       gnutar
       jq
+      (python3.withPackages (ps: [ ps.opentelemetry-proto ]))
     ];
     # Task profiles name the bucket fields each tool receives; the same
     # table the image bakes for the entrypoint's profile check.

@@ -184,7 +184,7 @@ result_lines() {
 # One event gauge per run, using its immutable completion time on retries.
 # Status is read-only; refresh retries an unsuccessful delivery of this payload.
 emit_metrics() (
-  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" response
+  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2"
   [ ! -f "$rdir/metrics.sent" ] || return 0
   [ -n "${AGENT_DISPATCH_OTLP_METRICS_ENDPOINT:-}" ] || return 0
   mkdir "$rdir/metrics.lock" 2>/dev/null || return 0
@@ -207,13 +207,21 @@ emit_metrics() (
           (if $tokens != null then metric("agent_dispatch_tokens";$tokens;
             [attr("token_type";"total")]) else empty end)]}]}]}' >"$rdir/metrics.json"
   fi
-  response=$(curl -sS --fail-with-body --max-time 30 -X POST \
-    -H @<(printf 'Content-Type: application/json\n';
+  python3 -c 'import json, sys
+from google.protobuf.json_format import ParseDict
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+sys.stdout.buffer.write(ParseDict(json.load(sys.stdin), ExportMetricsServiceRequest()).SerializeToString())
+' <"$rdir/metrics.json" >"$rdir/metrics.pb" || return 1
+  curl -sS --fail-with-body --max-time 30 -X POST \
+    -H @<(printf 'Content-Type: application/x-protobuf\n';
       if [ -n "${AGENT_DISPATCH_OTLP_HEADERS_FILE:-}" ]; then cat "$AGENT_DISPATCH_OTLP_HEADERS_FILE"; fi) \
-    --data-binary @"$rdir/metrics.json" "$AGENT_DISPATCH_OTLP_METRICS_ENDPOINT") || return 1
-  [ -n "$response" ] || response='{}'
-  jq -e '(.partialSuccess.rejectedDataPoints // "0" | tonumber) == 0' \
-    <<<"$response" >/dev/null || return 1
+    --data-binary @"$rdir/metrics.pb" -o "$rdir/metrics.response" \
+    "$AGENT_DISPATCH_OTLP_METRICS_ENDPOINT" || return 1
+  python3 -c 'import sys
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
+response = ExportMetricsServiceResponse.FromString(sys.stdin.buffer.read())
+sys.exit(response.partial_success.rejected_data_points != 0)
+' <"$rdir/metrics.response" || return 1
   touch "$rdir/metrics.sent"
 )
 

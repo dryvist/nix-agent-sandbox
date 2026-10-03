@@ -25,7 +25,13 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --data-binary)
-      if [[ $2 == @* ]]; then body=$(cat "${2#@}"); else body=$2; fi
+      if [[ $2 == @*metrics.pb ]]; then
+        body=$(python3 -c 'import sys
+from google.protobuf.json_format import MessageToJson
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+print(MessageToJson(ExportMetricsServiceRequest.FromString(sys.stdin.buffer.read())))
+' <"${2#@}")
+      elif [[ $2 == @* ]]; then body=$(cat "${2#@}"); else body=$2; fi
       shift 2
       ;;
     --max-time)
@@ -77,12 +83,13 @@ case "$url" in
     resp="{\"total_count\":${STUB_SCOPE_COUNT:-1},\"repositories\":[{\"full_name\":\"${STUB_SCOPE_REPO:-dryvist/nix-ai}\"}]}"
     ;;
   */v1/metrics)
-    if [ -n "${STUB_METRICS_REJECT:-}" ]; then
-      resp='{"partialSuccess":{"rejectedDataPoints":"3"}}'
-    else
-      resp='{}'
-    fi
-    ;;
+    python3 -c 'import os, sys
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
+response = ExportMetricsServiceResponse()
+if os.environ.get("STUB_METRICS_REJECT"): response.partial_success.rejected_data_points = 3
+sys.stdout.buffer.write(response.SerializeToString())
+' >"$out"
+    exit 0 ;;
   *) resp='{}' ;;
 esac
 printf '%s\n' "$resp" >"$out"

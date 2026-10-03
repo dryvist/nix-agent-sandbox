@@ -96,6 +96,7 @@
                   coreutils
                   gnutar
                   jq
+                  (python3.withPackages (ps: [ ps.opentelemetry-proto ]))
                 ];
               }
               ''

@@ -15,7 +15,8 @@ The host configuration `/etc/agent-dispatch/telemetry.json` contains an
 with `AGENT_DISPATCH_TELEMETRY_CONFIG`.
 Optional host settings are `AGENT_DISPATCH_OTLP_METRICS_ENDPOINT` (overrides
 the configured URL) and `AGENT_DISPATCH_OTLP_HEADERS_FILE` (HTTP headers).
-The dispatcher posts OTLP JSON gauges and records successful delivery. A
+The dispatcher encodes OTLP protobuf gauges with the official OpenTelemetry
+protobuf library and records successful delivery. A
 `refresh` retries pending payloads with their original timestamps; pending
 payloads are retained past normal job retention. `status` never sends metrics.
 
