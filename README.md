@@ -124,8 +124,11 @@ Each `start` and `continue`:
 The container receives the GitHub token, the tool's model key and the prompt
 as files copied in with `docker cp` before it starts. It never receives an
 OpenBao address, AppRole material, a host path or the Docker socket. The
-login token owns the lease behind the GitHub token, so the run is capped at
-the login token's lifetime and the token is revoked when the run ends.
+login token owns the lease behind the GitHub token. While the container runs,
+the dispatcher renews the login token every half TTL. A failed renewal stops
+the container and fails the job. The run ends as a timeout at
+`AGENT_TIMEOUT` or at the token's max TTL, whichever comes first. The token
+is revoked when the run ends.
 
 ### Environment
 

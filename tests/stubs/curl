@@ -58,6 +58,13 @@ case "$url" in
       resp="{\"auth\":{\"client_token\":\"s.tok$n\",\"lease_duration\":${STUB_LEASE:-900}}}"
     fi
     ;;
+  */v1/auth/token/renew-self)
+    if [ -n "${STUB_RENEW_FAIL:-}" ]; then
+      resp='{"errors":["permission denied"]}' code=22
+    else
+      resp="{\"auth\":{\"lease_duration\":${STUB_RENEW_LEASE:-${STUB_LEASE:-900}}}}"
+    fi
+    ;;
   */v1/secret/data/apps/open-llm) resp=$(cat "$STUB_DIR/bucket.json") ;;
   */v1/github-agents/token)
     if [ -n "${STUB_MINT_FAIL:-}" ]; then

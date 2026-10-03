@@ -316,25 +316,58 @@ pr: $pr" ]
   [ ! -s "$STUB_DIR/argv.log" ]
 }
 
-@test "a run is capped at the login token's lifetime, then killed as a timeout" {
-  local id
-  export STUB_LEASE=1 STUB_WAIT_SLEEP=30
+# run_state <job-json>: the job's state after the waiter finished.
+run_state() {
+  "$AGENT_DISPATCH_BIN/agent-dispatch" status "$(jq -r .job <<<"$1")" | jq -r "${2:-.state}"
+}
+
+renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok1' "$STUB_DIR/calls.log" || true; }
+
+# Waits are slices of half the login TTL: STUB_LEASE=4 gives 2 s slices, and
+# the container exits on wait call STUB_WAIT_CALLS.
+@test "the login token is renewed every half TTL while the container runs" {
+  export STUB_LEASE=4 STUB_WAIT_CALLS=3
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
-  id=$(jq -r .job <<<"$output")
-  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/budget")" = 1 ]
-  run --separate-stderr dispatch status "$id"
-  [ "$(jq -r .state <<<"$output")" = timeout ]
+  [ "$(run_state "$output")" = succeeded ]
+  [ "$(grep -c '^docker wait' "$STUB_DIR/calls.log")" -eq 3 ]
+  [ "$(renewals)" -eq 2 ]
+  [ "$(line_of 'renew-self token=s.tok1')" -gt "$(line_of 'docker start')" ]
+  [ "$(grep -n 'renew-self token=s.tok1' "$STUB_DIR/calls.log" | tail -n 1 | cut -d: -f1)" -lt \
+    "$(line_of 'revoke-self token=s.tok1')" ]
+  [ "$(grep -c 'revoke-self token=s.tok1' "$STUB_DIR/calls.log")" -eq 1 ]
+  run ! grep -q '^docker kill' "$STUB_DIR/calls.log"
+}
+
+@test "a failed renewal stops the container and fails the job; the token is still revoked" {
+  export STUB_LEASE=4 STUB_WAIT_CALLS=99 STUB_RENEW_FAIL=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$(run_state "$output")" = failed ]
+  [ "$(run_state "$output" .reason)" = "openbao token renewal failed" ]
+  [ "$(renewals)" -eq 1 ]
   grep -qx 'docker kill cid0123' "$STUB_DIR/argv.log"
   [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'docker kill')" ]
 }
 
-@test "AGENT_TIMEOUT caps the run when it is shorter than the token" {
+@test "at the token's max TTL renewal stops and the run ends as a timeout" {
+  # The renewal comes back shorter than the TTL: the token's max TTL is near.
+  export STUB_LEASE=4 STUB_RENEW_LEASE=1 STUB_WAIT_CALLS=99
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$(run_state "$output")" = timeout ]
+  [ "$(renewals)" -eq 1 ]
+  grep -qx 'docker kill cid0123' "$STUB_DIR/argv.log"
+  [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'docker kill')" ]
+}
+
+@test "AGENT_TIMEOUT ends the run as a timeout before the token needs renewal" {
   local id
-  export AGENT_TIMEOUT=5
+  export AGENT_TIMEOUT=1 STUB_WAIT_CALLS=99
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   id=$(jq -r .job <<<"$output")
-  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/budget")" = 5 ]
+  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/budget")" = 1 ]
+  [ "$(run_state "$output")" = timeout ]
+  [ "$(renewals)" -eq 0 ]
+  [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'docker kill')" ]
 }
 
 @test "cancel kills a running job; refresh settles it as cancelled" {

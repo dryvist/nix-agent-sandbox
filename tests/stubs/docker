@@ -36,7 +36,9 @@ case "$1" in
     fi
     ;;
   wait)
-    if [ -n "${STUB_WAIT_SLEEP:-}" ]; then exec sleep "$STUB_WAIT_SLEEP"; fi
+    # The container exits on wait call number STUB_WAIT_CALLS (default 1);
+    # earlier calls block until the dispatcher's slice timeout kills them.
+    if [ "$(next wait)" -lt "${STUB_WAIT_CALLS:-1}" ]; then exec sleep 60; fi
     echo "${STUB_EXIT:-0}"
     ;;
   inspect)
