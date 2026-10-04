@@ -32,6 +32,17 @@ if [ "$(id -u)" -eq 0 ]; then
   exit 64
 fi
 
+AGENT_TOOL="${AGENT_TOOL:-claude}"
+case "${AGENT_TOOL}" in
+  zcode | opencode | cursor-agent)
+    if [ -n "${AGENT_PROFILE:-}" ] && [ "${AGENT_PROFILE}" != "${AGENT_TOOL}" ]; then
+      echo "agent-entrypoint: routed tool '${AGENT_TOOL}' requires its matching task profile." >&2
+      exit 64
+    fi
+    AGENT_PROFILE="${AGENT_TOOL}"
+    ;;
+esac
+
 if [ "${AGENT_SHELL:-}" = "1" ]; then
   exec bash
 fi
@@ -145,6 +156,14 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
       exit 64
     }
   done < <(jq -r '.env[]' <<<"${profile}")
+  if jq -e 'has("routerKeyField")' <<<"${profile}" >/dev/null; then
+    for var in AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY; do
+      [ -n "${!var:-}" ] || {
+        echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
+        exit 64
+      }
+    done
+  fi
 fi
 
 # --- Workspace -------------------------------------------------------------
@@ -178,17 +197,12 @@ case "${AGENT_TOOL}" in
     codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
   zcode)
-    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode-configure-key || exit $?
-    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode --prompt "${AGENT_PROMPT}" || status=$?
+    zcode --prompt "${AGENT_PROMPT}" || status=$?
     ;;
   opencode)
-    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" opencode run "${AGENT_PROMPT}" || status=$?
+    opencode run "${AGENT_PROMPT}" || status=$?
     ;;
   cursor-agent)
-    [ -n "${CURSOR_API_KEY:-}" ] || {
-      echo "agent-entrypoint: AGENT_PROFILE 'cursor-agent' requires CURSOR_API_KEY." >&2
-      exit 64
-    }
     cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
     ;;
   zcode-web)

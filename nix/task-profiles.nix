@@ -1,4 +1,4 @@
-# Task profiles: the pre-defined group of secrets a run is granted, selected
+# Task profiles: the pre-defined environment a run is granted, selected
 # at launch with `agent run --profile <name>`. Baked into the image as
 # /home/agent/.agent-profiles.json and injected into the launcher.
 #
@@ -26,20 +26,20 @@
 
   # agent-dispatch tools: each job uses the profile named after its tool.
   # The dispatcher copies each named field of its secret bucket into the
-  # container under the same name.
+  # container under the same name. Routed CLIs receive only the router URL/key.
   zai = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
   };
   zcode = {
-    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+    env = [ ];
     routerKeyField = "zcode_router_key";
   };
   opencode = {
-    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+    env = [ ];
     routerKeyField = "opencode_router_key";
   };
   cursor-agent = {
-    env = [ "CURSOR_API_KEY" ];
+    env = [ ];
     routerKeyField = "cursor_router_key";
   };
   zcode-web = {

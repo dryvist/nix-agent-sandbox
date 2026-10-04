@@ -183,11 +183,10 @@ the container.
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
-Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, each tool's task-profile
-variables (`ZAI_SUBSCRIPTION_KEY`, `CURSOR_API_KEY`), and the named router key
-field where configured. Result delivery uses `VIKUNJA_URL`,
-`VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and `NTFY_AI_JOBS_TOKEN`. The host
-provides `docker`, `curl` and `setsid`.
+Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, each tool's configured
+task-profile fields, and the named router key field where configured. Result
+delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
+`NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.
 
 ### Container inputs
 

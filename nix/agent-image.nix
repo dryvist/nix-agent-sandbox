@@ -21,7 +21,7 @@
   codex,
   coreutils,
   curl,
-  cursor-cli,
+  cursorAgent,
   gh,
   git,
   gitleaks,
@@ -69,7 +69,7 @@ let
     zcodeWebSupervisor
     zcodeWebTask
     opencode
-    cursor-cli
+    cursorAgent
   ];
 
   basePackages = [
@@ -95,9 +95,13 @@ let
   # Bake every autonomous config from the single nix-ai source. The attrset
   # is path -> contents, so a new tool config added upstream lands here
   # without changes.
+  autonomousFiles = builtins.removeAttrs renderAutonomous.files [
+    ".config/opencode/opencode.json"
+  ];
+
   configFiles = lib.mapAttrsToList (
     path: contents: writeTextDir "${lib.removePrefix "/" homeDir}/${path}" contents
-  ) renderAutonomous.files;
+  ) autonomousFiles;
 
   # Task profiles (the environment variables each profile requires),
   # checked by the entrypoint.

@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-ai.url = "github:dryvist/nix-ai/develop";
+    llm-agents = {
+      url = "github:numtide/llm-agents.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -11,6 +15,7 @@
       self,
       nixpkgs,
       nix-ai,
+      llm-agents,
     }:
     let
       inherit (nixpkgs) lib;
@@ -27,12 +32,11 @@
         system:
         import nixpkgs {
           inherit system;
-          # claude-code and cursor-cli are unfree.
+          # claude-code is unfree.
           config.allowUnfreePredicate =
             pkg:
             lib.elem (lib.getName pkg) [
               "claude-code"
-              "cursor-cli"
             ];
         };
     in
@@ -66,7 +70,8 @@
           agent-image = pkgs.callPackage ./nix/agent-image.nix {
             renderAutonomous = nix-ai.lib.renderAutonomous;
             zcodeWeb = nix-ai.packages.${system}.zcode-web;
-            inherit (pkgs) opencode cursor-cli;
+            inherit (pkgs) opencode;
+            cursorAgent = llm-agents.packages.${system}.cursor-agent;
           };
         }
       );
@@ -152,13 +157,15 @@
                 EOF
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  .zcode.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  .opencode.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  .["cursor-agent"].env == ["CURSOR_API_KEY"] and
+                  .zcode.env == [] and .zcode.routerKeyField == "zcode_router_key" and
+                  .opencode.env == [] and .opencode.routerKeyField == "opencode_router_key" and
+                  .["cursor-agent"].env == [] and
+                  .["cursor-agent"].routerKeyField == "cursor_router_key" and
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '
                   .zai == ["api.z.ai", "chat.z.ai", "zcode.z.ai"] and
+                  .cursorAgent == [".cursor.sh", ".cursorapi.com"] and
                   ([.modelApis[] | select(test("gemini|google"; "i"))] | length) == 0
                 ' egress.json >/dev/null
                 touch $out

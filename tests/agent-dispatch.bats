@@ -9,7 +9,7 @@
 
 bats_require_minimum_version 1.5.0
 
-SECRETS=(role-id-value secret-id-value zai-secret-value cursor-secret-value
+SECRETS=(role-id-value secret-id-value zai-secret-value
   zcode-router-secret-value opencode-router-secret-value cursor-router-secret-value
   vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
 
@@ -42,7 +42,7 @@ make_no_router_dispatcher() {
   mkdir -p "$bin"
   while IFS= read -r line; do
     if [[ $line == AGENT_TASK_PROFILES=* ]]; then
-      printf '%s\n' "AGENT_TASK_PROFILES='{\"zcode\":{\"env\":[\"ZAI_SUBSCRIPTION_KEY\"]}}'"
+      printf '%s\n' "AGENT_TASK_PROFILES='{\"zcode\":{\"env\":[]}}'"
     else
       printf '%s\n' "$line"
     fi
@@ -191,18 +191,13 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   no_secret_on_a_command_line
 }
 
-@test "approved secrets arrive in one docker cp with mode 0600 between create and start" {
+@test "selected profile values and router values arrive in one docker cp" {
   local env_data
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
-  [ "$env_data" = "GH_TOKEN=ghs_minted_secret
-GITHUB_TOKEN=ghs_minted_secret
-ZAI_SUBSCRIPTION_KEY=zai-secret-value
-AGENT_ROUTER_BASE_URL=https://router.test/v1
-AGENT_ROUTER_KEY=zcode-router-secret-value" ]
   [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
-    AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN ZAI_SUBSCRIPTION_KEY | sort)" ]
+    AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN | sort)" ]
   [[ ! $env_data =~ OPENBAO_|role_id|secret_id|secret-id-value|s\.tok ]]
   [ "$(tar -tvf "$STUB_DIR/cp.1.tar" | grep -c -- '^-rw------- 1000/1000 ')" -eq 2 ]
   [ "$(line_of 'docker create')" -lt "$(line_of 'docker cp')" ]
@@ -218,7 +213,7 @@ AGENT_ROUTER_KEY=zcode-router-secret-value" ]
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [[ ! $env_data =~ AGENT_ROUTER_BASE_URL|AGENT_ROUTER_KEY ]]
-  [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' GH_TOKEN GITHUB_TOKEN ZAI_SUBSCRIPTION_KEY | sort)" ]
+  [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' GH_TOKEN GITHUB_TOKEN | sort)" ]
 }
 
 @test "each routed tool receives its named router key field" {
@@ -235,6 +230,9 @@ AGENT_ROUTER_KEY=zcode-router-secret-value" ]
     esac
     grep -qx "AGENT_ROUTER_KEY=$expected" <<<"$env_data"
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
+    [[ ! $env_data =~ ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
+    [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
+      AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN | sort)" ]
   done
 }
 
@@ -307,13 +305,14 @@ scope_refused() {
   unset STUB_LOGIN_FAIL
 }
 
-@test "a missing model key stops before minting or creating a container" {
-  jq 'del(.data.data.CURSOR_API_KEY)' "$BATS_TEST_DIRNAME/fixtures/bucket.json" >"$STUB_DIR/bucket.json"
+@test "Cursor dispatch does not require a Cursor API key" {
   run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
-  [ "$status" -eq 1 ]
-  [ "$(jq -r .reason <<<"$output")" = "bucket has no CURSOR_API_KEY" ]
-  run ! grep -q 'github-agents' "$STUB_DIR/calls.log"
-  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  [ "$status" -eq 0 ]
+  local env_data
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [[ ! $env_data =~ ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
+  grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
+  grep -qx 'AGENT_ROUTER_KEY=cursor-router-secret-value' <<<"$env_data"
 }
 
 @test "the waiter keeps the job token in memory and revokes it when pruned" {
@@ -584,88 +583,99 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/router-home" tools="$BATS_TEST_TMPDIR/router-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
-  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test' \
-    'AGENT_ROUTER_BASE_URL=https://router.test/v1' 'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
+  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
-  bash_stub "$tools/zcode-configure-key" <<'SH'
-:
-SH
   bash_stub "$tools/zcode" <<'SH'
-printf '%s\n' "$AGENT_ROUTER_BASE_URL" "$AGENT_ROUTER_KEY" >"$STUB_DIR/router-env"
+test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
+test "$AGENT_ROUTER_KEY" = router-test-key
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_PROMPT='route this' ZAI_SUBSCRIPTION_KEY=zai-test \
-    bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=zcode AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/router-env")" = $'https://router.test/v1\nrouter-test-key' ]
   [ ! -e "$home/.agent-env" ]
 }
 
-@test "zcode batch configures its subscription key before running the prompt" {
+@test "routed tools require router values and reject another task profile" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/router-required-home" tools="$BATS_TEST_TMPDIR/router-required-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"opencode":{"env":[],"routerKeyField":"opencode_router_key"},"zai":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' \
+    >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
+    AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
+    AGENT_PROFILE=zai AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires its matching task profile"* ]]
+}
+
+@test "ZCode batch runs with router values and no provider key" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/zcode-home" tools="$BATS_TEST_TMPDIR/zcode-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
-  bash_stub "$tools/zcode-configure-key" <<'SH'
-printf '%s\n' "$ZAI_API_KEY" >"$STUB_DIR/configured-key"
-SH
+  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=zcode-router-test-key' >"$home/.agent-env"
   bash_stub "$tools/zcode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/zcode-argv"
+test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
+test "$AGENT_ROUTER_KEY" = zcode-router-test-key
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 SH
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_SUBSCRIPTION_KEY=zai-test-value \
-    bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/configured-key")" = zai-test-value ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test' ]
-}
-
-@test "cursor-agent fails closed when its profile key is absent" {
-  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home="$BATS_TEST_TMPDIR/cursor-home" tools="$BATS_TEST_TMPDIR/cursor-tools"
-  mkdir -p "$home" "$tools"
-  printf '%s\n' '{"cursor-agent":{"env":["CURSOR_API_KEY"]}}' >"$home/.agent-profiles.json"
-  bash_stub "$tools/id" <<'SH'
-echo 1000
-SH
-  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=cursor-agent \
-    AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 64 ]
-  [[ $output == *"requires CURSOR_API_KEY"* ]]
 }
 
 @test "OpenCode and Cursor receive their native batch command forms" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/tools-home" tools="$BATS_TEST_TMPDIR/agent-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode":{"env":["ZAI_SUBSCRIPTION_KEY"]},"cursor-agent":{"env":["CURSOR_API_KEY"]}}' \
+  printf '%s\n' '{"opencode":{"env":[],"routerKeyField":"opencode_router_key"},"cursor-agent":{"env":[],"routerKeyField":"cursor_router_key"}}' \
     >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=opencode-router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
-  bash_stub "$tools/opencode" <<'SH'
+bash_stub "$tools/opencode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
-test "$ZAI_API_KEY" = zai-test-value
+test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
+test "$AGENT_ROUTER_KEY" = opencode-router-test-key
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+test -z "${CURSOR_API_KEY:-}"
 SH
-  bash_stub "$tools/cursor-agent" <<'SH'
+bash_stub "$tools/cursor-agent" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
-test "$CURSOR_API_KEY" = cursor-test-value
+test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
+test "$AGENT_ROUTER_KEY" = cursor-router-test-key
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+test -z "${CURSOR_API_KEY:-}"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' ZAI_SUBSCRIPTION_KEY=zai-test-value \
-    bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\nopencode prompt' ]
 
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' CURSOR_API_KEY=cursor-test-value \
-    bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
 }

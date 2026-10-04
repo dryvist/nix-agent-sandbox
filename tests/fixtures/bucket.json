@@ -5,7 +5,6 @@
       "ZAI_SUBSCRIPTION_KEY": "zai-secret-value",
       "zcode_router_key": "zcode-router-secret-value",
       "opencode_router_key": "opencode-router-secret-value",
-      "CURSOR_API_KEY": "cursor-secret-value",
       "cursor_router_key": "cursor-router-secret-value",
       "VIKUNJA_URL": "https://vikunja.test/api/v1",
       "VIKUNJA_AI_JOBS_TOKEN": "vikunja-secret-value",

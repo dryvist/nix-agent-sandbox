@@ -42,6 +42,12 @@ jobs:
       - name: Build image
         run: nix build -L .#agent-image
 
+      - name: Load image
+        run: ./result | docker load
+
+      - name: Smoke-test image as non-root
+        run: nix develop --command bats tests/agent-image-smoke.bats
+
       - name: Push to GHCR
         if: github.event_name != 'pull_request'
         env:
@@ -49,7 +55,6 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ./result | docker load
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           docker tag ghcr.io/dryvist/nix-agent-sandbox/agent:latest \
             "ghcr.io/dryvist/nix-agent-sandbox/agent:latest-$ARCH"

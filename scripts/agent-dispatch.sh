@@ -423,7 +423,7 @@ run_job() {
     return 1
   }
   mapfile -t names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
-  [ "${#names[@]}" -gt 0 ] || {
+  jq -e --arg t "$tool" 'has($t)' <<<"$AGENT_TASK_PROFILES" >/dev/null || {
     abort "$id" "$run" "no task profile for $tool" "$tok"
     return 1
   }
