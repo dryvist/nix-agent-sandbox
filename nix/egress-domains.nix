@@ -12,8 +12,12 @@
     "api.anthropic.com"
     "api.openai.com"
     "chatgpt.com" # Codex subscription auth backend
-    "generativelanguage.googleapis.com"
-    "cloudcode-pa.googleapis.com" # Gemini CLI OAuth path
+  ];
+
+  zai = [
+    "api.z.ai"
+    "chat.z.ai"
+    "zcode.z.ai"
   ];
 
   # Source control + artifacts

@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-ai.url = "github:dryvist/nix-ai/main";
+    nix-ai.url = "github:dryvist/nix-ai/develop";
   };
 
   outputs =
@@ -27,8 +27,13 @@
         system:
         import nixpkgs {
           inherit system;
-          # claude-code is unfree; codex and gemini-cli are Apache-2.0.
-          config.allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
+          # claude-code and cursor-cli are unfree.
+          config.allowUnfreePredicate =
+            pkg:
+            lib.elem (lib.getName pkg) [
+              "claude-code"
+              "cursor-cli"
+            ];
         };
     in
     {
@@ -60,6 +65,8 @@
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           agent-image = pkgs.callPackage ./nix/agent-image.nix {
             renderAutonomous = nix-ai.lib.renderAutonomous;
+            zcodeWeb = nix-ai.packages.${system}.zcode-web;
+            inherit (pkgs) opencode cursor-cli;
           };
         }
       );
@@ -129,6 +136,31 @@
               }
               ''
                 ZCODE_JOB_BIN=${client}/bin bats ${./tests/zcode-job.bats}
+                touch $out
+              '';
+          sandbox-contract =
+            pkgs.runCommand "sandbox-contract-tests"
+              {
+                nativeBuildInputs = [ pkgs.jq ];
+              }
+              ''
+                cat > profiles.json <<'EOF'
+                ${builtins.toJSON (import ./nix/task-profiles.nix)}
+                EOF
+                cat > egress.json <<'EOF'
+                ${builtins.toJSON (import ./nix/egress-domains.nix)}
+                EOF
+                jq -e '
+                  .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  .zcode.env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  .opencode.env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  .["cursor-agent"].env == ["CURSOR_API_KEY"] and
+                  .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
+                ' profiles.json >/dev/null
+                jq -e '
+                  .zai == ["api.z.ai", "chat.z.ai", "zcode.z.ai"] and
+                  ([.modelApis[] | select(test("gemini|google"; "i"))] | length) == 0
+                ' egress.json >/dev/null
                 touch $out
               '';
         }

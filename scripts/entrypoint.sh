@@ -3,7 +3,8 @@
 # Contract (all via environment):
 #   AGENT_SANDBOX=1   set by the image itself; refusal guard below
 #   AGENT_PROMPT      required (unless AGENT_SHELL=1): the task
-#   AGENT_TOOL        claude | codex | gemini   (default: claude)
+#   AGENT_TOOL        claude | codex | zcode | opencode | cursor-agent |
+#                     zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
 #   AGENT_RUN_ID      optional stable run id (default: timestamp)
 #   AGENT_SHELL=1     drop into bash instead of running an agent (debugging)
@@ -14,6 +15,7 @@
 #   AGENT_PR_DRAFT=1  open the PR as a draft
 #   ~/.agent-env      optional NAME=value lines, exported (agent-dispatch)
 #   ~/.agent-prompt   optional file that sets AGENT_PROMPT (agent-dispatch)
+#   AGENT_SERVICE_ENV_FILE read-only ZCode service credentials file
 #
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
@@ -37,9 +39,7 @@ fi
 # Subscription-OAuth creds (agent-cli.sh inject_oauth_creds) land via
 # `docker cp` before this entrypoint runs; tighten perms in case the copy
 # didn't already chmod 600 (e.g. re-homed under a different tar impl).
-for f in "${HOME}/.claude/.credentials.json" "${HOME}/.codex/auth.json" \
-  "${HOME}/.gemini/oauth_creds.json" "${HOME}/.gemini/installation_id" \
-  "${HOME}/.gemini/google_accounts.json"; do
+for f in "${HOME}/.claude/.credentials.json" "${HOME}/.codex/auth.json"; do
   [ -e "$f" ] || continue
   chmod 600 "$f"
 done
@@ -66,14 +66,50 @@ fi
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 AGENT_RUN_ID="${AGENT_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 
-if [ -z "${AGENT_PROMPT:-}" ]; then
+case "${AGENT_TOOL}" in
+  zcode) AGENT_PROFILE="${AGENT_PROFILE:-zcode}" ;;
+  opencode) AGENT_PROFILE="${AGENT_PROFILE:-opencode}" ;;
+  cursor-agent) AGENT_PROFILE="${AGENT_PROFILE:-cursor-agent}" ;;
+  zcode-web)
+    AGENT_PROFILE="${AGENT_PROFILE:-zcode-web}"
+    service_env="${AGENT_SERVICE_ENV_FILE:-/run/agent-service.env}"
+    [ -r "${service_env}" ] || {
+      echo "agent-entrypoint: ZCode service credential file is not readable." >&2
+      exit 64
+    }
+    seen_key=0
+    seen_token=0
+    while IFS= read -r line || [ -n "${line}" ]; do
+      [ -n "${line}" ] || continue
+      case "${line}" in *=*) ;; *) echo "agent-entrypoint: invalid ZCode service environment file." >&2; exit 64 ;; esac
+      name="${line%%=*}"
+      value="${line#*=}"
+      case "${name}" in
+        ZAI_SUBSCRIPTION_KEY)
+          [ "${seen_key}" -eq 0 ] || { echo "agent-entrypoint: duplicate ZAI_SUBSCRIPTION_KEY." >&2; exit 64; }
+          seen_key=1
+          ZAI_SUBSCRIPTION_KEY="${value}"
+          ;;
+        AGENT_WEB_TOKEN)
+          [ "${seen_token}" -eq 0 ] || { echo "agent-entrypoint: duplicate AGENT_WEB_TOKEN." >&2; exit 64; }
+          seen_token=1
+          AGENT_WEB_TOKEN="${value}"
+          ;;
+        *) echo "agent-entrypoint: unsupported name in ZCode service environment file." >&2; exit 64 ;;
+      esac
+    done <"${service_env}"
+    export ZAI_SUBSCRIPTION_KEY AGENT_WEB_TOKEN
+    ;;
+esac
+
+if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ]; then
   echo "agent-entrypoint: AGENT_PROMPT is required (or AGENT_SHELL=1)." >&2
   exit 64
 fi
 
 workdir="${HOME}/work"
 mkdir -p "${workdir}"
-cd "${workdir}"
+cd "${workdir}" || exit
 
 # --- Task profile: required environment ------------------------------------
 # The profile names the variables this run needs; the launcher forwards them
@@ -97,11 +133,11 @@ if [ -n "${AGENT_REPO:-}" ]; then
   branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
   if [ -d repo/.git ]; then
     # A continued run (agent-dispatch `continue`) reuses its workspace clone.
-    cd repo
+    cd repo || exit
     git checkout "${branch}"
   else
     gh repo clone "${AGENT_REPO}" repo -- --depth 50
-    cd repo
+    cd repo || exit
     git checkout -b "${branch}"
     git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
     git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
@@ -121,11 +157,36 @@ case "${AGENT_TOOL}" in
     # harmless with AGENT_REPO set too, since that cwd is a real clone.
     codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
-  gemini)
-    gemini --approval-mode yolo -p "${AGENT_PROMPT}" || status=$?
+  zcode)
+    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode-configure-key || exit $?
+    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode --prompt "${AGENT_PROMPT}" || status=$?
+    ;;
+  opencode)
+    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" opencode run "${AGENT_PROMPT}" || status=$?
+    ;;
+  cursor-agent)
+    [ -n "${CURSOR_API_KEY:-}" ] || {
+      echo "agent-entrypoint: AGENT_PROFILE 'cursor-agent' requires CURSOR_API_KEY." >&2
+      exit 64
+    }
+    cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
+    ;;
+  zcode-web)
+    [ "${seen_key}" -eq 1 ] && [ "${seen_token}" -eq 1 ] &&
+      [ -n "${ZAI_SUBSCRIPTION_KEY}" ] && [ -n "${AGENT_WEB_TOKEN}" ] || {
+      echo "agent-entrypoint: ZCode service credentials must contain nonempty ZAI_SUBSCRIPTION_KEY and AGENT_WEB_TOKEN." >&2
+      exit 64
+    }
+    export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
+    mkdir -p "${ZCODE_DATA_BASE_DIR}"
+    ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode-configure-key || exit $?
+    export ZCODE_SERVER_AUTH_TOKEN="${AGENT_WEB_TOKEN}"
+    export ZCODE_SERVER_HOST="${AGENT_SERVER_HOST:-0.0.0.0}"
+    export PORT="${AGENT_PORT:-8080}"
+    exec zcode-web-supervisor
     ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|gemini)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|zcode|opencode|cursor-agent|zcode-web)" >&2
     exit 64
     ;;
 esac

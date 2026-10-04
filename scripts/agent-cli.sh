@@ -15,9 +15,9 @@ SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  agent run [--tool claude|codex|gemini] [--repo owner/name]
+  agent run [--tool claude|codex|zcode|opencode|cursor-agent] [--repo owner/name]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
-  agent sweep --group name [--concurrency N] [--tool claude|codex|gemini]
+  agent sweep --group name [--concurrency N] [--tool claude|codex|zcode|opencode|cursor-agent]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
@@ -38,13 +38,11 @@ are injected into the container per run (never baked into the image, never
 passed via -e): claude prefers an exported CLAUDE_CODE_OAUTH_TOKEN (from
 `claude setup-token`; a long-lived token, so no per-run file copy needed),
 else ~/.claude/.credentials.json, else the macOS Keychain "Claude
-Code-credentials" item; codex reads ${CODEX_HOME:-~/.codex}/auth.json;
-gemini reads ~/.gemini/oauth_creds.json (+ installation_id,
-google_accounts.json if present). This needs the docker runtime — Apple
-`container` has no stdin-tar `cp`, so injection is refused there. Missing
-or (for claude/gemini) expired source credentials are a hard failure
-naming what to refresh, not a silent skip. --no-oauth opts out entirely,
-for API-key auth instead.
+Code-credentials" item; codex reads ${CODEX_HOME:-~/.codex}/auth.json.
+This needs the docker runtime — Apple `container` has no stdin-tar `cp`, so
+injection is refused there. Missing or expired Claude credentials are a hard
+failure naming what to refresh, not a silent skip. API-key tools use their
+task profile and do not take the OAuth path.
 
 --host runs on that Docker host over SSH (DOCKER_HOST=ssh://fqdn) and
 attaches the container to its egress-allowlisted network (AGENT_NETWORK,
@@ -59,10 +57,9 @@ unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
 `$AGENT_GH_TOKEN_CMD owner/name` once per run and uses the token it prints
 on stdout.
 
-With --no-oauth (or for --tool values with no OAuth path), pass credentials
-via environment instead: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
-for the model, GH_TOKEN (repo-scoped) for --repo. Override the image with
-AGENT_IMAGE.
+For API-key tools, pass credentials via their task profile: ZAI_SUBSCRIPTION_KEY
+for ZCode and OpenCode, CURSOR_API_KEY for Cursor, and GH_TOKEN (repo-scoped)
+for --repo. Override the image with AGENT_IMAGE.
 
 On the docker runtime, autonomous runs are capped and hardened (defaults
 baked in nix/agent-cli.nix, overridable per run): AGENT_MEMORY (8g),
@@ -93,8 +90,8 @@ runtime() {
 # explicitly (KEY=VALUE) because Apple `container` does not support
 # bare-name env passthrough the way docker does.
 env_flags() {
-  for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY \
-    CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN "$@"; do
+  for var in ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+    ZAI_SUBSCRIPTION_KEY CURSOR_API_KEY GH_TOKEN GITHUB_TOKEN "$@"; do
     if [ -n "${!var:-}" ]; then
       printf -- '-e\n%s=%s\n' "$var" "${!var}"
     fi
@@ -145,12 +142,11 @@ oauth_paths() { # tool -> "src\tdest" lines; dest is relative to /home/agent
     codex)
       printf '%s\t%s\n' "${CODEX_HOME:-${HOME}/.codex}/auth.json" .codex/auth.json
       ;;
-    gemini)
-      printf '%s\t%s\n' "${HOME}/.gemini/oauth_creds.json" .gemini/oauth_creds.json
-      printf '%s\t%s\n' "${HOME}/.gemini/installation_id" .gemini/installation_id
-      printf '%s\t%s\n' "${HOME}/.gemini/google_accounts.json" .gemini/google_accounts.json
-      ;;
   esac
+}
+
+uses_oauth() {
+  case "$1" in claude | codex) return 0 ;; *) return 1 ;; esac
 }
 
 inject_oauth_creds() {
@@ -166,7 +162,7 @@ inject_oauth_creds() {
   fi
 
   # +%3N is GNU-only; BSD/macOS date lacks it. Whole-seconds*1000 keeps the
-  # claude/gemini ms-epoch comparisons correct to within 1s.
+  # Claude ms-epoch comparison correct to within 1s.
   now_ms="$(( $(date +%s) * 1000 ))"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
@@ -196,7 +192,6 @@ inject_oauth_creds() {
     case "$tool" in
       claude) echo "agent: run 'claude setup-token' and export CLAUDE_CODE_OAUTH_TOKEN, or log into Claude Code interactively." >&2 ;;
       codex) echo "agent: run 'codex login' to populate ${CODEX_HOME:-${HOME}/.codex}/auth.json." >&2 ;;
-      gemini) echo "agent: log into the gemini CLI to populate ~/.gemini/oauth_creds.json." >&2 ;;
     esac
     echo "agent: or pass --no-oauth to run with API-key auth instead." >&2
     exit 64
@@ -204,20 +199,13 @@ inject_oauth_creds() {
 
   # Reject a known-dead refresh token here rather than shipping it into
   # the container to fail loudly there after burning a whole run. Only
-  # claude/gemini expose a checkable expiry on disk; codex's auth.json has
+  # Claude exposes a checkable expiry on disk; codex's auth.json has
   # none (nothing to compare against), and is refreshed by the CLI itself.
   case "$tool" in
     claude)
       exp="$(jq -re '.claudeAiOauth.refreshTokenExpiresAt // empty' "${tmp}/.claude/.credentials.json" 2>/dev/null)" || exp=""
       if [ -n "$exp" ] && [ "$exp" -lt "$now_ms" ]; then
         echo "agent: claude's stored refresh token expired; run 'claude setup-token' and export CLAUDE_CODE_OAUTH_TOKEN, or log in interactively." >&2
-        exit 64
-      fi
-      ;;
-    gemini)
-      exp="$(jq -re '.expiry_date // empty' "${tmp}/.gemini/oauth_creds.json" 2>/dev/null)" || exp=""
-      if [ -n "$exp" ] && [ "$exp" -lt "$now_ms" ]; then
-        echo "agent: gemini's stored OAuth token expired; log into the gemini CLI to refresh ~/.gemini/oauth_creds.json." >&2
         exit 64
       fi
       ;;
@@ -250,7 +238,7 @@ apply_host() {
 # root. The roots hold the baked autonomous configs (~/.codex/config.toml etc.)
 # and the OAuth creds injected by inject_oauth_creds; mounting a root would
 # shadow the configs and spill the creds onto the host disk. The subdirs
-# (~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp) hold only session
+# (~/.claude/projects, ~/.codex/sessions) hold only session
 # records, which a host-side log shipper can tail before --rm teardown.
 #
 # docker auto-creates a missing bind source as root, but the agent runs as uid
@@ -265,13 +253,12 @@ spool_mount_flags() {
   local run_id="$1"
   local rd="${SPOOL_DIR}/${run_id}"
   if ! docker run --rm -v "${SPOOL_DIR}:/spool" --entrypoint mkdir "$IMAGE" \
-    -p "/spool/${run_id}/claude" "/spool/${run_id}/codex" "/spool/${run_id}/gemini" >&2; then
+    -p "/spool/${run_id}/claude" "/spool/${run_id}/codex" >&2; then
     echo "agent: could not prepare the transcript spool at ${rd} (is /var/lib/agent-sandbox/spool present on the host?); this run's transcripts will not be captured." >&2
     return 0
   fi
   printf -- '-v\n%s\n' "${rd}/claude:/home/agent/.claude/projects"
   printf -- '-v\n%s\n' "${rd}/codex:/home/agent/.codex/sessions"
-  printf -- '-v\n%s\n' "${rd}/gemini:/home/agent/.gemini/tmp"
 }
 
 cmd="${1:-}"
@@ -319,6 +306,12 @@ case "$cmd" in
     done
     [ $# -gt 0 ] || usage
     prompt="$*"
+
+    if [ -z "${profile}" ]; then
+      case "${tool}" in
+        zcode | opencode | cursor-agent) profile="${tool}" ;;
+      esac
+    fi
 
     pvars_list="$(profile_vars "${profile}")" || exit 64
     pvars=()
@@ -370,7 +363,10 @@ case "$cmd" in
     # ponytail: Apple `container` local runs stay simple (no hardening, no
     # timeout) — its VM boundary covers isolation and the wall-clock kill
     # below is docker-specific. Autonomous/remote runs are always docker.
-    if [ "${no_oauth}" -eq 1 ] && [ "$rt" != docker ]; then
+    oauth=0
+    if [ "${no_oauth}" -ne 1 ] && uses_oauth "$tool"; then oauth=1; fi
+
+    if [ "${oauth}" -eq 0 ] && [ "$rt" != docker ]; then
       exec "$rt" run --rm "${run_flags[@]}" "$IMAGE"
     fi
     [ "$rt" = docker ] || {
@@ -386,7 +382,7 @@ case "$cmd" in
     # is a harmless no-op on the already-reaped container.
     trap '[ -n "${watchdog:-}" ] && { kill "${watchdog}" 2>/dev/null; wait "${watchdog}" 2>/dev/null; }; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
-    if [ "${no_oauth}" -ne 1 ]; then
+    if [ "${oauth}" -eq 1 ]; then
       inject_oauth_creds "$cid" "$tool"
     fi
 
@@ -472,6 +468,11 @@ case "$cmd" in
     fi
     # Group profile is the default; an explicit --profile wins.
     [ -n "${profile}" ] || profile="$(jq -re '.profile // ""' <<<"${group_json}")"
+    if [ -z "${profile}" ]; then
+      case "${tool}" in
+        zcode | opencode | cursor-agent) profile="${tool}" ;;
+      esac
+    fi
 
     repos=()
     while IFS= read -r entry; do repos+=("${entry}"); done \

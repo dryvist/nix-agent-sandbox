@@ -21,24 +21,55 @@
   codex,
   coreutils,
   curl,
-  gemini-cli,
+  cursor-cli,
   gh,
   git,
   gitleaks,
   gnugrep,
   jq,
   nix,
+  nodejs_24,
+  opencode,
   ripgrep,
   renderAutonomous,
+  zcodeWeb,
 }:
 
 let
   homeDir = "/home/agent";
 
+  zcodeWebSupervisor = writeShellApplication {
+    name = "zcode-web-supervisor";
+    runtimeInputs = [
+      nodejs_24
+      zcodeWeb
+    ];
+    text = ''
+      export ZCODE_WEB_CLIENT=${lib.escapeShellArg "${zcodeWeb}/share/zcode-web/client.mjs"}
+      exec node ${../scripts/zcode-web-supervisor.mjs}
+    '';
+  };
+
+  zcodeWebTask = writeShellApplication {
+    name = "zcode-web-task";
+    runtimeInputs = [
+      nodejs_24
+      zcodeWeb
+    ];
+    text = ''
+      export ZCODE_WEB_CLIENT=${lib.escapeShellArg "${zcodeWeb}/share/zcode-web/client.mjs"}
+      exec node ${../scripts/zcode-web-task.mjs} "$@"
+    '';
+  };
+
   toolPackages = [
     claude-code
     codex
-    gemini-cli
+    zcodeWeb
+    zcodeWebSupervisor
+    zcodeWebTask
+    opencode
+    cursor-cli
   ];
 
   basePackages = [

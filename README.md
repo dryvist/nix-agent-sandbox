@@ -1,7 +1,7 @@
 # nix-agent-sandbox
 
 Nix-built OCI runtime for fully autonomous AI coding agents (Claude Code,
-Codex CLI, Gemini CLI). The container is the permission boundary: inside it,
+Codex CLI, ZCode, OpenCode, and Cursor Agent). The container is the permission boundary: inside it,
 every tool runs with all approvals bypassed; outside it, nothing changes
 except a pushed branch/PR.
 
@@ -11,7 +11,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 | Output | What it is |
 | --- | --- |
-| `packages.<linux>.agent-image` | OCI image: the three CLIs, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
+| `packages.<linux>.agent-image` | OCI image: coding CLIs and ZCode Web/Server, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `packages.*.zcode-job` | ZCode-only SSH client with JSON output and an approved repository subset. |
@@ -137,6 +137,14 @@ agent-dispatch refresh
   repo, state, PR URL, duration) to a Vikunja project and an ntfy topic. No
   model output goes into it.
 
+The image also runs the upstream ZCode Web/Server and includes
+`zcode-web-task`. The task client reads a prompt from stdin and writes a JSON
+`created` event with the native task id before sending it, followed by a
+terminal event. Its `start <workspace-name>` and `resume <task-id>
+<workspace-name>` commands use the same persistent workspace and task store as
+the Web UI. A controller's own cancellation or timeout state takes precedence
+over a native task's terminal outcome.
+
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
 reads `SSH_ORIGINAL_COMMAND` and accepts only the five verbs. It passes each
 word to `agent-dispatch` as its own argument, and the prompt is the rest of
@@ -206,27 +214,15 @@ provides `docker`, `curl` and `setsid`.
 - **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
   staged diff and aborts the commit/push (redacted output) on a finding.
 - **Transcripts**: a `--host` run bind-mounts a per-run host spool dir onto each
-  CLI's transcript subdir (`~/.claude/projects`, `~/.codex/sessions`,
-  `~/.gemini/tmp`) under `/var/lib/agent-sandbox/spool/<run-id>/`, so the session
+  CLI's transcript subdir (`~/.claude/projects`, `~/.codex/sessions`)
+  under `/var/lib/agent-sandbox/spool/<run-id>/`, so the session
   records outlive `--rm`. A host-side log shipper can tail them; the host
   provisioning creates the spool root and prunes old runs. Only the transcript
   subdirs are mounted — never the state-home roots,
   which hold the baked autonomous configs and the injected OAuth creds.
-- **Credentials**: subscription-OAuth creds for the selected `--tool` are read
-  from the workstation (claude: an exported `CLAUDE_CODE_OAUTH_TOKEN` from
-  `claude setup-token` if present, else `~/.claude/.credentials.json`, else
-  the macOS Keychain; codex: `~/.codex/auth.json`; gemini:
-  `~/.gemini/oauth_creds.json` and its companion files) and streamed into the
-  container via `docker cp` between create and start — never baked into the
-  image, never passed via `-e`/`docker run -e` (which would leak into
-  `docker inspect` and remote shell history). A missing source credential, or
-  (for claude/gemini, which expose a checkable expiry) one already expired,
-  is a hard failure naming what to refresh — not a silent no-op that burns a
-  whole run before failing inside the container.
-  `--no-oauth` skips this for API-key auth instead. The residual deny list
-  (one shared list in `dryvist/nix-ai`, rendered into all three tools'
-  native formats) blocks credential-borne damage like `gh repo delete` and
-  force-pushes regardless of which auth path is used.
+- **Credentials**: the selected task profile determines the variables a run
+  may receive. The residual deny list is shared with `dryvist/nix-ai` and
+  rendered into each supported tool's native format.
   Risk: an OAuth refresh occurring inside the container could rotate the
   token and leave the workstation's copy stale, since both would then be
   racing to hold the current refresh token. Not yet observed in canary use;
