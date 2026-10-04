@@ -69,7 +69,7 @@ if [ -f "${HOME}/.agent-env" ]; then
       env_file_error=1
       continue
     fi
-    export "${line}"
+    declare -x -- "${name}=${line#*=}"
   done <"${HOME}/.agent-env"
   rm -f "${HOME}/.agent-env"
   if [ "${env_file_error}" -ne 0 ]; then
