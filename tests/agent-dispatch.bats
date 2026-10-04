@@ -30,6 +30,10 @@ setup() {
 
 dispatch() { "$AGENT_DISPATCH_BIN/agent-dispatch" "$@"; }
 ssh_cmd() { SSH_ORIGINAL_COMMAND="$1" "$AGENT_DISPATCH_BIN/dispatch-ssh"; }
+bash_stub() {
+  { printf '#!%s\n' "$BASH"; cat; } >"$1"
+  chmod +x "$1"
+}
 
 # create_args <n>: the n-th `docker create` argument list, into $a.
 create_args() { mapfile -t a <"$STUB_DIR/create.$1"; }
@@ -447,4 +451,103 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ ! -e "$home/pwned" ]
   [ ! -e "$home/.agent-env" ]
   [ ! -e "$home/.agent-prompt" ]
+}
+
+@test "zcode batch configures its subscription key before running the prompt" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/zcode-home" tools="$BATS_TEST_TMPDIR/zcode-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+printf '%s\n' "$ZAI_API_KEY" >"$STUB_DIR/configured-key"
+SH
+  bash_stub "$tools/zcode" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/zcode-argv"
+SH
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_SUBSCRIPTION_KEY=zai-test-value \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/configured-key")" = zai-test-value ]
+  [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test' ]
+}
+
+@test "cursor-agent fails closed when its profile key is absent" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/cursor-home" tools="$BATS_TEST_TMPDIR/cursor-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"cursor-agent":{"env":["CURSOR_API_KEY"]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=cursor-agent \
+    AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires CURSOR_API_KEY"* ]]
+}
+
+@test "OpenCode and Cursor receive their native batch command forms" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/tools-home" tools="$BATS_TEST_TMPDIR/agent-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"opencode":{"env":["ZAI_SUBSCRIPTION_KEY"]},"cursor-agent":{"env":["CURSOR_API_KEY"]}}' \
+    >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/opencode" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
+test "$ZAI_API_KEY" = zai-test-value
+SH
+  bash_stub "$tools/cursor-agent" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
+test "$CURSOR_API_KEY" = cursor-test-value
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' ZAI_SUBSCRIPTION_KEY=zai-test-value \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\nopencode prompt' ]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' CURSOR_API_KEY=cursor-test-value \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
+}
+
+@test "zcode-web loads only the mounted service credentials and runs without a prompt" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/service-home" tools="$BATS_TEST_TMPDIR/service-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode-web":{"env":["ZAI_SUBSCRIPTION_KEY","AGENT_WEB_TOKEN"]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'AGENT_WEB_TOKEN=token-test-value' >"$home/service.env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+printf '%s\n' "$ZAI_API_KEY" >"$STUB_DIR/configured-key"
+SH
+  bash_stub "$tools/zcode-web-supervisor" <<'SH'
+printf '%s\n' "$ZCODE_SERVER_AUTH_TOKEN" "$ZCODE_SERVER_HOST" "$PORT" "$ZCODE_DATA_BASE_DIR" >"$STUB_DIR/server-env"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode-web AGENT_SERVICE_ENV_FILE="$home/service.env" AGENT_PORT=8080 \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/configured-key")" = zai-test-value ]
+  local expected
+  expected=$(printf 'token-test-value\n0.0.0.0\n8080\n%s\n' "$home/.zcode")
+  [ "$(cat "$STUB_DIR/server-env")" = "${expected%$'\n'}" ]
+
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'AGENT_WEB_TOKEN=token-test-value' 'GH_TOKEN=unexpected' \
+    >"$home/service.env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode-web AGENT_SERVICE_ENV_FILE="$home/service.env" \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"unsupported name in ZCode service environment file"* ]]
 }
