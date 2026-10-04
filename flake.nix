@@ -122,6 +122,20 @@
                   bats tests/agent-dispatch.bats
                 touch $out
               '';
+          agent-cli-spool =
+            pkgs.runCommand "agent-cli-spool-tests"
+              {
+                nativeBuildInputs = with pkgs; [
+                  bats
+                  coreutils
+                  gnused
+                ];
+              }
+              ''
+                AGENT_CLI_SOURCE=${./scripts/agent-cli.sh} \
+                  bats ${./tests/agent-cli-spool.bats}
+                touch $out
+              '';
           zcode-job =
             let
               sshStub = pkgs.writeShellApplication {

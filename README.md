@@ -209,11 +209,12 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
 - **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
   staged diff and aborts the commit/push (redacted output) on a finding.
-- **Transcripts**: a `--host` run bind-mounts a per-run host spool dir onto each
-  CLI's transcript subdir (`~/.claude/projects`, `~/.codex/sessions`)
-  under `/var/lib/agent-sandbox/spool/<run-id>/`, so the session
-  records outlive `--rm`. A host-side log shipper can tail them; the host
-  provisioning creates the spool root and prunes old runs. Only the transcript
+- **Session and event records**: a `--host` run bind-mounts a per-run host
+  spool dir onto the Claude and Codex session subdirs (`~/.claude/projects`,
+  `~/.codex/sessions`) and the ZCode CLI event log dir (`~/.zcode/cli/log`)
+  under `/var/lib/agent-sandbox/spool/<run-id>/`, so their
+  records outlive `--rm`. A host-side Cribl Edge shipper can tail them; the host
+  provisioning creates the spool root and prunes old runs. Only the record
   subdirs are mounted — never the state-home roots,
   which hold the baked autonomous configs and the injected OAuth creds.
 - **Credentials**: the selected task profile determines the variables a run
