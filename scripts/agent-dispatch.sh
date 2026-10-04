@@ -10,29 +10,27 @@
 #   cancel <job-id>
 #   refresh
 #
-# Each start/continue logs in to OpenBao at BAO_ADDR with the AppRole in
-# OPENBAO_APPROLE_OPEN_LLM_ROLE_ID / OPENBAO_APPROLE_OPEN_LLM_SECRET_ID, reads
-# secret/apps/open-llm, and mints a GitHub token for the job's repo from
-# github-agents/token. The token must cover exactly that one repo, or the job
-# fails closed. The login token owns the lease behind the GitHub token, so a
-# waiter renews it every half TTL while the container runs and revokes it
-# when the run ends, which also ends the GitHub token. The run ends by the
-# token's max TTL, and a failed renewal fails the run.
+# Each job uses one service token to read its profile and mint a GitHub token
+# for the job's repo. A host-side waiter holds it on stdin for notifications
+# and continuations; the token is never written to disk or sent to a container.
 #
-# The container receives the GitHub token, the tool's model key and the
-# prompt as files copied in with `docker cp` between create and start. It
-# never receives an OpenBao address, AppRole material, a host path or the
-# Docker socket.
+# The container receives the GitHub token, the selected profile values and
+# the prompt as files copied in with `docker cp` between create and start. It
+# never receives service credentials, a host path or the Docker socket.
 
 export LC_ALL=C
 umask 077
 
 IMAGE="${AGENT_IMAGE:-ghcr.io/dryvist/nix-agent-sandbox/agent:latest}"
 STATE_DIR="${AGENT_DISPATCH_STATE_DIR:-/var/lib/agent-dispatch}"
+APPROLE_DIR="${AGENT_DISPATCH_APPROLE_DIR:-/etc/agent-dispatch/approle}"
 BUCKET=secret/data/apps/open-llm
 GITHUB_API=https://api.github.com
 WEB_PORT=8080 # in-container port of an interactive web session
 MAX_TEXT=16384
+JOB_MANAGER=0
+JOB_TOKEN_TTL=0
+JOB_ENDED=0
 
 usage() {
   cat >&2 <<'EOF'
@@ -90,12 +88,25 @@ rand_hex() {
   od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'
 }
 
-# --- OpenBao and HTTP. Tokens travel in header files and bodies on file
+# --- Service requests. Tokens travel in header files and bodies on file
 # descriptors, never on a command line. ---
 bao_login() {
+  local role_file="$APPROLE_DIR/role_id" secret_file="$APPROLE_DIR/secret_id" role_id secret_id file
+  for file in "$role_file" "$secret_file"; do
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+      echo "agent-dispatch: required credential file is missing or unreadable: $file" >&2
+      return 64
+    fi
+  done
+  role_id=$(<"$role_file")
+  secret_id=$(<"$secret_file")
+  if [ -z "$role_id" ] || [ -z "$secret_id" ]; then
+    echo "agent-dispatch: required credential file is empty under $APPROLE_DIR" >&2
+    return 64
+  fi
   curl -sS --fail-with-body --max-time 60 -X POST \
-    --data-binary @<(jq -n '{role_id: env.OPENBAO_APPROLE_OPEN_LLM_ROLE_ID,
-      secret_id: env.OPENBAO_APPROLE_OPEN_LLM_SECRET_ID}') \
+    --data-binary @<(ROLE_ID="$role_id" SECRET_ID="$secret_id" \
+      jq -n '{role_id: env.ROLE_ID, secret_id: env.SECRET_ID}') \
     "${BAO_ADDR:?}/v1/auth/approle/login"
 }
 
@@ -171,21 +182,35 @@ result_lines() {
     "$(cat "$dir/pr_url" 2>/dev/null || echo none)" "$((ended - started))"
 }
 
+post_ntfy() {
+  local url=$1 topic=$2 token=$3 title=$4 body=$5 pr=${6:-}
+  curl -sS --fail-with-body --max-time 30 -o /dev/null -X POST \
+    -H @<(printf 'Authorization: Bearer %s\nTitle: %s\n' "$token" "$title"
+      if [ -n "$pr" ]; then printf 'Click: %s\n' "$pr"; fi) \
+    --data-binary @<(printf '%s\n' "$body") "$url/$topic"
+}
+
+notify_login_refused() {
+  local reason=$1 url="${AGENT_DISPATCH_NTFY_ALERT_URL:-}" token="${AGENT_DISPATCH_NTFY_ALERT_TOKEN:-}"
+  local topic="${AGENT_DISPATCH_NTFY_TOPIC:-ai-jobs}" body
+  if [ -z "$url" ] || [ -z "$token" ] || [[ ! $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+    echo "agent-dispatch: login refusal alert not configured" >&2
+    return 1
+  fi
+  body=$(printf 'role: open-llm\nreason: %s' "$reason")
+  post_ntfy "$url" "$topic" "$token" "agent-dispatch login refused" "$body"
+}
+
 notify() {
-  local id=$1 run=$2 lines title pr login tok bucket url token rc=0
+  local id=$1 run=$2 tok=$3 lines title pr bucket url token rc=0
   local topic="${AGENT_DISPATCH_NTFY_TOPIC:-ai-jobs}"
   lines=$(result_lines "$id" "$run")
   title="ai-job $id $(cat "$STATE_DIR/$id/runs/$run/state")"
   pr=$(cat "$STATE_DIR/$id/pr_url" 2>/dev/null || true)
 
-  login=$(bao_login) || return 1
-  tok=$(jq -r '.auth.client_token // empty' <<<"$login")
-  [ -n "$tok" ] || return 1
   bucket=$(bao_req GET "$BUCKET" "$tok") || {
-    bao_revoke "$tok"
     return 1
   }
-  bao_revoke "$tok"
 
   url=$(field VIKUNJA_URL)
   token=$(field VIKUNJA_AI_JOBS_TOKEN)
@@ -203,12 +228,7 @@ notify() {
   url=$(field NTFY_URL)
   token=$(field NTFY_AI_JOBS_TOKEN)
   if [[ $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
-    curl -sS --fail-with-body --max-time 30 -o /dev/null -X POST \
-      -H @<(
-        printf 'Authorization: Bearer %s\nTitle: %s\n' "$token" "$title"
-        if [ -n "$pr" ]; then printf 'Click: %s\n' "$pr"; fi
-      ) \
-      --data-binary @<(printf '%s\n' "$lines") "$url/$topic" || rc=1
+    post_ntfy "$url" "$topic" "$token" "$title" "$lines" "$pr" || rc=1
   else
     echo "agent-dispatch: $id: ntfy result skipped: topic, URL or token missing" >&2
     rc=1
@@ -230,7 +250,7 @@ read_pr_url() {
 # finalize <id> <run>: settle a run's terminal state once, remove its
 # container (the volume stays for `continue`), and post the result.
 finalize() {
-  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" state cid code pr
+  local id=$1 run=$2 tok=${3:-} rdir="$STATE_DIR/$1/runs/$2" state cid code pr
   mkdir "$rdir/final" 2>/dev/null || return 0
   code=$(cat "$rdir/exit" 2>/dev/null || true)
   if [ -f "$rdir/reason" ]; then
@@ -253,16 +273,26 @@ finalize() {
   fi
   date +%s >"$rdir/ended"
   echo "$state" >"$rdir/state"
-  notify "$id" "$run" || echo "agent-dispatch: $id: result notification incomplete" >&2
+  if [ -n "$tok" ]; then
+    notify "$id" "$run" "$tok" || echo "agent-dispatch: $id: result notification incomplete" >&2
+  fi
 }
 
-# abort <id> <run> <reason> [openbao-token]: fail the run closed and print
+# abort <id> <run> <reason> [job-token]: fail the run closed and print
 # the job JSON.
 abort() {
   echo "$3" >"$STATE_DIR/$1/runs/$2/reason"
-  if [ -n "${4:-}" ]; then bao_revoke "$4"; fi
-  finalize "$1" "$2"
+  finalize "$1" "$2" "${4:-}"
+  if [ -n "${4:-}" ] && [ "$JOB_MANAGER" -eq 0 ]; then bao_revoke "$4"; fi
   job_json "$1"
+}
+
+abort_login() {
+  local id=$1 run=$2 reason=$3
+  echo "$reason" >"$STATE_DIR/$id/runs/$run/reason"
+  finalize "$id" "$run"
+  notify_login_refused "$reason" || echo "agent-dispatch: $id: login refusal alert incomplete" >&2
+  job_json "$id"
 }
 
 # container_args <id> <run> <tool> <repo> <interactive> <continue>: the
@@ -310,7 +340,7 @@ container_args() {
 
 # deliver <cid> <prompt>: the run's secrets (NAME=value lines) and prompt, as
 # files owned by the container's uid 1000, streamed in with `docker cp`.
-# Uses the caller's $names, $bucket, $gh and $web.
+# Uses the caller's $names, $bucket, $gh, $web and optional router key.
 deliver() {
   local tmp name value rc=0
   tmp=$(mktemp -d)
@@ -322,7 +352,11 @@ deliver() {
       printf '%s=%s\n' "$name" "$value"
     done
     if [ -n "$web" ]; then printf 'AGENT_WEB_TOKEN=%s\n' "$web"; fi
+    if [ -n "$router_key" ]; then
+      printf 'AGENT_ROUTER_BASE_URL=%s\nAGENT_ROUTER_KEY=%s\n' "$AGENT_ROUTER_BASE_URL" "$router_key"
+    fi
   } >"$tmp/.agent-env"
+  chmod 600 "$tmp/.agent-env"
   printf '%s' "$2" >"$tmp/.agent-prompt"
   if [ "$rc" = 0 ]; then
     tar --numeric-owner --owner=1000 --group=1000 -C "$tmp" -cf - .agent-env .agent-prompt |
@@ -337,6 +371,7 @@ deliver() {
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
   local tool repo interactive cont=0 login tok lease bucket iid mint gh="" web="" budget cid name
+  local router_key_field="" router_key="" login_rc reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
@@ -345,14 +380,37 @@ run_job() {
   date +%s >"$rdir/started"
   echo starting >"$rdir/state"
 
-  login=$(bao_login) || {
-    abort "$id" "$run" "openbao login failed"
-    return 1
-  }
-  tok=$(jq -r '.auth.client_token // empty' <<<"$login")
-  lease=$(jq -r '.auth.lease_duration // 0' <<<"$login")
+  if [ "$run" = 1 ]; then
+    if login=$(bao_login); then
+      :
+    else
+      login_rc=$?
+      if [ "$login_rc" -eq 64 ]; then
+        reason="credential files are missing or unreadable"
+        abort "$id" "$run" "$reason"
+        return 1
+      else
+        reason=$(jq -r '.errors[0] // empty' <<<"$login" 2>/dev/null || true)
+        reason=${reason//$'\n'/ }
+        reason=${reason//$'\r'/ }
+        reason=${reason:0:300}
+        [ -n "$reason" ] || reason="request failed"
+      fi
+      abort_login "$id" "$run" "$reason"
+      return 1
+    fi
+    tok=$(jq -r '.auth.client_token // empty' <<<"$login")
+    lease=$(jq -r '.auth.lease_duration // 0' <<<"$login")
+    [ -n "$tok" ] || {
+      abort_login "$id" "$run" "login returned no token"
+      return 1
+    }
+  else
+    tok=${4:-}
+    lease=$JOB_TOKEN_TTL
+  fi
   [ -n "$tok" ] || {
-    abort "$id" "$run" "openbao login returned no token"
+    abort "$id" "$run" "job token is empty"
     return 1
   }
   bucket=$(bao_req GET "$BUCKET" "$tok") || {
@@ -375,6 +433,19 @@ run_job() {
       return 1
     }
   done
+  router_key_field=$(jq -r --arg t "$tool" '.[$t].routerKeyField // empty' <<<"$AGENT_TASK_PROFILES")
+  if [ -n "$router_key_field" ]; then
+    router_key=$(field "$router_key_field")
+    [ -n "$router_key" ] || {
+      abort "$id" "$run" "bucket has no $router_key_field" "$tok"
+      return 1
+    }
+    if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [[ $AGENT_ROUTER_BASE_URL == *$'\n'* ]] || \
+      [[ $AGENT_ROUTER_BASE_URL == *$'\r'* ]] || [[ $router_key == *$'\n'* ]] || [[ $router_key == *$'\r'* ]]; then
+      abort "$id" "$run" "router configuration is missing or invalid" "$tok"
+      return 1
+    fi
+  fi
 
   # One repo, contents + pull requests only (no workflow edits). The
   # installation id and repo travel as strings, the form the policy matches.
@@ -416,9 +487,23 @@ run_job() {
   }
   echo running >"$rdir/state"
 
-  # The waiter holds the login token (stdin, never argv or disk) until the
-  # run ends, then revokes it and finalizes.
-  printf '%s' "$tok" | setsid -f "$0" __wait "$id" "$run" >>"$STATE_DIR/$id/dispatch.log" 2>&1
+  if [ "$JOB_MANAGER" -eq 1 ]; then
+    job_json "$id"
+    return 0
+  fi
+
+  # The waiter receives the token on stdin and retains it in memory for the
+  # entire job. It alone renews, notifies, and starts later continuations.
+  mkdir "$STATE_DIR/$id/manager" || {
+    abort "$id" "$run" "job manager already exists" "$tok"
+    return 1
+  }
+  if ! printf '%s' "$tok" | setsid -f "$0" __job "$id" "$run" \
+    >>"$STATE_DIR/$id/dispatch.log" 2>&1; then
+    rmdir "$STATE_DIR/$id/manager" 2>/dev/null || true
+    abort "$id" "$run" "job manager start failed" "$tok"
+    return 1
+  fi
   if [ -n "$web" ]; then
     # Shown once, to this caller; stored nowhere on the host.
     job_json "$id" | AGENT_WEB_TOKEN=$web jq -c '. + {web_token: env.AGENT_WEB_TOKEN}'
@@ -427,15 +512,12 @@ run_job() {
   fi
 }
 
-# wait_run <id> <run>: wait for the container in slices of half the login
-# token's TTL and renew the token between slices. The run ends when the
-# container exits. It ends as a timeout when AGENT_TIMEOUT passes or when the
-# token cannot be renewed past its max TTL. A failed renewal kills the
-# container and fails the run. The token is revoked on every path.
+# wait_run <id> <run> <token>: wait for one container and renew the in-memory
+# job token while it runs.
 wait_run() {
-  local id=$1 run=$2 rdir="$STATE_DIR/$1/runs/$2" tok="" cid code rc ttl step
-  local now end deadline expiry slice renewed lease
-  IFS= read -r tok || true
+  local id=$1 run=$2 tok=$3 rdir="$STATE_DIR/$1/runs/$2" cid code rc ttl step
+  local now end deadline expiry slice renewed lease job_end=0
+  JOB_ENDED=0
   cid=$(cat "$rdir/cid")
   ttl=$(cat "$rdir/ttl")
   now=$(date +%s)
@@ -449,6 +531,7 @@ wait_run() {
     end=$((deadline < expiry ? deadline : expiry))
     if [ "$now" -ge "$end" ]; then
       : >"$rdir/timeout"
+      job_end=1
       docker kill "$cid" >/dev/null 2>&1 || true
       break
     fi
@@ -467,16 +550,72 @@ wait_run() {
     renewed=$(bao_req POST auth/token/renew-self "$tok" '{}') || renewed=""
     lease=$(jq -r '.auth.lease_duration // 0' <<<"$renewed" 2>/dev/null) || lease=0
     if [ "${lease:-0}" -le 0 ]; then
-      echo "openbao token renewal failed" >"$rdir/reason"
+      echo "service token renewal failed" >"$rdir/reason"
+      job_end=1
       docker kill "$cid" >/dev/null 2>&1 || true
       break
     fi
     # At the max TTL the renewal comes back short; the run then ends with
     # the token.
     expiry=$(($(date +%s) + lease))
+    JOB_TOKEN_TTL=$lease
   done
-  if [ -n "$tok" ]; then bao_revoke "$tok"; fi
-  finalize "$id" "$run"
+  finalize "$id" "$run" "$tok"
+  now=$(date +%s)
+  JOB_TOKEN_TTL=$((expiry - now))
+  if [ "$JOB_TOKEN_TTL" -lt 0 ]; then JOB_TOKEN_TTL=0; fi
+  if [ "$job_end" -eq 1 ]; then JOB_ENDED=1 JOB_TOKEN_TTL=0; fi
+}
+
+# The manager owns the token for the job's lifetime. Continue requests are
+# non-secret prompt files in new run directories; the token never touches disk.
+job_loop() {
+  local id=$1 run=$2 tok="" rdir latest next prompt now idle_until manager_dir
+  manager_dir="$STATE_DIR/$id/manager"
+  IFS= read -r tok || true
+  if [ -z "$tok" ]; then
+    rmdir "$manager_dir" 2>/dev/null || true
+    return 1
+  fi
+  JOB_MANAGER=1
+  printf '%s\n' "$$" >"$manager_dir/pid"
+  trap 'if [ -n "$tok" ]; then bao_revoke "$tok"; fi; rmdir "$manager_dir" 2>/dev/null || true' EXIT
+  trap 'exit 0' HUP INT TERM
+
+  while [ -d "$STATE_DIR/$id" ]; do
+    rdir="$STATE_DIR/$id/runs/$run"
+    if [ ! -d "$rdir/final" ] && [ -f "$rdir/cid" ]; then
+      wait_run "$id" "$run" "$tok"
+      [ "$JOB_ENDED" -eq 0 ] || break
+    fi
+    idle_until=$(($(date +%s) + JOB_TOKEN_TTL))
+
+    while [ -d "$STATE_DIR/$id" ]; do
+      [ ! -e "$STATE_DIR/$id/end" ] || break 2
+      now=$(date +%s)
+      if [ "$now" -ge "$idle_until" ]; then break 2; fi
+      latest=$(latest_run "$id")
+      if [ "$latest" -gt "$run" ]; then
+        next=$latest
+        rdir="$STATE_DIR/$id/runs/$next"
+        if [ -f "$rdir/prompt" ]; then
+          prompt=$(cat "$rdir/prompt"; printf '.')
+          prompt=${prompt%.}
+          rm -f "$rdir/prompt"
+          run=$next
+          run_job "$id" "$run" "$prompt" "$tok" || true
+          break
+        fi
+      fi
+      sleep 1
+    done
+  done
+
+  bao_revoke "$tok"
+  tok=""
+  JOB_MANAGER=0
+  trap - EXIT
+  rmdir "$manager_dir" 2>/dev/null || true
 }
 
 job_exists() {
@@ -516,7 +655,7 @@ cmd_start() {
 }
 
 cmd_continue() {
-  local id last next
+  local id last next dir rdir manager_pid prompt tries=0
   [ $# -eq 2 ] || usage
   id=$1
   valid_job "$id" || refuse "invalid job id"
@@ -525,18 +664,41 @@ cmd_continue() {
   if [ "$(job_get "$id" .interactive)" = true ]; then
     refuse "an interactive job continues in its web session"
   fi
+  dir="$STATE_DIR/$id"
   last=$(latest_run "$id")
-  [ -d "$STATE_DIR/$id/runs/$last/final" ] || {
+  [ -d "$dir/runs/$last/final" ] || {
     job_json "$id"
     echo "agent-dispatch: job is still running" >&2
     exit 1
   }
+  manager_pid=$(cat "$dir/manager/pid" 2>/dev/null || true)
+  if [[ ! $manager_pid =~ ^[0-9]+$ ]] || ! kill -0 "$manager_pid" 2>/dev/null; then
+    refuse "job token is unavailable; start a new job"
+  fi
   next=$((last + 1))
-  mkdir "$STATE_DIR/$id/runs/$next" 2>/dev/null || {
+  rdir="$dir/runs/$next"
+  mkdir "$rdir" 2>/dev/null || {
     echo "agent-dispatch: job is busy" >&2
     exit 1
   }
-  run_job "$id" "$next" "$2"
+  date +%s >"$rdir/started"
+  echo starting >"$rdir/state"
+  printf '%s' "$2" >"$rdir/prompt"
+  chmod 600 "$rdir/prompt"
+  while [ "$tries" -lt 50 ]; do
+    [ -f "$rdir/cid" ] || [ -d "$rdir/final" ] && break
+    manager_pid=$(cat "$dir/manager/pid" 2>/dev/null || true)
+    if [[ ! $manager_pid =~ ^[0-9]+$ ]] || ! kill -0 "$manager_pid" 2>/dev/null; then
+      echo "job token expired" >"$rdir/reason"
+      finalize "$id" "$next"
+      job_json "$id"
+      echo "agent-dispatch: job token is unavailable; start a new job" >&2
+      exit 1
+    fi
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  job_json "$id"
 }
 
 cmd_cancel() {
@@ -557,7 +719,7 @@ cmd_cancel() {
 # refresh: settle runs whose waiter is gone, then prune finished jobs older
 # than AGENT_DISPATCH_RETENTION seconds (container, volume and state).
 cmd_refresh() {
-  local now dir id rdir cid status ended keep="${AGENT_DISPATCH_RETENTION:-86400}"
+  local now dir id rdir cid status ended manager_pid i keep="${AGENT_DISPATCH_RETENTION:-86400}"
   local -a settled=() pruned=()
   now=$(date +%s)
   for dir in "$STATE_DIR"/j-*; do
@@ -582,6 +744,14 @@ cmd_refresh() {
     else
       ended=$(cat "$rdir/ended" 2>/dev/null || echo "$now")
       if [ $((now - ended)) -ge "$keep" ]; then
+        : >"$dir/end"
+        manager_pid=$(cat "$dir/manager/pid" 2>/dev/null || true)
+        if [[ $manager_pid =~ ^[0-9]+$ ]] && kill -0 "$manager_pid" 2>/dev/null; then
+          for ((i = 0; i < 50; i++)); do
+            [ -d "$dir/manager" ] || break
+            sleep 0.1
+          done
+        fi
         docker volume rm -f "agent-job-$id" >/dev/null 2>&1 || true
         rm -rf "$dir"
         pruned+=("$id")
@@ -612,10 +782,10 @@ case "$cmd" in
     [ $# -eq 0 ] || usage
     cmd_refresh
     ;;
-  __wait)
-    # Internal: the detached waiter run_job starts. Not reachable over SSH.
+  __job)
+    # Internal: the detached job manager run_job starts. Not reachable over SSH.
     if [ $# -ne 2 ] || ! valid_job "$1" || [[ ! $2 =~ ^[0-9]+$ ]]; then usage; fi
-    wait_run "$1" "$2"
+    job_loop "$1" "$2"
     ;;
   *) usage ;;
 esac
