@@ -20,6 +20,11 @@
     "zcode.z.ai"
   ];
 
+  cursorAgent = [
+    ".cursor.sh"
+    ".cursorapi.com"
+  ];
+
   # Source control + artifacts
   github = [
     "github.com"

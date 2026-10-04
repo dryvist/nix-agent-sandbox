@@ -57,9 +57,9 @@ unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
 `$AGENT_GH_TOKEN_CMD owner/name` once per run and uses the token it prints
 on stdout.
 
-For API-key tools, pass credentials via their task profile: ZAI_SUBSCRIPTION_KEY
-for ZCode and OpenCode, CURSOR_API_KEY for Cursor, and GH_TOKEN (repo-scoped)
-for --repo. Override the image with AGENT_IMAGE.
+Routed tools receive AGENT_ROUTER_BASE_URL and AGENT_ROUTER_KEY from their
+task profile. GH_TOKEN (repo-scoped) is used for --repo. Override the image
+with AGENT_IMAGE.
 
 On the docker runtime, autonomous runs are capped and hardened (defaults
 baked in nix/agent-cli.nix, overridable per run): AGENT_MEMORY (8g),
@@ -90,8 +90,18 @@ runtime() {
 # explicitly (KEY=VALUE) because Apple `container` does not support
 # bare-name env passthrough the way docker does.
 env_flags() {
-  for var in ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
-    ZAI_SUBSCRIPTION_KEY CURSOR_API_KEY GH_TOKEN GITHUB_TOKEN "$@"; do
+  local tool="${1:-}" var
+  shift || true
+  local -a fixed_vars=()
+  case "$tool" in
+    zcode | opencode | cursor-agent)
+      fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN)
+      ;;
+    *)
+      fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN)
+      ;;
+  esac
+  for var in "${fixed_vars[@]}" "$@"; do
     if [ -n "${!var:-}" ]; then
       printf -- '-e\n%s=%s\n' "$var" "${!var}"
     fi
@@ -105,6 +115,17 @@ profile_vars() {
   jq -r --arg p "$1" \
     'if has($p) then .[$p].env[] else error("agent: unknown --profile \($p)") end' \
     <<<"${AGENT_TASK_PROFILES:?run the nix-built agent, which bakes in the task profiles}"
+}
+
+require_tool_profile() {
+  case "$1" in
+    zcode | opencode | cursor-agent)
+      [ "$2" = "$1" ] || {
+        echo "agent: routed tool '$1' requires its matching task profile." >&2
+        return 64
+      }
+      ;;
+  esac
 }
 
 # --- GitHub token for --repo (launcher-side). GH_TOKEN from the environment
@@ -312,6 +333,7 @@ case "$cmd" in
         zcode | opencode | cursor-agent) profile="${tool}" ;;
       esac
     fi
+    require_tool_profile "$tool" "$profile" || exit $?
 
     pvars_list="$(profile_vars "${profile}")" || exit 64
     pvars=()
@@ -323,7 +345,7 @@ case "$cmd" in
 
     rt="$(runtime)"
     flags=()
-    while IFS= read -r line; do flags+=("$line"); done < <(env_flags "${pvars[@]}")
+    while IFS= read -r line; do flags+=("$line"); done < <(env_flags "$tool" "${pvars[@]}")
 
     # Stable id shared by the entrypoint (branch name) and the transcript spool
     # path. Only a remote --host run has a host daemon with the spool to mount.
@@ -473,6 +495,7 @@ case "$cmd" in
         zcode | opencode | cursor-agent) profile="${tool}" ;;
       esac
     fi
+    require_tool_profile "$tool" "$profile" || exit $?
 
     repos=()
     while IFS= read -r entry; do repos+=("${entry}"); done \
@@ -541,7 +564,7 @@ case "$cmd" in
     done
     rt="$(runtime)"
     flags=()
-    while IFS= read -r line; do flags+=("$line"); done < <(env_flags)
+    while IFS= read -r line; do flags+=("$line"); done < <(env_flags "$tool")
     exec "$rt" run --rm -it -e AGENT_SHELL=1 "${host_flags[@]}" "${flags[@]}" "$IMAGE"
     ;;
   *)
