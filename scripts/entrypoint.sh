@@ -48,14 +48,34 @@ done
 # never as -e values. Each .agent-env line is NAME=value; the value is
 # exported verbatim, never evaluated. Both files are read once and removed.
 # Without them the run is unchanged.
+agent_env_name_allowed() {
+  local profile="${AGENT_PROFILE:-${AGENT_TOOL:-claude}}"
+  case "$1" in
+    GH_TOKEN | GITHUB_TOKEN | AGENT_ROUTER_BASE_URL | AGENT_ROUTER_KEY) return 0 ;;
+  esac
+  jq -e --arg profile "$profile" --arg name "$1" \
+    '.[$profile].env | index($name) != null' \
+    "${HOME}/.agent-profiles.json" >/dev/null 2>&1
+}
+
 if [ -f "${HOME}/.agent-env" ]; then
-  while IFS= read -r line; do
-    case "${line%%=*}" in
-      '' | [0-9]* | *[!A-Za-z0-9_]*) continue ;;
-    esac
-    export "${line?}"
+  env_file_error=0
+  while IFS= read -r line || [ -n "${line}" ]; do
+    [ -n "${line}" ] || continue
+    case "${line}" in *=*) ;; *) env_file_error=1; continue ;; esac
+    name="${line%%=*}"
+    case "${name}" in '' | [0-9]* | *[!A-Za-z0-9_]*) env_file_error=1; continue ;; esac
+    if ! agent_env_name_allowed "${name}"; then
+      env_file_error=1
+      continue
+    fi
+    declare -x -- "${name}=${line#*=}"
   done <"${HOME}/.agent-env"
   rm -f "${HOME}/.agent-env"
+  if [ "${env_file_error}" -ne 0 ]; then
+    echo "agent-entrypoint: unsupported value in .agent-env." >&2
+    exit 64
+  fi
 fi
 if [ -f "${HOME}/.agent-prompt" ]; then
   AGENT_PROMPT="$(cat "${HOME}/.agent-prompt")"

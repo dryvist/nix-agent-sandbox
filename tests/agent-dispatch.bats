@@ -2,7 +2,7 @@
 # agent-dispatch and dispatch-ssh: argument validation, docker arguments,
 # credential delivery, fail-closed minting and the fixed-format result.
 # docker, curl and setsid are stubs (tests/stubs); no test reaches a live
-# OpenBao, GitHub, Vikunja or ntfy.
+# service.
 #
 # AGENT_DISPATCH_BIN is the built package's bin dir (the flake check sets
 # it); ENTRYPOINT is scripts/entrypoint.sh.
@@ -10,7 +10,8 @@
 bats_require_minimum_version 1.5.0
 
 SECRETS=(role-id-value secret-id-value zai-secret-value cursor-secret-value
-  vikunja-secret-value ntfy-secret-value ghs_minted_secret s.tok)
+  zcode-router-secret-value opencode-router-secret-value cursor-router-secret-value
+  vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
 
 setup() {
   : "${AGENT_DISPATCH_BIN:?set AGENT_DISPATCH_BIN to the agent-dispatch bin dir}"
@@ -21,15 +22,34 @@ setup() {
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
+  mkdir -p "$AGENT_DISPATCH_APPROLE_DIR"
+  printf 'role-id-value\n' >"$AGENT_DISPATCH_APPROLE_DIR/role_id"
+  printf 'secret-id-value\n' >"$AGENT_DISPATCH_APPROLE_DIR/secret_id"
+  chmod 0400 "$AGENT_DISPATCH_APPROLE_DIR/role_id" "$AGENT_DISPATCH_APPROLE_DIR/secret_id"
   export BAO_ADDR=https://bao.test
-  export OPENBAO_APPROLE_OPEN_LLM_ROLE_ID=role-id-value
-  export OPENBAO_APPROLE_OPEN_LLM_SECRET_ID=secret-id-value
+  export AGENT_ROUTER_BASE_URL=https://router.test/v1
+  export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
+  export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
   export AGENT_DISPATCH_INGRESS_DOMAIN=agents.test
 }
 
 dispatch() { "$AGENT_DISPATCH_BIN/agent-dispatch" "$@"; }
 ssh_cmd() { SSH_ORIGINAL_COMMAND="$1" "$AGENT_DISPATCH_BIN/dispatch-ssh"; }
+make_no_router_dispatcher() {
+  local bin="$BATS_TEST_TMPDIR/no-router-bin" line
+  mkdir -p "$bin"
+  while IFS= read -r line; do
+    if [[ $line == AGENT_TASK_PROFILES=* ]]; then
+      printf '%s\n' "AGENT_TASK_PROFILES='{\"zcode\":{\"env\":[\"ZAI_SUBSCRIPTION_KEY\"]}}'"
+    else
+      printf '%s\n' "$line"
+    fi
+  done <"$AGENT_DISPATCH_BIN/agent-dispatch" >"$bin/agent-dispatch"
+  chmod +x "$bin/agent-dispatch"
+  printf '%s\n' "$bin/agent-dispatch"
+}
 bash_stub() {
   { printf '#!%s\n' "$BASH"; cat; } >"$1"
   chmod +x "$1"
@@ -79,6 +99,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     ""
     "rm -rf /"
     "__wait j-0123456789abcdef 1"
+    "__job j-0123456789abcdef 1"
     "STATUS j-0123456789abcdef"
     "start"
     "start zcode"
@@ -132,7 +153,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
 }
 
-@test "the container gets no OpenBao address, no secret -e, no host path, no socket" {
+@test "the container gets no service credentials in env args, no host path, no socket" {
   local id i mounts=()
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
@@ -170,23 +191,59 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   no_secret_on_a_command_line
 }
 
-@test "secrets arrive in one docker cp, owned by uid 1000, mode 0600, between create and start" {
+@test "approved secrets arrive in one docker cp with mode 0600 between create and start" {
+  local env_data
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
-  [ "$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)" = "GH_TOKEN=ghs_minted_secret
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [ "$env_data" = "GH_TOKEN=ghs_minted_secret
 GITHUB_TOKEN=ghs_minted_secret
-ZAI_SUBSCRIPTION_KEY=zai-secret-value" ]
+ZAI_SUBSCRIPTION_KEY=zai-secret-value
+AGENT_ROUTER_BASE_URL=https://router.test/v1
+AGENT_ROUTER_KEY=zcode-router-secret-value" ]
+  [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
+    AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN ZAI_SUBSCRIPTION_KEY | sort)" ]
+  [[ ! $env_data =~ OPENBAO_|role_id|secret_id|secret-id-value|s\.tok ]]
   [ "$(tar -tvf "$STUB_DIR/cp.1.tar" | grep -c -- '^-rw------- 1000/1000 ')" -eq 2 ]
   [ "$(line_of 'docker create')" -lt "$(line_of 'docker cp')" ]
   [ "$(line_of 'docker cp')" -lt "$(line_of 'docker start')" ]
-  grep -q '^setsid -f .*agent-dispatch __wait j-[0-9a-f]\{16\} 1$' "$STUB_DIR/argv.log"
+  grep -q '^setsid -f .*agent-dispatch __job j-[0-9a-f]\{16\} 1$' "$STUB_DIR/argv.log"
   no_secret_on_a_command_line
+}
+
+@test "profiles without routerKeyField receive neither router variable" {
+  local dispatcher env_data
+  dispatcher=$(make_no_router_dispatcher)
+  run --separate-stderr "$dispatcher" start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [[ ! $env_data =~ AGENT_ROUTER_BASE_URL|AGENT_ROUTER_KEY ]]
+  [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' GH_TOKEN GITHUB_TOKEN ZAI_SUBSCRIPTION_KEY | sort)" ]
+}
+
+@test "each routed tool receives its named router key field" {
+  local tool n=0 expected env_data
+  for tool in zcode opencode cursor-agent; do
+    n=$((n + 1))
+    run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
+    [ "$status" -eq 0 ]
+    env_data=$(tar -xOf "$STUB_DIR/cp.$n.tar" .agent-env)
+    case "$tool" in
+      zcode) expected=zcode-router-secret-value ;;
+      opencode) expected=opencode-router-secret-value ;;
+      cursor-agent) expected=cursor-router-secret-value ;;
+    esac
+    grep -qx "AGENT_ROUTER_KEY=$expected" <<<"$env_data"
+    grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
+  done
 }
 
 @test "the GitHub token is minted for one repo with contents and pull_requests only" {
   local rec
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
+  rec=$(http_rec "POST https://bao.test/v1/auth/approle/login")
+  [ "$(jq -cS . "$rec.body")" = '{"role_id":"role-id-value","secret_id":"secret-id-value"}' ]
   rec=$(http_rec "POST https://bao.test/v1/github-agents/token")
   [ "$(jq -cS . "$rec.body")" = '{"installation_id":"4242","permissions":{"contents":"write","pull_requests":"write"},"repositories":"nix-ai"}' ]
   grep -qx 'X-Vault-Token: s.tok1' "$rec.hdr"
@@ -194,7 +251,7 @@ ZAI_SUBSCRIPTION_KEY=zai-secret-value" ]
   grep -qx 'Authorization: Bearer ghs_minted_secret' "$rec.hdr"
 }
 
-@test "a refused mint fails the job closed: no container, login token revoked, result posted" {
+@test "a refused mint fails closed without another login: no container and result posted" {
   local rec
   export STUB_MINT_FAIL=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
@@ -202,7 +259,7 @@ ZAI_SUBSCRIPTION_KEY=zai-secret-value" ]
   [ "$(jq -r .state <<<"$output")" = failed ]
   [ "$(jq -r .reason <<<"$output")" = "github token mint refused for dryvist/nix-ai" ]
   run ! grep -q '^docker' "$STUB_DIR/calls.log"
-  grep -qx 'curl POST https://bao.test/v1/auth/token/revoke-self token=s.tok1' "$STUB_DIR/calls.log"
+  [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
   rec=$(http_rec "POST https://ntfy.test/ai-jobs")
   grep -qx 'state: failed' "$rec.body"
 }
@@ -220,15 +277,37 @@ scope_refused() {
   scope_refused dryvist/nix-ai 1 evil/nix-ai
   scope_refused dryvist/nix-ai 2 dryvist/nix-ai
   run ! grep -q '^docker' "$STUB_DIR/calls.log"
-  grep -qx 'curl POST https://bao.test/v1/auth/token/revoke-self token=s.tok1' "$STUB_DIR/calls.log"
+  [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 3 ]
 }
 
-@test "a failed login or a missing model key stops before any mint" {
+@test "missing credential files fail closed without env fallback or a container" {
+  rm "$AGENT_DISPATCH_APPROLE_DIR/secret_id"
+  export OPENBAO_APPROLE_OPEN_LLM_ROLE_ID=role-id-value
+  export OPENBAO_APPROLE_OPEN_LLM_SECRET_ID=secret-id-value
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [[ $stderr == *"required credential file is missing or unreadable"* ]]
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  run ! grep -q 'auth/approle/login' "$STUB_DIR/calls.log"
+}
+
+@test "a refused login posts one role-and-reason alert before any container" {
   export STUB_LOGIN_FAIL=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 1 ]
-  [ "$(jq -r .reason <<<"$output")" = "openbao login failed" ]
+  [ "$(jq -r .reason <<<"$output")" = "invalid role or secret ID" ]
+  [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
+  [ "$(grep -c 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log")" -eq 1 ]
+  local rec
+  rec=$(http_rec "POST https://ntfy.test/ai-jobs")
+  grep -qx 'role: open-llm' "$rec.body"
+  grep -qx 'reason: invalid role or secret ID' "$rec.body"
+  grep -qx 'Title: agent-dispatch login refused' "$rec.hdr"
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
   unset STUB_LOGIN_FAIL
+}
+
+@test "a missing model key stops before minting or creating a container" {
   jq 'del(.data.data.CURSOR_API_KEY)' "$BATS_TEST_DIRNAME/fixtures/bucket.json" >"$STUB_DIR/bucket.json"
   run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
   [ "$status" -eq 1 ]
@@ -237,14 +316,30 @@ scope_refused() {
   run ! grep -q '^docker' "$STUB_DIR/calls.log"
 }
 
-@test "the login token is revoked only after the container exits" {
+@test "the waiter keeps the job token in memory and revokes it when pruned" {
+  local id waiter rdir i
+  export STUB_KEEP_WAITER=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
-  local revoke
-  revoke=$(line_of 'revoke-self token=s.tok1')
-  [ -n "$revoke" ]
-  [ "$revoke" -gt "$(line_of 'docker wait')" ]
-  [ "$(grep -c 'revoke-self token=s.tok1' "$STUB_DIR/calls.log")" -eq 1 ]
+  id=$(jq -r .job <<<"$output")
+  rdir="$AGENT_DISPATCH_STATE_DIR/$id/runs/1"
+  for ((i = 0; i < 100; i++)); do
+    [ -d "$rdir/final" ] && break
+    sleep 0.02
+  done
+  [ -d "$rdir/final" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/$id/job-token" ]
+  run ! grep -rqF s.tok1 "$AGENT_DISPATCH_STATE_DIR/$id"
+  waiter=$(cat "$STUB_DIR/waiter.pid")
+  kill -0 "$waiter"
+  AGENT_DISPATCH_RETENTION=0 dispatch refresh >/dev/null
+  grep -qx 'curl POST https://bao.test/v1/auth/token/revoke-self token=s.tok1' "$STUB_DIR/calls.log"
+  for ((i = 0; i < 100; i++)); do
+    kill -0 "$waiter" 2>/dev/null || break
+    sleep 0.02
+  done
+  kill -0 "$waiter" 2>/dev/null && kill "$waiter" 2>/dev/null || true
+  unset STUB_KEEP_WAITER
 }
 
 @test "the result is fixed-format and carries only a PR URL of the job's repo" {
@@ -338,8 +433,8 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(renewals)" -eq 2 ]
   [ "$(line_of 'renew-self token=s.tok1')" -gt "$(line_of 'docker start')" ]
   [ "$(grep -n 'renew-self token=s.tok1' "$STUB_DIR/calls.log" | tail -n 1 | cut -d: -f1)" -lt \
-    "$(line_of 'revoke-self token=s.tok1')" ]
-  [ "$(grep -c 'revoke-self token=s.tok1' "$STUB_DIR/calls.log")" -eq 1 ]
+    "$(line_of 'POST https://ntfy.test/ai-jobs')" ]
+  [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'POST https://ntfy.test/ai-jobs')" ]
   run ! grep -q '^docker kill' "$STUB_DIR/calls.log"
 }
 
@@ -347,7 +442,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   export STUB_LEASE=4 STUB_WAIT_CALLS=99 STUB_RENEW_FAIL=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$(run_state "$output")" = failed ]
-  [ "$(run_state "$output" .reason)" = "openbao token renewal failed" ]
+  [ "$(run_state "$output" .reason)" = "service token renewal failed" ]
   [ "$(renewals)" -eq 1 ]
   grep -qx 'docker kill cid0123' "$STUB_DIR/argv.log"
   [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'docker kill')" ]
@@ -400,24 +495,41 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(jq -c .settled <<<"$output")" = "[\"$id\"]" ]
   run --separate-stderr dispatch status "$id"
   [ "$(jq -r .state <<<"$output")" = cancelled ]
-  rec=$(http_rec "POST https://ntfy.test/ai-jobs")
-  grep -qx 'state: cancelled' "$rec.body"
+  run ! grep -q 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log"
   grep -qx "docker rm -f cid0123" "$STUB_DIR/argv.log"
 }
 
-@test "continue reuses the job's workspace with a fresh token and a new container" {
-  local id
+@test "continue reuses the job token and workspace without another login" {
+  local id waiter i
+  export STUB_KEEP_WAITER=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "first"
   id=$(jq -r .job <<<"$output")
+  for ((i = 0; i < 100; i++)); do
+    [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/final" ] && break
+    sleep 0.02
+  done
+  [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/final" ]
   run --separate-stderr ssh_cmd "continue $id now add tests"
   [ "$status" -eq 0 ]
   [ "$(jq -r .runs <<<"$output")" = 2 ]
+  [ -f "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/cid" ]
   create_args 2
   has_pair -e AGENT_CONTINUE=1
   has_pair --name "agent-$id-2"
   has_pair -v "agent-job-$id:/home/agent/work"
   [ "$(tar -xOf "$STUB_DIR/cp.2.tar" .agent-prompt)" = "now add tests" ]
   [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 2 ]
+  [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
+  [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/final" ]
+  waiter=$(cat "$STUB_DIR/waiter.pid")
+  AGENT_DISPATCH_RETENTION=0 dispatch refresh >/dev/null
+  for ((i = 0; i < 100; i++)); do
+    grep -q 'revoke-self token=s.tok1' "$STUB_DIR/calls.log" && break
+    sleep 0.02
+  done
+  [ "$(grep -c 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log")" -eq 2 ]
+  [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
+  unset STUB_KEEP_WAITER
 }
 
 @test "refresh prunes finished jobs past retention: volume and state removed" {
@@ -430,6 +542,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   run --separate-stderr ssh_cmd refresh
   [ "$(jq -c .pruned <<<"$output")" = "[\"$id\"]" ]
   grep -qx "docker volume rm -f agent-job-$id" "$STUB_DIR/argv.log"
+  grep -qx "curl POST https://bao.test/v1/auth/token/revoke-self token=s.tok1" "$STUB_DIR/calls.log"
   [ ! -e "$AGENT_DISPATCH_STATE_DIR/$id" ]
   run --separate-stderr dispatch status "$id"
   [ "$status" -eq 1 ]
@@ -440,7 +553,8 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/home"
   mkdir -p "$home"
-  printf '%s\n' "ZAI_SUBSCRIPTION_KEY=\$(touch $home/pwned)" "1BAD=x" "not a line" >"$home/.agent-env"
+  printf '%s\n' "ZAI_SUBSCRIPTION_KEY=\$(touch $home/pwned)" \
+    'AGENT_ROUTER_BASE_URL=https://router.test/v1' 'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   printf 'the prompt' >"$home/.agent-prompt"
   echo '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
   run env -i PATH="$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=nope AGENT_PROFILE=zcode \
@@ -451,6 +565,43 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ ! -e "$home/pwned" ]
   [ ! -e "$home/.agent-env" ]
   [ ! -e "$home/.agent-prompt" ]
+}
+
+@test "the entrypoint removes .agent-env and rejects names outside its allowlist" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/reject-home"
+  mkdir -p "$home"
+  printf '%s\n' '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=valid' 'OPENBAO_APPROLE_OPEN_LLM_SECRET_ID=never-allowed' >"$home/.agent-env"
+  run env -i PATH="$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=zcode AGENT_PROFILE=zcode \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"unsupported value in .agent-env"* ]]
+  [ ! -e "$home/.agent-env" ]
+}
+
+@test "the entrypoint exports both router values to the tool and removes the file" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/router-home" tools="$BATS_TEST_TMPDIR/router-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test' \
+    'AGENT_ROUTER_BASE_URL=https://router.test/v1' 'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+:
+SH
+  bash_stub "$tools/zcode" <<'SH'
+printf '%s\n' "$AGENT_ROUTER_BASE_URL" "$AGENT_ROUTER_KEY" >"$STUB_DIR/router-env"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT='route this' ZAI_SUBSCRIPTION_KEY=zai-test \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/router-env")" = $'https://router.test/v1\nrouter-test-key' ]
+  [ ! -e "$home/.agent-env" ]
 }
 
 @test "zcode batch configures its subscription key before running the prompt" {

@@ -154,32 +154,28 @@ the prompt (16 KiB, no control characters other than tab and newline).
 
 ### Credentials
 
-Each `start` and `continue`:
+Each job gets a GitHub token scoped to exactly its repo, with `contents` and
+`pull_requests` write. The dispatcher fails closed when the token lists any
+other repo. Notifications and continuations reuse the job's host-side token;
+the dispatcher renews it while a container runs and revokes it when the job
+is pruned or its lease expires.
+The dispatcher sends one role-and-reason alert when a service login is refused.
 
-1. logs in to OpenBao with an AppRole;
-2. reads the `secret/apps/open-llm` bucket;
-3. mints a GitHub token from `github-agents/token` for the job's repo only,
-   with `contents` and `pull_requests` write;
-4. checks that the token lists exactly that repo, and fails the job closed
-   when it does not.
-
-The container receives the GitHub token, the tool's model key and the prompt
-as files copied in with `docker cp` before it starts. It never receives an
-OpenBao address, AppRole material, a host path or the Docker socket. The
-login token owns the lease behind the GitHub token. While the container runs,
-the dispatcher renews the login token every half TTL. A failed renewal stops
-the container and fails the job. The run ends as a timeout at
-`AGENT_TIMEOUT` or at the token's max TTL, whichever comes first. The token
-is revoked when the run ends.
+Before a container starts, the dispatcher copies one mode-0600 `.agent-env`
+file and the prompt into its home directory. The file contains the GitHub
+token, selected task-profile values, and router values for profiles that name
+a `routerKeyField`. The entrypoint exports only approved names and removes the
+file. Service credentials, host paths and the Docker socket are not passed to
+the container.
 
 ### Environment
 
 | Name | Use |
 | --- | --- |
-| `BAO_ADDR` | OpenBao address |
-| `OPENBAO_APPROLE_OPEN_LLM_ROLE_ID`, `OPENBAO_APPROLE_OPEN_LLM_SECRET_ID` | AppRole login |
+| `BAO_ADDR` | Host service endpoint |
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
+| `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
 | `AGENT_DISPATCH_INGRESS_DOMAIN` | parent domain of interactive sessions; required for `--interactive` |
 | `AGENT_DISPATCH_INGRESS_NETWORK` | Docker network shared with the ingress proxy (default `agents-ingress`) |
 | `AGENT_DISPATCH_INGRESS_MIDDLEWARES` | Traefik middlewares for the session route (optional) |
@@ -187,8 +183,9 @@ is revoked when the run ends.
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
-Bucket fields read: `GITHUB_AGENTS_INSTALLATION_ID`; each tool's task-profile
-variables (`ZAI_SUBSCRIPTION_KEY`, `CURSOR_API_KEY`); `VIKUNJA_URL`,
+Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, each tool's task-profile
+variables (`ZAI_SUBSCRIPTION_KEY`, `CURSOR_API_KEY`), and the named router key
+field where configured. Result delivery uses `VIKUNJA_URL`,
 `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and `NTFY_AI_JOBS_TOKEN`. The host
 provides `docker`, `curl` and `setsid`.
 
@@ -200,7 +197,7 @@ provides `docker`, `curl` and `setsid`.
 | `AGENT_PR_DRAFT=1` | open the PR as a draft |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
 | `AGENT_INTERACTIVE=1`, `AGENT_PORT` | serve the web session on that port |
-| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables and, for `--interactive`, `AGENT_WEB_TOKEN` |
+| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, optional router values and, for `--interactive`, `AGENT_WEB_TOKEN` |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
 

@@ -11,6 +11,7 @@
 #
 # Shape per profile:
 #   env  list of environment variable names the run requires.
+#   routerKeyField  optional bucket field delivered as AGENT_ROUTER_KEY.
 {
   # Estate-context reads only. No secrets exported; model keys come from the
   # caller's environment exactly as before.
@@ -31,12 +32,15 @@
   };
   zcode = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
+    routerKeyField = "zcode_router_key";
   };
   opencode = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
+    routerKeyField = "opencode_router_key";
   };
   cursor-agent = {
     env = [ "CURSOR_API_KEY" ];
+    routerKeyField = "cursor_router_key";
   };
   zcode-web = {
     env = [
