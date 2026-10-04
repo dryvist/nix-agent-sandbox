@@ -1,5 +1,14 @@
 export LC_ALL=C
 
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+  printf '%s\n' \
+    'Usage: zcode-job start <owner/repo> <prompt>' \
+    '       zcode-job continue <job-id> <message>' \
+    '       zcode-job status|result|cancel <job-id>' \
+    '       zcode-job live|repos'
+  exit 0
+fi
+
 fail() {
   jq -cn --arg error "$1" '{error: $error}'
   exit "${2:-64}"

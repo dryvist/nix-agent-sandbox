@@ -16,6 +16,14 @@ setup() {
 client() { "$ZCODE_JOB_BIN/zcode-job" "$@"; }
 no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
 
+@test "help succeeds without client configuration" {
+  rm "$ZCODE_JOB_CONFIG"
+  run client --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: zcode-job start"* ]]
+  no_ssh
+}
+
 @test "start forwards only the ZCode request with text preserved" {
   export GH_TOKEN=github-secret GITHUB_TOKEN=github-secret BAO_TOKEN=bao-secret
   export OPENBAO_APPROLE_OPEN_LLM_SECRET_ID=role-secret
