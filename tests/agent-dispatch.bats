@@ -527,6 +527,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
     grep -q 'revoke-self token=s.tok1' "$STUB_DIR/calls.log" && break
     sleep 0.02
   done
+  [ "$(grep -c 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log")" -eq 2 ]
   [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
   unset STUB_KEEP_WAITER
 }
