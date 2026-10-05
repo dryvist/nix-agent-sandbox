@@ -178,7 +178,7 @@
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '
-                  .zai == ["api.z.ai", "chat.z.ai", "zcode.z.ai"] and
+                  .zai == ["api.z.ai", "cdn-zcode.z.ai", "chat.z.ai", "zcode.z.ai"] and
                   .cursorAgent == [".cursor.sh", ".cursorapi.com"] and
                   ([.modelApis[] | select(test("gemini|google"; "i"))] | length) == 0
                 ' egress.json >/dev/null
