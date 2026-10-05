@@ -254,13 +254,13 @@ apply_host() {
   )
 }
 
-# Persist the run's transcripts on a remote --host daemon: bind-mount per-run
-# host spool dirs onto each CLI's transcript SUBDIRECTORY — never its state-home
+# Persist the run's records on a remote --host daemon: bind-mount per-run
+# host spool dirs onto each CLI's record SUBDIRECTORY — never its state-home
 # root. The roots hold the baked autonomous configs (~/.codex/config.toml etc.)
 # and the OAuth creds injected by inject_oauth_creds; mounting a root would
 # shadow the configs and spill the creds onto the host disk. The subdirs
-# (~/.claude/projects, ~/.codex/sessions) hold only session
-# records, which a host-side log shipper can tail before --rm teardown.
+# (~/.claude/projects, ~/.codex/sessions, ~/.zcode/cli/log) hold only session
+# or event records, which a host-side log shipper can tail before --rm teardown.
 #
 # docker auto-creates a missing bind source as root, but the agent runs as uid
 # 1000 and could not then write it. So the leaves are pre-created by a throwaway
@@ -274,12 +274,13 @@ spool_mount_flags() {
   local run_id="$1"
   local rd="${SPOOL_DIR}/${run_id}"
   if ! docker run --rm -v "${SPOOL_DIR}:/spool" --entrypoint mkdir "$IMAGE" \
-    -p "/spool/${run_id}/claude" "/spool/${run_id}/codex" >&2; then
-    echo "agent: could not prepare the transcript spool at ${rd} (is /var/lib/agent-sandbox/spool present on the host?); this run's transcripts will not be captured." >&2
+    -p "/spool/${run_id}/claude" "/spool/${run_id}/codex" "/spool/${run_id}/zcode" >&2; then
+    echo "agent: could not prepare the record spool at ${rd} (is /var/lib/agent-sandbox/spool present on the host?); this run's records will not be captured." >&2
     return 0
   fi
   printf -- '-v\n%s\n' "${rd}/claude:/home/agent/.claude/projects"
   printf -- '-v\n%s\n' "${rd}/codex:/home/agent/.codex/sessions"
+  printf -- '-v\n%s\n' "${rd}/zcode:/home/agent/.zcode/cli/log"
 }
 
 cmd="${1:-}"
