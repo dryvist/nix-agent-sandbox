@@ -677,11 +677,11 @@
     "homelab-contracts": {
       "flake": false,
       "locked": {
-        "lastModified": 1791133484,
-        "narHash": "sha256-j5V+THOlxmPhD5LclaH8yXjSEx6U2d9SQC+TKM3kBXE=",
+        "lastModified": 1791155187,
+        "narHash": "sha256-OXNxYldAq+OhFDUoyNFG+CulhXwLfyW/jtLRlsl5UMY=",
         "owner": "dryvist",
         "repo": "homelab-contracts",
-        "rev": "b91c6bda0668a1570cdf09867e0ccf09fe04fb46",
+        "rev": "2f3976946e9bf9a8c7a346a88a4ef582badb11bf",
         "type": "github"
       },
       "original": {
@@ -958,11 +958,11 @@
         "vct-splunk-cli": "vct-splunk-cli"
       },
       "locked": {
-        "lastModified": 1791161752,
-        "narHash": "sha256-XVas0CiLRPfYd1lMeM1+sECgF3N21TdIrR+aUfNZavI=",
+        "lastModified": 1791172620,
+        "narHash": "sha256-5KQktZcfEkkLkxqtQt4uqS9mYcS0y/YURSLOa8mRZpM=",
         "owner": "dryvist",
         "repo": "nix-ai",
-        "rev": "fe2464ffa3e4e2a54cb8e86692b8e0a7e623fbe6",
+        "rev": "09c903f1d6a711885711e4fda7e0e73e08f926a2",
         "type": "github"
       },
       "original": {
