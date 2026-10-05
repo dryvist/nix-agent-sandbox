@@ -16,6 +16,7 @@
 
   zai = [
     "api.z.ai"
+    "cdn-zcode.z.ai"
     "chat.z.ai"
     "zcode.z.ai"
   ];
