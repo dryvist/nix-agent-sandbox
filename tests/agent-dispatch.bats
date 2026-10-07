@@ -519,6 +519,10 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(tar -xOf "$STUB_DIR/cp.2.tar" .agent-prompt)" = "now add tests" ]
   [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 2 ]
   [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
+  for ((i = 0; i < 500; i++)); do
+    [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/final" ] && break
+    sleep 0.02
+  done
   [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/final" ]
   waiter=$(cat "$STUB_DIR/waiter.pid")
   AGENT_DISPATCH_RETENTION=0 dispatch refresh >/dev/null
