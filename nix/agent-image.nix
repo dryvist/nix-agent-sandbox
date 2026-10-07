@@ -30,6 +30,7 @@
   nix,
   nodejs_24,
   opencode,
+  qwenCode,
   ripgrep,
   renderAutonomous,
   zcodeWeb,
@@ -70,6 +71,7 @@ let
     zcodeWebTask
     opencode
     cursorAgent
+    qwenCode
   ];
 
   basePackages = [

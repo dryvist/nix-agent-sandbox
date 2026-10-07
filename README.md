@@ -1,7 +1,8 @@
 # nix-agent-sandbox
 
 Nix-built OCI runtime for fully autonomous AI coding agents (Claude Code,
-Codex CLI, ZCode, OpenCode, and Cursor Agent). The container is the permission boundary: inside it,
+Codex CLI, Qwen Code, ZCode, OpenCode, and Cursor Agent). The container is the
+permission boundary: inside it,
 every tool runs with all approvals bypassed; outside it, nothing changes
 except a pushed branch/PR.
 
