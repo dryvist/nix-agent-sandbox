@@ -639,7 +639,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test' ]
+  [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
 }
 
 @test "Qwen Code batch uses the routed OpenAI-compatible endpoint in YOLO mode" {
@@ -696,7 +696,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\nopencode prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\nopencode prompt' ]
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"

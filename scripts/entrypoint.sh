@@ -202,10 +202,10 @@ case "${AGENT_TOOL}" in
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
     ;;
   zcode)
-    zcode --prompt "${AGENT_PROMPT}" || status=$?
+    zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode)
-    opencode run "${AGENT_PROMPT}" || status=$?
+    opencode run --auto "${AGENT_PROMPT}" || status=$?
     ;;
   cursor-agent)
     cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
