@@ -92,6 +92,10 @@ AGENT_GH_TOKEN_CMD=./mint-repo-token \
   agent run --host docker-host.example.internal --profile dev \
   --repo dryvist/some-repo "fix the flaky test in ci.yml"
 
+# Qwen Code against an OpenAI-compatible endpoint; values come from the caller
+AGENT_ROUTER_BASE_URL="$MODEL_ENDPOINT" AGENT_ROUTER_KEY="$MODEL_ROUTER_KEY" \
+AGENT_MODEL="$MODEL_ID" agent run --tool qwen --profile qwen "fix the failing test"
+
 # Fan the same task across every repo in a named group (lib.repoGroups),
 # one disposable container per repo — each with its own repo-scoped token,
 # just like `agent run --repo`. At most --concurrency run at once (default

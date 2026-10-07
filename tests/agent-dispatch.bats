@@ -642,6 +642,32 @@ SH
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test' ]
 }
 
+@test "Qwen Code batch uses the routed OpenAI-compatible endpoint in YOLO mode" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/qwen-home" tools="$BATS_TEST_TMPDIR/qwen-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"qwen":{"env":["AGENT_ROUTER_BASE_URL","AGENT_ROUTER_KEY","AGENT_MODEL"]}}' \
+    >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=MODEL_ENDPOINT' \
+    'AGENT_ROUTER_KEY=router-key-value' 'AGENT_MODEL=MODEL_ID' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/qwen" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/qwen-argv"
+test "$OPENAI_API_KEY" = router-key-value
+test "$AGENT_ROUTER_KEY" = router-key-value
+test "$AGENT_ROUTER_BASE_URL" = MODEL_ENDPOINT
+test "$AGENT_MODEL" = MODEL_ID
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=qwen AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/qwen-argv")" = $'--auth-type\nopenai\n--model\nMODEL_ID\n--openai-base-url\nMODEL_ENDPOINT\n--prompt\nfix the test\n--yolo' ]
+  [[ ! $(cat "$STUB_DIR/qwen-argv") =~ router-key-value ]]
+  [ ! -e "$home/.agent-env" ]
+}
+
 @test "OpenCode and Cursor receive their native batch command forms" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/tools-home" tools="$BATS_TEST_TMPDIR/agent-tools"

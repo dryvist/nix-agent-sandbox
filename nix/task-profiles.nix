@@ -30,6 +30,13 @@
   zai = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
   };
+  qwen = {
+    env = [
+      "AGENT_ROUTER_BASE_URL"
+      "AGENT_ROUTER_KEY"
+      "AGENT_MODEL"
+    ];
+  };
   zcode = {
     env = [ ];
     routerKeyField = "zcode_router_key";
