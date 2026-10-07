@@ -36,6 +36,15 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3
 
+      - name: Cache Nix Store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: |
+            nix-${{ runner.os }}-${{ matrix.arch }}-
+          gc-max-store-size-linux: 6G
+          save: ${{ github.event_name != 'pull_request' }}
+
       - name: Flake checks
         run: nix flake check -L
 
