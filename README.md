@@ -99,7 +99,7 @@ AGENT_MODEL="$MODEL_ID" agent run --tool qwen --profile qwen "fix the failing te
 # Fan the same task across every repo in a named group (lib.repoGroups),
 # one disposable container per repo — each with its own repo-scoped token,
 # just like `agent run --repo`. At most --concurrency run at once (default
-# 4); an end-of-run table lists each repo, base branch, and PR URL or exit
+# 8); an end-of-run table lists each repo, base branch, and PR URL or exit
 # code. The group's profile is the default unless --profile overrides it.
 AGENT_GH_TOKEN_CMD=./mint-repo-token \
   agent sweep --group nix --host docker-host.example.internal \
