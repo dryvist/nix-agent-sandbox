@@ -20,3 +20,9 @@ setup() {
   [[ "$flags" == *"${SPOOL_DIR}/run-123/zcode:/home/agent/.zcode/cli/log"* ]]
   grep -Fq "/spool/run-123/zcode" "$STUB_LOG"
 }
+
+@test "agent sweep defaults to eight concurrent runs" {
+  local default
+  default="$(sed -n '/^  sweep)/,/^  shell)/s/^    concurrency=//p' "$AGENT_CLI_SOURCE" | head -n 1)"
+  [ "$default" = "8" ]
+}

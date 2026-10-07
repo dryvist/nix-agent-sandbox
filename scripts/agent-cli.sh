@@ -430,7 +430,7 @@ case "$cmd" in
     # token-mint + OAuth-injection + container path — one repo per run, the
     # law held. Nothing about the container changes for a sweep.
     group=""
-    concurrency=4
+    concurrency=8
     tool=claude
     profile=""
     host=""
