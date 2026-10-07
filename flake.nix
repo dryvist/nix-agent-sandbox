@@ -72,6 +72,7 @@
             zcodeWeb = nix-ai.packages.${system}.zcode-web;
             inherit (pkgs) opencode;
             cursorAgent = llm-agents.packages.${system}.cursor-agent;
+            qwenCode = llm-agents.packages.${system}.qwen-code;
           };
         }
       );

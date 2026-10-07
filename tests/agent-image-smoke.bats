@@ -11,7 +11,7 @@ setup() {
     -euo pipefail -c '
       test "$(id -u)" = 1000
       test ! -e /home/agent/.config/opencode/opencode.json
-      for binary in zcode opencode cursor-agent; do
+      for binary in qwen zcode opencode cursor-agent; do
         command -v "$binary" >/dev/null
         version="$("$binary" --version)"
         test -n "$version"

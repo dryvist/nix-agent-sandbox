@@ -15,9 +15,9 @@ SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  agent run [--tool claude|codex|zcode|opencode|cursor-agent] [--repo owner/name]
+  agent run [--tool claude|codex|qwen|zcode|opencode|cursor-agent] [--repo owner/name]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
-  agent sweep --group name [--concurrency N] [--tool claude|codex|zcode|opencode|cursor-agent]
+  agent sweep --group name [--concurrency N] [--tool claude|codex|qwen|zcode|opencode|cursor-agent]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
@@ -97,6 +97,9 @@ env_flags() {
     zcode | opencode | cursor-agent)
       fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN)
       ;;
+    qwen)
+      fixed_vars=(GH_TOKEN GITHUB_TOKEN)
+      ;;
     *)
       fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN)
       ;;
@@ -119,7 +122,7 @@ profile_vars() {
 
 require_tool_profile() {
   case "$1" in
-    zcode | opencode | cursor-agent)
+    qwen | zcode | opencode | cursor-agent)
       [ "$2" = "$1" ] || {
         echo "agent: routed tool '$1' requires its matching task profile." >&2
         return 64
@@ -331,7 +334,7 @@ case "$cmd" in
 
     if [ -z "${profile}" ]; then
       case "${tool}" in
-        zcode | opencode | cursor-agent) profile="${tool}" ;;
+        qwen | zcode | opencode | cursor-agent) profile="${tool}" ;;
       esac
     fi
     require_tool_profile "$tool" "$profile" || exit $?
@@ -493,7 +496,7 @@ case "$cmd" in
     [ -n "${profile}" ] || profile="$(jq -re '.profile // ""' <<<"${group_json}")"
     if [ -z "${profile}" ]; then
       case "${tool}" in
-        zcode | opencode | cursor-agent) profile="${tool}" ;;
+        qwen | zcode | opencode | cursor-agent) profile="${tool}" ;;
       esac
     fi
     require_tool_profile "$tool" "$profile" || exit $?

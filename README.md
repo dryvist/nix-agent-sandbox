@@ -1,7 +1,8 @@
 # nix-agent-sandbox
 
 Nix-built OCI runtime for fully autonomous AI coding agents (Claude Code,
-Codex CLI, ZCode, OpenCode, and Cursor Agent). The container is the permission boundary: inside it,
+Codex CLI, Qwen Code, ZCode, OpenCode, and Cursor Agent). The container is the
+permission boundary: inside it,
 every tool runs with all approvals bypassed; outside it, nothing changes
 except a pushed branch/PR.
 
@@ -90,6 +91,10 @@ GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
 AGENT_GH_TOKEN_CMD=./mint-repo-token \
   agent run --host docker-host.example.internal --profile dev \
   --repo dryvist/some-repo "fix the flaky test in ci.yml"
+
+# Qwen Code against an OpenAI-compatible endpoint; values come from the caller
+AGENT_ROUTER_BASE_URL="$MODEL_ENDPOINT" AGENT_ROUTER_KEY="$MODEL_ROUTER_KEY" \
+AGENT_MODEL="$MODEL_ID" agent run --tool qwen --profile qwen "fix the failing test"
 
 # Fan the same task across every repo in a named group (lib.repoGroups),
 # one disposable container per repo — each with its own repo-scoped token,
