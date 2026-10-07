@@ -28,7 +28,7 @@ the only durable output is a pushed branch/PR when --repo is given).
 lib.repoGroups / nix/repo-groups.nix), one disposable container per repo —
 each cloning, branching, and PR'ing its own repo with its own repo-scoped
 GitHub token, exactly like `agent run --repo`. At most --concurrency runs
-(default 4) execute at once; an end-of-run table lists each repo, its base
+(default 8) execute at once; an end-of-run table lists each repo, its base
 branch, and the PR URL or exit code. A group's `profile` is the default
 unless --profile overrides it. Each member gets its GitHub token just as
 `run --repo` does.

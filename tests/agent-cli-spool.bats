@@ -26,3 +26,9 @@ setup() {
   default="$(sed -n '/^  sweep)/,/^  shell)/s/^    concurrency=//p' "$AGENT_CLI_SOURCE" | head -n 1)"
   [ "$default" = "8" ]
 }
+
+@test "agent CLI help documents eight as the sweep default" {
+  run bash "$AGENT_CLI_SOURCE" invalid
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"(default 8) execute at once"* ]]
+}
