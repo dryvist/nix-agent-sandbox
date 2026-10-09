@@ -131,9 +131,11 @@ agent-dispatch refresh
 - **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
   hex digits. A batch job needs a credential that works without a person, so
   `cursor-agent` runs only with `--tty`.
-- **Repositories**: public only. After the mint, the dispatcher reads the
-  repository with the job's token and refuses a private one. It then revokes
-  that token.
+- **Repositories**: public only, and the default branch must have an active
+  ruleset that requires a pull request. After the mint, the dispatcher checks
+  both with the job's token. It refuses any other repository and revokes that
+  token. Classic branch protection is not readable with the job token and
+  does not count.
 - **Output**: the container pushes `agent/<tool>/<job-id>` and opens a draft
   PR. The dispatcher records the PR URL only when it points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.

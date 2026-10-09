@@ -22,7 +22,8 @@
 # `--tty` runs the same job attached to the caller's terminal: the container
 # gets a TTY, and the dispatcher attaches to it after the waiter takes over.
 # A tool whose profile sets ttyLogin signs in by hand inside the session and
-# gets no router key. Only public repositories are accepted.
+# gets no router key. Only public repositories whose default branch requires
+# a pull request are accepted.
 
 export LC_ALL=C
 umask 077
@@ -142,13 +143,29 @@ scope_ok() {
     <<<"$resp" >/dev/null
 }
 
-# Only public repositories run here.
-repo_public() {
-  local resp
-  resp=$(curl -sS --fail-with-body --max-time 30 \
+gh_get() {
+  curl -sS --fail-with-body --max-time 30 \
     -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$1") \
-    "$GITHUB_API/repos/$2") || return 1
-  jq -e '.private == false and .visibility == "public"' <<<"$resp" >/dev/null
+    "$GITHUB_API/$2"
+}
+
+# repo_guard <token> <repo>: prints why the repo is refused, or nothing. Only
+# a public repository whose default branch has an active ruleset requiring a
+# pull request runs here, so a job can reach the default branch only through
+# a reviewed PR. Classic branch protection is not readable with the job
+# token and does not count.
+repo_guard() {
+  local resp="" branch rules=""
+  resp=$(gh_get "$1" "repos/$2") || true
+  if ! jq -e '.private == false and .visibility == "public"' <<<"$resp" >/dev/null 2>&1; then
+    echo "private or unknown repository refused: $2"
+    return
+  fi
+  branch=$(jq -r '.default_branch // empty | @uri' <<<"$resp")
+  rules=$(gh_get "$1" "repos/$2/rules/branches/$branch") || true
+  if ! jq -e 'any(.[]; .type == "pull_request")' <<<"$rules" >/dev/null 2>&1; then
+    echo "default branch of $2 does not require a pull request"
+  fi
 }
 
 # A refused repository's token is revoked at once.
@@ -465,11 +482,12 @@ run_job() {
     abort "$id" "$run" "github token is not scoped to exactly $repo" "$tok"
     return 1
   fi
-  repo_public "$gh" "$repo" || {
+  reason=$(repo_guard "$gh" "$repo")
+  if [ -n "$reason" ]; then
     gh_revoke "$gh"
-    abort "$id" "$run" "private or unknown repository refused: $repo" "$tok"
+    abort "$id" "$run" "$reason" "$tok"
     return 1
-  }
+  fi
 
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"

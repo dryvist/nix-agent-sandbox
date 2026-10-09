@@ -393,6 +393,17 @@ pr: $pr" ]
   no_secret_on_a_command_line
 }
 
+@test "a default branch without a pull-request rule is refused and the token revoked" {
+  export STUB_BRANCH_UNPROTECTED=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "default branch of dryvist/nix-ai does not require a pull request" ]
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  http_rec "GET https://api.github.com/repos/dryvist/nix-ai/rules/branches/main" >/dev/null
+  http_rec "DELETE https://api.github.com/installation/token" >/dev/null
+  no_secret_on_a_command_line
+}
+
 @test "--tty attaches a terminal job; login tools get no router key or provider key" {
   local id env_data tool n=0
   for tool in zcode opencode cursor-agent; do
