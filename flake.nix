@@ -183,6 +183,7 @@
                 jq -e '
                   .zai == ["api.z.ai", "cdn-zcode.z.ai", "chat.z.ai", "zcode.z.ai"] and
                   .cursorAgent == [".cursor.sh", ".cursorapi.com"] and
+                  .opencode == ["opencode.ai"] and
                   ([.modelApis[] | select(test("gemini|google"; "i"))] | length) == 0
                 ' egress.json >/dev/null
                 touch $out

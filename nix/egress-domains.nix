@@ -21,6 +21,11 @@
     "zcode.z.ai"
   ];
 
+  # OpenCode Go: sign-in and models for a terminal session.
+  opencode = [
+    "opencode.ai"
+  ];
+
   cursorAgent = [
     ".cursor.sh"
     ".cursorapi.com"
