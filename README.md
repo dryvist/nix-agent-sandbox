@@ -136,8 +136,13 @@ agent-dispatch refresh
   both with the job's token. It refuses any other repository and revokes that
   token. Classic branch protection is not readable with the job token and
   does not count.
-- **Output**: the container pushes `agent/<tool>/<job-id>` and opens a draft
-  PR. The dispatcher records the PR URL only when it points at the job's repo.
+- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
+  PR. Every branch requires signed commits, so the run's tree reaches GitHub as
+  one commit created through the API (`createCommitOnBranch`), which GitHub
+  signs. That carries file contents only: a change to a file mode or a symlink
+  is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES` encoded
+  (default 8 MiB) fails whole. The dispatcher records the PR URL only when it
+  points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
@@ -220,9 +225,9 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
   `--pids-limit`), hardened (`--security-opt no-new-privileges`,
   `--cap-drop ALL`), and wall-clock-bounded (`AGENT_TIMEOUT`, default 3600s,
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
-- **Secret egress**: before any push, the entrypoint runs `gitleaks` on every
-  new commit of the run, including commits the tool made itself, and aborts the
-  push (redacted output) on a finding.
+- **Secret egress**: before publishing, the entrypoint runs `gitleaks` on every
+  new commit of the run, including commits the tool made itself, and stops
+  (redacted output) on a finding.
 - **Session and event records**: a `--host` run bind-mounts a per-run host
   spool dir onto the Claude and Codex session subdirs (`~/.claude/projects`,
   `~/.codex/sessions`) and the ZCode CLI event log dir (`~/.zcode/cli/log`)

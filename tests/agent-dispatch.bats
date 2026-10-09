@@ -794,22 +794,29 @@ SH
   [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
 }
 
-# publish_fixture <name> <gitleaks exit>: a public origin, gh and gitleaks
-# stubs, and a zcode stub that commits on its own; sets $home $tools $origin.
+# publish_fixture <name> <gitleaks exit>: an origin holding old-file, and gh
+# and gitleaks stubs; sets $home $tools $origin. Each test writes its zcode
+# stub.
 publish_fixture() {
   home="$BATS_TEST_TMPDIR/$1-home" tools="$BATS_TEST_TMPDIR/$1-tools" origin="$BATS_TEST_TMPDIR/$1-origin.git"
+  local seed="$BATS_TEST_TMPDIR/$1-seed"
   mkdir -p "$home" "$tools"
   git init -q --bare "$origin"
-  git clone -q "$origin" "$BATS_TEST_TMPDIR/$1-seed" 2>/dev/null
-  git -C "$BATS_TEST_TMPDIR/$1-seed" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
-  git -C "$BATS_TEST_TMPDIR/$1-seed" push -q origin HEAD
+  git clone -q "$origin" "$seed" 2>/dev/null
+  echo old >"$seed/old-file"
+  git -C "$seed" add old-file
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m base
+  git -C "$seed" push -q origin HEAD
+  printf '%s\n' "$origin" >"$STUB_DIR/origin-path"
   printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key","ttyLogin":true}}' >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
-  bash_stub "$tools/gh" <<SH
-case "\$1 \$2" in
-  "repo clone") exec git clone -q "$origin" "\$4" ;;
+  bash_stub "$tools/gh" <<'SH'
+case "$1 $2" in
+  "repo clone") exec git clone -q "$(cat "$STUB_DIR/origin-path")" "$4" ;;
+  "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
+  "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
   "pr create") echo https://github.com/dryvist/nix-ai/pull/7 ;;
   *) exit 1 ;;
 esac
@@ -818,33 +825,84 @@ SH
 printf '%s\n' "\$@" >"\$STUB_DIR/gitleaks-argv"
 exit $2
 SH
+}
+
+# run_publish <run id> [NAME=value...]: the entrypoint in a terminal session.
+run_publish() {
+  local id=$1
+  shift
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_DRAFT=1 "$@" \
+    bash -euo pipefail "$ENTRYPOINT"
+}
+
+@test "the run's commits publish as one API-created commit and a draft PR, never a push" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin head
+  publish_fixture signed 0
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git rm -q old-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -eq 0 ]
+  head=$(git -C "$origin" rev-parse HEAD)
+  grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
+  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
+  jq -e --arg h "$head" '.variables.input |
+    .branch == {repositoryNameWithOwner: "dryvist/nix-ai", branchName: "agent/zcode/j-1"} and
+    .expectedHeadOid == $h and
+    .fileChanges.additions == [{path: "tool-file", contents: "Y2hhbmdlCg=="}] and
+    .fileChanges.deletions == [{path: "old-file"}] and
+    .message.body == "- tool commit"' "$STUB_DIR/graphql.json"
+  run ! git -C "$origin" rev-parse --verify -q refs/heads/agent/zcode/j-1
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "a gitleaks finding in a tool-made commit stops the publish" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture blocked 1
   bash_stub "$tools/zcode" <<'SH'
 echo change >tool-file
 git add tool-file
 git commit -q -m "tool commit"
 SH
-}
-
-@test "commits the tool made itself are scanned and pushed as a draft PR" {
-  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home tools origin
-  publish_fixture pushed 0
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID=j-1 AGENT_PR_DRAFT=1 \
-    bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-  grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
-  [ "$(git -C "$origin" log --format=%s -1 agent/zcode/j-1)" = "tool commit" ]
-  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
-}
-
-@test "a gitleaks finding in a tool-made commit stops the push" {
-  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home tools origin
-  publish_fixture blocked 1
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID=j-2 \
-    bash -euo pipefail "$ENTRYPOINT"
+  run_publish j-2
   [ "$status" -eq 65 ]
-  run ! git -C "$origin" rev-parse --verify -q agent/zcode/j-2
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "a file mode change is refused before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture mode 0
+  bash_stub "$tools/zcode" <<'SH'
+chmod +x old-file
+git commit -q -am "make it executable"
+SH
+  run_publish j-3
+  [ "$status" -eq 1 ]
+  [[ $output == *"old-file changes a file mode or symlink (100644 -> 100755)"* ]]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "a change over the publish size limit fails whole, before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture size 0
+  bash_stub "$tools/zcode" <<'SH'
+head -c 4096 /dev/zero >big-file
+git add big-file
+git commit -q -m "big"
+SH
+  run_publish j-4 AGENT_PUBLISH_MAX_BYTES=1024
+  [ "$status" -eq 1 ]
+  [[ $output == *"larger than 1024 bytes encoded; nothing was published"* ]]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
 }

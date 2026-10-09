@@ -247,6 +247,84 @@ fi
 
 # --- Publish ---------------------------------------------------------------
 # The branch/PR is the only durable output; the container is destroyed.
+#
+# Every branch requires signed commits, so the run's tree reaches origin as
+# one commit created through the GitHub API (createCommitOnBranch), which
+# GitHub signs for the job's App token. Local commits are never pushed.
+# The mutation is all-or-nothing, and both limits are checked before anything
+# reaches origin:
+# ponytail: contents only. A change to a file mode or a symlink is refused,
+# since the API would silently drop it; upgrade to the REST git-data API
+# (blobs and a tree with modes) once its commits are confirmed signed.
+# ponytail: one request carries the whole diff, capped at
+# AGENT_PUBLISH_MAX_BYTES of encoded contents (default 8 MiB); upgrade to
+# several chained commits if real runs need more.
+signed_push() {
+  local remote_head="" exists=0 created=0 tmp meta path old new kind query
+  local max="${AGENT_PUBLISH_MAX_BYTES:-8388608}"
+  if remote_head="$(git ls-remote --exit-code origin "refs/heads/${branch}" | cut -f1)"; then
+    exists=1
+    git fetch -q origin "${branch}"
+  else
+    remote_head="$(git rev-parse origin/HEAD)"
+  fi
+  tmp="$(mktemp -d)"
+  : >"${tmp}/changes"
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    read -r old new _ _ kind <<<"${meta#:}"
+    case "${old}:${new}" in
+      100644:100644 | 000000:100644 | 100644:000000) ;;
+      *)
+        echo "agent-entrypoint: ${path} changes a file mode or symlink (${old} -> ${new}); the signed publish carries contents only." >&2
+        rm -rf "${tmp}"
+        return 1
+        ;;
+    esac
+    if [ "${kind}" = D ]; then
+      jq -cn --arg p "${path}" '{deletion: {path: $p}}'
+    else
+      base64 -w0 <"${path}" >"${tmp}/contents"
+      jq -cn --arg p "${path}" --rawfile c "${tmp}/contents" '{addition: {path: $p, contents: $c}}'
+    fi >>"${tmp}/changes"
+  done < <(git diff -z --raw --no-renames "${remote_head}" HEAD)
+  if [ ! -s "${tmp}/changes" ]; then
+    rm -rf "${tmp}"
+    return 0
+  fi
+  if [ "$(wc -c <"${tmp}/changes")" -gt "${max}" ]; then
+    echo "agent-entrypoint: the change is larger than ${max} bytes encoded; nothing was published." >&2
+    rm -rf "${tmp}"
+    return 1
+  fi
+  query="mutation(\$input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: \$input) { commit { oid } } }"
+  jq -s --arg q "${query}" --arg repo "${AGENT_REPO}" --arg br "${branch}" --arg oid "${remote_head}" \
+    --arg h "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
+    --arg b "$(git log --reverse --format='- %s' "${base}..HEAD")" \
+    '{query: $q, variables: {input: {
+      branch: {repositoryNameWithOwner: $repo, branchName: $br},
+      message: {headline: $h, body: $b},
+      expectedHeadOid: $oid,
+      fileChanges: {additions: [.[].addition | select(.)], deletions: [.[].deletion | select(.)]}}}}' \
+    "${tmp}/changes" >"${tmp}/request.json"
+  if [ "${exists}" = 0 ]; then
+    gh api "repos/${AGENT_REPO}/git/refs" -f "ref=refs/heads/${branch}" \
+      -f "sha=${remote_head}" >/dev/null || {
+      rm -rf "${tmp}"
+      return 1
+    }
+    created=1
+  fi
+  if ! gh api graphql --input "${tmp}/request.json" --jq .data.createCommitOnBranch.commit.oid >/dev/null; then
+    # No partial commit exists; drop a branch this run created.
+    if [ "${created}" = 1 ]; then
+      gh api -X DELETE "repos/${AGENT_REPO}/git/refs/heads/${branch}" >/dev/null 2>&1 || true
+    fi
+    rm -rf "${tmp}"
+    return 1
+  fi
+  rm -rf "${tmp}"
+}
+
 # Only this step writes the PR URL file agent-dispatch reads, so anything the
 # tool left at that path is removed first.
 pr_file="${workdir}/.agent-pr-url"
@@ -261,7 +339,7 @@ ${AGENT_PROMPT:+Prompt: ${AGENT_PROMPT}
 
 }Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
 fi
-# Commits the tool made itself are published too. Before any push, gitleaks
+# Commits the tool made itself are published too. Before publishing, gitleaks
 # scans every new commit (redacted output). Any finding, or a scanner error
 # or missing binary, aborts before anything reaches origin.
 if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
@@ -269,8 +347,11 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
     exit 65
   fi
-  git push -u origin "${branch}"
-  if url="$(gh pr create "${draft[@]}" \
+  if ! signed_push; then
+    echo "agent-entrypoint: publishing ${branch} failed." >&2
+    exit 1
+  fi
+  if url="$(gh pr create "${draft[@]}" --head "${branch}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 
@@ -288,7 +369,7 @@ ${AGENT_PROMPT:-}
     # A continued run pushes to the branch of the PR it already opened.
     printf '%s\n' "${url}" | tee "${pr_file}"
   else
-    echo "agent-entrypoint: PR creation failed; branch ${branch} was pushed." >&2
+    echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
   fi
 fi
 
