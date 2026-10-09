@@ -126,6 +126,7 @@ agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
 agent-dispatch cancel <job-id>
 agent-dispatch refresh
+agent-dispatch check
 ```
 
 - **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
@@ -146,6 +147,10 @@ agent-dispatch refresh
 - **`continue`** starts a new container on the same workspace and branch.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
+- **`check`** logs in once and revokes the token. When the login fails, or a
+  credential file is missing, it posts the same login alert a job would and
+  exits 1. Run it from a timer so a broken credential shows up before a job
+  needs it. It is not reachable over SSH.
 - **`--tty`** runs the job on the caller's terminal (`ssh -t`, verb `tty`).
   The container gets a TTY and runs the tool's own interactive session with no
   prompt. When the tool exits, the run publishes like a batch run. A tool whose
