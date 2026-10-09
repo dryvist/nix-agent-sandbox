@@ -96,10 +96,11 @@ let
 
   # Bake every autonomous config from the single nix-ai source. The attrset
   # is path -> contents, so a new tool config added upstream lands here
-  # without changes.
-  autonomousFiles = builtins.removeAttrs renderAutonomous.files [
-    ".config/opencode/opencode.json"
-  ];
+  # without changes. The ZCode router provider template is filled with the
+  # router URL and key by the entrypoint at run time.
+  autonomousFiles = renderAutonomous.files // {
+    ".agent-zcode-router.json" = renderAutonomous.zcodeRouterProviderConfigJson;
+  };
 
   configFiles = lib.mapAttrsToList (
     path: contents: writeTextDir "${lib.removePrefix "/" homeDir}/${path}" contents

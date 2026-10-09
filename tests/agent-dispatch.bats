@@ -77,6 +77,13 @@ no_secret_on_a_command_line() {
 }
 
 # http_rec <method url>: the stub record prefix of the last such request.
+# The ZCode router provider template the image bakes from nix-ai.
+zcode_router_template() {
+  printf '%s\n' '{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[{"providerId":"router",
+    "config":{"access":{"type":"api-key","apiKey":null},"api":{"type":"openai-chat-completions","baseUrl":null}}}]},
+    "defaultModelSelection":{"providerId":"router","modelId":"auto"}}}' >"$1/.agent-zcode-router.json"
+}
+
 http_rec() {
   local f last=""
   for f in "$STUB_DIR"/http.*.req; do
@@ -637,6 +644,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
+  zcode_router_template "$home"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
@@ -678,11 +686,15 @@ SH
   printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=zcode-router-test-key' >"$home/.agent-env"
+  zcode_router_template "$home"
   bash_stub "$tools/zcode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/zcode-argv"
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = zcode-router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+cp "$HOME/.zcode/v2/provider_config.json" "$STUB_DIR/zcode-provider"
+stat -c %a "$HOME/.zcode/v2/provider_config.json" 2>/dev/null >"$STUB_DIR/zcode-provider-mode" ||
+  stat -f %Lp "$HOME/.zcode/v2/provider_config.json" >"$STUB_DIR/zcode-provider-mode"
 SH
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -691,6 +703,11 @@ SH
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
+  jq -e '.config.providerConfigRules.providerRules[0].config ==
+    {access: {type: "api-key", apiKey: "zcode-router-test-key"},
+     api: {type: "openai-chat-completions", baseUrl: "https://router.test/v1"}}
+    and .config.defaultModelSelection.modelId == "auto"' "$STUB_DIR/zcode-provider"
+  [ "$(cat "$STUB_DIR/zcode-provider-mode")" = 600 ]
 }
 
 @test "Qwen Code batch uses the routed OpenAI-compatible endpoint in YOLO mode" {

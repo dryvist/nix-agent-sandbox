@@ -216,6 +216,15 @@ case "${AGENT_TOOL}" in
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
     ;;
   zcode)
+    # ZCode reads no env references: fill the router URL and key into its
+    # personal provider file (shape from nix-ai) before the run.
+    mkdir -p "${HOME}/.zcode/v2"
+    (
+      umask 077
+      jq '.config.providerConfigRules.providerRules[0].config |=
+          (.api.baseUrl = env.AGENT_ROUTER_BASE_URL | .access.apiKey = env.AGENT_ROUTER_KEY)' \
+        "${HOME}/.agent-zcode-router.json" >"${HOME}/.zcode/v2/provider_config.json"
+    )
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode)
