@@ -32,7 +32,6 @@ setup() {
   export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
-  export AGENT_DISPATCH_INGRESS_DOMAIN=agents.test
 }
 
 dispatch() { "$AGENT_DISPATCH_BIN/agent-dispatch" "$@"; }
@@ -117,6 +116,10 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     "start zcode dryvist do it"
     "start --interactive cursor-agent dryvist/nix-ai do it"
     "start --interactive"
+    "start --interactive zcode dryvist/nix-ai do it"
+    "start --tty zcode dryvist/nix-ai"
+    "tty zcode dryvist/nix-ai"
+    "tty"
     "start zcode dryvist/nix-ai $long"
     "start zcode dryvist/nix-ai $(printf 'colour \033[31m red')"
     "start zcode dryvist/nix-ai $(printf 'carriage\rreturn')"
@@ -164,7 +167,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
       -e)
         case "${a[i + 1]%%=*}" in
           HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | AGENT_TOOL | AGENT_PROFILE | \
-            AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_INTERACTIVE | AGENT_PORT) ;;
+            AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_TTY) ;;
           *)
             echo "unexpected -e ${a[i + 1]%%=*}" >&2
             return 1
@@ -209,7 +212,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 @test "profiles without routerKeyField receive neither router variable" {
   local dispatcher env_data
   dispatcher=$(make_no_router_dispatcher)
-  run --separate-stderr "$dispatcher" start zcode dryvist/nix-ai "do the thing"
+  run --separate-stderr "$dispatcher" start --tty zcode dryvist/nix-ai
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [[ ! $env_data =~ AGENT_ROUTER_BASE_URL|AGENT_ROUTER_KEY ]]
@@ -218,7 +221,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
 @test "each routed tool receives its named router key field" {
   local tool n=0 expected env_data
-  for tool in zcode opencode cursor-agent; do
+  for tool in zcode opencode; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -226,7 +229,6 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     case "$tool" in
       zcode) expected=zcode-router-secret-value ;;
       opencode) expected=opencode-router-secret-value ;;
-      cursor-agent) expected=cursor-router-secret-value ;;
     esac
     grep -qx "AGENT_ROUTER_KEY=$expected" <<<"$env_data"
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
@@ -305,14 +307,12 @@ scope_refused() {
   unset STUB_LOGIN_FAIL
 }
 
-@test "Cursor dispatch does not require a Cursor API key" {
+@test "a batch job for a login-only tool is refused before any side effect" {
   run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
-  [ "$status" -eq 0 ]
-  local env_data
-  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
-  [[ ! $env_data =~ ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
-  grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
-  grep -qx 'AGENT_ROUTER_KEY=cursor-router-secret-value' <<<"$env_data"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"cursor-agent runs only as a terminal session"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
 }
 
 @test "the waiter keeps the job token in memory and revokes it when pruned" {
@@ -382,36 +382,62 @@ pr: $pr" ]
   run ! grep -rq 'ignore previous' "$STUB_DIR"/http.*.body
 }
 
-@test "--interactive serves a web session behind the ingress labels" {
-  local id web
-  run --separate-stderr dispatch start --interactive zcode dryvist/nix-ai "hello"
-  [ "$status" -eq 0 ]
-  id=$(jq -r .job <<<"$output")
-  web=$(jq -r .web_token <<<"$output")
-  [[ $web =~ ^[0-9a-f]{48}$ ]]
-  [ "$(jq -r .ingress <<<"$output")" = "https://$id.agents.test" ]
-  create_args 1
-  has_pair -e AGENT_INTERACTIVE=1
-  has_pair -e AGENT_PORT=8080
-  has_pair --label traefik.enable=true
-  has_pair --label traefik.docker.network=agents-ingress
-  has_pair --label "traefik.http.routers.agent-$id.rule=Host(\`$id.agents.test\`)"
-  has_pair --label "traefik.http.services.agent-$id.loadbalancer.server.port=8080"
-  grep -qx 'docker network connect agents-ingress cid0123' "$STUB_DIR/argv.log"
-  tar -xOf "$STUB_DIR/cp.1.tar" .agent-env | grep -qx "AGENT_WEB_TOKEN=$web"
-  run ! grep -qF "$web" "$STUB_DIR/argv.log"
-  run ! grep -rqF "$web" "$AGENT_DISPATCH_STATE_DIR"
-  run --separate-stderr dispatch status "$id"
-  [ "$(jq -r 'has("web_token")' <<<"$output")" = false ]
-  run --separate-stderr dispatch continue "$id" "more"
-  [ "$status" -eq 64 ]
+@test "a private repository is refused after the mint and its token is revoked" {
+  export STUB_REPO_PRIVATE=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "private or unknown repository refused: dryvist/nix-ai" ]
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  http_rec "DELETE https://api.github.com/installation/token" >/dev/null
+  grep -qx 'Authorization: Bearer ghs_minted_secret' "$(http_rec "GET https://api.github.com/repos/dryvist/nix-ai").hdr"
+  no_secret_on_a_command_line
 }
 
-@test "--interactive needs an ingress domain" {
-  unset AGENT_DISPATCH_INGRESS_DOMAIN
-  run --separate-stderr dispatch start --interactive opencode dryvist/nix-ai "hello"
+@test "a default branch without a pull-request rule is refused and the token revoked" {
+  export STUB_BRANCH_UNPROTECTED=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "default branch of dryvist/nix-ai does not require a pull request" ]
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  http_rec "GET https://api.github.com/repos/dryvist/nix-ai/rules/branches/main" >/dev/null
+  http_rec "DELETE https://api.github.com/installation/token" >/dev/null
+  no_secret_on_a_command_line
+}
+
+@test "--tty attaches a terminal job; login tools get no router key or provider key" {
+  local id env_data tool n=0
+  for tool in zcode opencode cursor-agent; do
+    n=$((n + 1))
+    : >"$STUB_DIR/calls.log"
+    run --separate-stderr dispatch start --tty "$tool" dryvist/nix-ai
+    [ "$status" -eq 0 ]
+    id=$(jq -r .job <<<"$output")
+    [ "$(jq -r .tty <<<"$(dispatch status "$id")")" = true ]
+    create_args "$n"
+    has_pair -e AGENT_TTY=1
+    has_pair --interactive --tty
+    env_data=$(tar -xOf "$STUB_DIR/cp.$n.tar" .agent-env)
+    [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' GH_TOKEN GITHUB_TOKEN | sort)" ]
+    [ "$(tar -xOf "$STUB_DIR/cp.$n.tar" .agent-prompt)" = "" ]
+    [ "$(line_of 'docker start')" -lt "$(line_of 'docker attach')" ]
+    grep -q '^docker attach --detach-keys .* cid0123$' "$STUB_DIR/argv.log"
+  done
+  run ! grep -q 'docker kill' "$STUB_DIR/calls.log"
+  run --separate-stderr dispatch continue "$id" "more"
   [ "$status" -eq 64 ]
-  [ ! -s "$STUB_DIR/argv.log" ]
+  no_secret_on_a_command_line
+}
+
+@test "--tty takes no prompt; a session that ends early kills the container" {
+  local id
+  run --separate-stderr dispatch start --tty zcode dryvist/nix-ai "a prompt"
+  [ "$status" -eq 64 ]
+  export STUB_NO_WAITER=1 STUB_RUNNING=true
+  run --separate-stderr dispatch start --tty zcode dryvist/nix-ai
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  grep -qx 'docker kill cid0123' "$STUB_DIR/argv.log"
+  [ -e "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/cancel" ]
 }
 
 # run_state <job-json>: the job's state after the waiter finished.
@@ -741,4 +767,142 @@ SH
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 64 ]
   [[ $output == *"unsupported name in ZCode service environment file"* ]]
+}
+
+@test "a terminal session runs the tool with no prompt and, for login tools, no router key" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/tty-home" tools="$BATS_TEST_TMPDIR/tty-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key","ttyLogin":true}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+printf '%s\n' "$#" >"$STUB_DIR/zcode-argc"
+test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_TTY=1 bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/zcode-argc")" = 0 ]
+
+  # Without the terminal flag the same profile still needs its router key.
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT=x bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
+}
+
+# publish_fixture <name> <gitleaks exit>: an origin holding old-file, and gh
+# and gitleaks stubs; sets $home $tools $origin. Each test writes its zcode
+# stub.
+publish_fixture() {
+  home="$BATS_TEST_TMPDIR/$1-home" tools="$BATS_TEST_TMPDIR/$1-tools" origin="$BATS_TEST_TMPDIR/$1-origin.git"
+  local seed="$BATS_TEST_TMPDIR/$1-seed"
+  mkdir -p "$home" "$tools"
+  git init -q --bare "$origin"
+  git clone -q "$origin" "$seed" 2>/dev/null
+  echo old >"$seed/old-file"
+  git -C "$seed" add old-file
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m base
+  git -C "$seed" push -q origin HEAD
+  printf '%s\n' "$origin" >"$STUB_DIR/origin-path"
+  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key","ttyLogin":true}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/gh" <<'SH'
+case "$1 $2" in
+  "repo clone") exec git clone -q "$(cat "$STUB_DIR/origin-path")" "$4" ;;
+  "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
+  "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
+  "pr create") echo https://github.com/dryvist/nix-ai/pull/7 ;;
+  *) exit 1 ;;
+esac
+SH
+  bash_stub "$tools/gitleaks" <<SH
+printf '%s\n' "\$@" >"\$STUB_DIR/gitleaks-argv"
+exit $2
+SH
+}
+
+# run_publish <run id> [NAME=value...]: the entrypoint in a terminal session.
+run_publish() {
+  local id=$1
+  shift
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_DRAFT=1 "$@" \
+    bash -euo pipefail "$ENTRYPOINT"
+}
+
+@test "the run's commits publish as one API-created commit and a draft PR, never a push" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin head
+  publish_fixture signed 0
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git rm -q old-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -eq 0 ]
+  head=$(git -C "$origin" rev-parse HEAD)
+  grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
+  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
+  jq -e --arg h "$head" '.variables.input |
+    .branch == {repositoryNameWithOwner: "dryvist/nix-ai", branchName: "agent/zcode/j-1"} and
+    .expectedHeadOid == $h and
+    .fileChanges.additions == [{path: "tool-file", contents: "Y2hhbmdlCg=="}] and
+    .fileChanges.deletions == [{path: "old-file"}] and
+    .message.body == "- tool commit"' "$STUB_DIR/graphql.json"
+  run ! git -C "$origin" rev-parse --verify -q refs/heads/agent/zcode/j-1
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "a gitleaks finding in a tool-made commit stops the publish" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture blocked 1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-2
+  [ "$status" -eq 65 ]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "a file mode change is refused before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture mode 0
+  bash_stub "$tools/zcode" <<'SH'
+chmod +x old-file
+git commit -q -am "make it executable"
+SH
+  run_publish j-3
+  [ "$status" -eq 1 ]
+  [[ $output == *"old-file changes a file mode or symlink (100644 -> 100755)"* ]]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "a change over the publish size limit fails whole, before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture size 0
+  bash_stub "$tools/zcode" <<'SH'
+head -c 4096 /dev/zero >big-file
+git add big-file
+git commit -q -m "big"
+SH
+  run_publish j-4 AGENT_PUBLISH_MAX_BYTES=1024
+  [ "$status" -eq 1 ]
+  [[ $output == *"larger than 1024 bytes encoded; nothing was published"* ]]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
 }

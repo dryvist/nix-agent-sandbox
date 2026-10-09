@@ -110,6 +110,7 @@
                 nativeBuildInputs = with pkgs; [
                   bats
                   coreutils
+                  git
                   gnutar
                   jq
                 ];
@@ -172,15 +173,17 @@
                 EOF
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  .zcode.env == [] and .zcode.routerKeyField == "zcode_router_key" and
-                  .opencode.env == [] and .opencode.routerKeyField == "opencode_router_key" and
+                  .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
+                  .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .["cursor-agent"].env == [] and
-                  .["cursor-agent"].routerKeyField == "cursor_router_key" and
+                  (.["cursor-agent"] | has("routerKeyField") | not) and
+                  ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '
                   .zai == ["api.z.ai", "cdn-zcode.z.ai", "chat.z.ai", "zcode.z.ai"] and
                   .cursorAgent == [".cursor.sh", ".cursorapi.com"] and
+                  .opencode == ["opencode.ai"] and
                   ([.modelApis[] | select(test("gemini|google"; "i"))] | length) == 0
                 ' egress.json >/dev/null
                 touch $out

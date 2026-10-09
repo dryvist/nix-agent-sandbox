@@ -120,7 +120,8 @@ container plus one named Docker volume, `agent-job-<id>`, mounted at
 `/home/agent/work`. Each verb prints one JSON object.
 
 ```sh
-agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+agent-dispatch start <tool> <owner/repo> <prompt>
+agent-dispatch start --tty <tool> <owner/repo>
 agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
 agent-dispatch cancel <job-id>
@@ -128,16 +129,30 @@ agent-dispatch refresh
 ```
 
 - **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
-  hex digits.
-- **Output**: the container pushes `agent/<tool>/<job-id>` and opens a draft
-  PR. The dispatcher records the PR URL only when it points at the job's repo.
+  hex digits. A batch job needs a credential that works without a person, so
+  `cursor-agent` runs only with `--tty`.
+- **Repositories**: public only, and the default branch must have an active
+  ruleset that requires a pull request. After the mint, the dispatcher checks
+  both with the job's token. It refuses any other repository and revokes that
+  token. Classic branch protection is not readable with the job token and
+  does not count.
+- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
+  PR. Every branch requires signed commits, so the run's tree reaches GitHub as
+  one commit created through the API (`createCommitOnBranch`), which GitHub
+  signs. That carries file contents only: a change to a file mode or a symlink
+  is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES` encoded
+  (default 8 MiB) fails whole. The dispatcher records the PR URL only when it
+  points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
-- **`--interactive`** (zcode, opencode) serves the tool's web session on
-  port 8080 inside the container. The container also joins the ingress
-  network and carries Traefik labels for `https://<job-id>.<AGENT_DISPATCH_INGRESS_DOMAIN>`.
-  `start` prints that address and a web token once.
+- **`--tty`** runs the job on the caller's terminal (`ssh -t`, verb `tty`).
+  The container gets a TTY and runs the tool's own interactive session with no
+  prompt. When the tool exits, the run publishes like a batch run. A tool whose
+  profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
+  inside the session and gets no router key. A hang-up or detach kills the
+  container and the run settles as cancelled. A terminal job has no
+  `continue`.
 - **Results**: each finished run posts a fixed six-line result (job, tool,
   repo, state, PR URL, duration) to a Vikunja project and an ntfy topic. No
   model output goes into it.
@@ -151,7 +166,8 @@ the Web UI. A controller's own cancellation or timeout state takes precedence
 over a native task's terminal outcome.
 
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
-reads `SSH_ORIGINAL_COMMAND` and accepts only the five verbs. It passes each
+reads `SSH_ORIGINAL_COMMAND` and accepts only the six verbs. `tty` is refused
+without a terminal, so the entry needs the `pty` option. It passes each
 word to `agent-dispatch` as its own argument, and the prompt is the rest of
 the line. No shell evaluates the line, and `agent-dispatch` validates every
 value: the tool allowlist, the `owner/repo` pattern, the job-id pattern and
@@ -181,9 +197,6 @@ the container.
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
-| `AGENT_DISPATCH_INGRESS_DOMAIN` | parent domain of interactive sessions; required for `--interactive` |
-| `AGENT_DISPATCH_INGRESS_NETWORK` | Docker network shared with the ingress proxy (default `agents-ingress`) |
-| `AGENT_DISPATCH_INGRESS_MIDDLEWARES` | Traefik middlewares for the session route (optional) |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
@@ -200,8 +213,8 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
 | `AGENT_PR_DRAFT=1` | open the PR as a draft |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
-| `AGENT_INTERACTIVE=1`, `AGENT_PORT` | serve the web session on that port |
-| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, optional router values and, for `--interactive`, `AGENT_WEB_TOKEN` |
+| `AGENT_TTY=1` | run the tool's own interactive session on the attached terminal |
+| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, and optional router values |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
 
@@ -212,8 +225,9 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
   `--pids-limit`), hardened (`--security-opt no-new-privileges`,
   `--cap-drop ALL`), and wall-clock-bounded (`AGENT_TIMEOUT`, default 3600s,
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
-- **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
-  staged diff and aborts the commit/push (redacted output) on a finding.
+- **Secret egress**: before publishing, the entrypoint runs `gitleaks` on every
+  new commit of the run, including commits the tool made itself, and stops
+  (redacted output) on a finding.
 - **Session and event records**: a `--host` run bind-mounts a per-run host
   spool dir onto the Claude and Codex session subdirs (`~/.claude/projects`,
   `~/.codex/sessions`) and the ZCode CLI event log dir (`~/.zcode/cli/log`)
