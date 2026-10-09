@@ -120,7 +120,7 @@ container plus one named Docker volume, `agent-job-<id>`, mounted at
 `/home/agent/work`. Each verb prints one JSON object.
 
 ```sh
-agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+agent-dispatch start <tool> <owner/repo> <prompt>
 agent-dispatch start --tty <tool> <owner/repo>
 agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
@@ -139,10 +139,6 @@ agent-dispatch refresh
 - **`continue`** starts a new container on the same workspace and branch.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
-- **`--interactive`** (zcode, opencode) serves the tool's web session on
-  port 8080 inside the container. The container also joins the ingress
-  network and carries Traefik labels for `https://<job-id>.<AGENT_DISPATCH_INGRESS_DOMAIN>`.
-  `start` prints that address and a web token once.
 - **`--tty`** runs the job on the caller's terminal (`ssh -t`, verb `tty`).
   The container gets a TTY and runs the tool's own interactive session with no
   prompt. When the tool exits, the run publishes like a batch run. A tool whose
@@ -194,9 +190,6 @@ the container.
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
-| `AGENT_DISPATCH_INGRESS_DOMAIN` | parent domain of interactive sessions; required for `--interactive` |
-| `AGENT_DISPATCH_INGRESS_NETWORK` | Docker network shared with the ingress proxy (default `agents-ingress`) |
-| `AGENT_DISPATCH_INGRESS_MIDDLEWARES` | Traefik middlewares for the session route (optional) |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
@@ -213,8 +206,8 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
 | `AGENT_PR_DRAFT=1` | open the PR as a draft |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
-| `AGENT_INTERACTIVE=1`, `AGENT_PORT` | serve the web session on that port |
-| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, optional router values and, for `--interactive`, `AGENT_WEB_TOKEN` |
+| `AGENT_TTY=1` | run the tool's own interactive session on the attached terminal |
+| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, and optional router values |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
 

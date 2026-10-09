@@ -4,7 +4,7 @@
 # named Docker volume, `agent-job-<id>`, mounted at /home/agent/work as its
 # workspace. Every verb prints one JSON object on stdout.
 #
-#   start [--interactive] <tool> <owner/repo> <prompt>
+#   start <tool> <owner/repo> <prompt>
 #   start --tty <tool> <owner/repo>
 #   continue <job-id> <message>
 #   status <job-id>
@@ -32,7 +32,6 @@ STATE_DIR="${AGENT_DISPATCH_STATE_DIR:-/var/lib/agent-dispatch}"
 APPROLE_DIR="${AGENT_DISPATCH_APPROLE_DIR:-/etc/agent-dispatch/approle}"
 BUCKET=secret/data/apps/open-llm
 GITHUB_API=https://api.github.com
-WEB_PORT=8080 # in-container port of an interactive web session
 MAX_TEXT=16384
 JOB_MANAGER=0
 JOB_TOKEN_TTL=0
@@ -41,15 +40,14 @@ JOB_ENDED=0
 usage() {
   cat >&2 <<'EOF'
 usage:
-  agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+  agent-dispatch start <tool> <owner/repo> <prompt>
   agent-dispatch start --tty <tool> <owner/repo>
   agent-dispatch continue <job-id> <message>
   agent-dispatch status <job-id>
   agent-dispatch cancel <job-id>
   agent-dispatch refresh
 
-tools: zcode, opencode, cursor-agent (--interactive: zcode, opencode;
-       cursor-agent: --tty only)
+tools: zcode, opencode, cursor-agent (cursor-agent: --tty only)
 EOF
   exit 64
 }
@@ -63,13 +61,6 @@ refuse() {
 valid_tool() {
   case "$1" in
     zcode | opencode | cursor-agent) ;;
-    *) return 1 ;;
-  esac
-}
-
-web_tool() {
-  case "$1" in
-    zcode | opencode) ;;
     *) return 1 ;;
   esac
 }
@@ -319,11 +310,11 @@ abort_login() {
   job_json "$id"
 }
 
-# container_args <id> <run> <tool> <repo> <interactive> <continue> <tty>:
+# container_args <id> <run> <tool> <repo> <continue> <tty>:
 # the `docker create` arguments, into $args. Only non-secret values appear
 # here.
 container_args() {
-  local proxy="${AGENT_PROXY_URL:-http://proxy:3128}" host router
+  local proxy="${AGENT_PROXY_URL:-http://proxy:3128}"
   args=(
     --name "agent-$1-$2"
     --label "agent-dispatch.job=$1"
@@ -344,29 +335,14 @@ container_args() {
     --security-opt no-new-privileges
     --cap-drop ALL
   )
-  if [ "$6" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
-  if [ "$7" = 1 ]; then args+=(--interactive --tty -e AGENT_TTY=1); fi
-  if [ "$5" = 1 ]; then
-    host="$1.$AGENT_DISPATCH_INGRESS_DOMAIN"
-    router="agent-$1"
-    args+=(
-      -e AGENT_INTERACTIVE=1
-      -e "AGENT_PORT=$WEB_PORT"
-      --label traefik.enable=true
-      --label "traefik.docker.network=${AGENT_DISPATCH_INGRESS_NETWORK:-agents-ingress}"
-      --label "traefik.http.routers.$router.rule=Host(\`$host\`)"
-      --label "traefik.http.services.$router.loadbalancer.server.port=$WEB_PORT"
-    )
-    if [ -n "${AGENT_DISPATCH_INGRESS_MIDDLEWARES:-}" ]; then
-      args+=(--label "traefik.http.routers.$router.middlewares=$AGENT_DISPATCH_INGRESS_MIDDLEWARES")
-    fi
-  fi
+  if [ "$5" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
+  if [ "$6" = 1 ]; then args+=(--interactive --tty -e AGENT_TTY=1); fi
   args+=("$IMAGE")
 }
 
 # deliver <cid> <prompt>: the run's secrets (NAME=value lines) and prompt, as
 # files owned by the container's uid 1000, streamed in with `docker cp`.
-# Uses the caller's $names, $bucket, $gh, $web and optional router key.
+# Uses the caller's $names, $bucket, $gh and optional router key.
 deliver() {
   local tmp name value rc=0
   tmp=$(mktemp -d)
@@ -377,7 +353,6 @@ deliver() {
       [[ $value != *$'\n'* ]] || rc=1
       printf '%s=%s\n' "$name" "$value"
     done
-    if [ -n "$web" ]; then printf 'AGENT_WEB_TOKEN=%s\n' "$web"; fi
     if [ -n "$router_key" ]; then
       printf 'AGENT_ROUTER_BASE_URL=%s\nAGENT_ROUTER_KEY=%s\n' "$AGENT_ROUTER_BASE_URL" "$router_key"
     fi
@@ -396,12 +371,11 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo interactive tty cont=0 login tok lease bucket iid mint gh="" web="" budget cid name
+  local tool repo tty cont=0 login tok lease bucket iid mint gh="" budget cid name
   local router_key_field="" router_key="" login_rc reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
-  interactive=$(job_get "$id" 'if .interactive then 1 else 0 end')
   tty=$(job_get "$id" 'if .tty then 1 else 0 end')
   if [ "$run" != 1 ]; then cont=1; fi
   date +%s >"$rdir/started"
@@ -500,19 +474,12 @@ run_job() {
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"
   echo "$lease" >"$rdir/ttl"
-  container_args "$id" "$run" "$tool" "$repo" "$interactive" "$cont" "$tty"
+  container_args "$id" "$run" "$tool" "$repo" "$cont" "$tty"
   cid=$(docker create "${args[@]}") || {
     abort "$id" "$run" "container create failed" "$tok"
     return 1
   }
   echo "$cid" >"$rdir/cid"
-  if [ "$interactive" = 1 ]; then
-    web=$(rand_hex 24)
-    docker network connect "${AGENT_DISPATCH_INGRESS_NETWORK:-agents-ingress}" "$cid" >/dev/null || {
-      abort "$id" "$run" "ingress network connect failed" "$tok"
-      return 1
-    }
-  fi
   deliver "$cid" "$prompt" || {
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1
@@ -540,12 +507,7 @@ run_job() {
     abort "$id" "$run" "job manager start failed" "$tok"
     return 1
   fi
-  if [ -n "$web" ]; then
-    # Shown once, to this caller; stored nowhere on the host.
-    job_json "$id" | AGENT_WEB_TOKEN=$web jq -c '. + {web_token: env.AGENT_WEB_TOKEN}'
-  else
-    job_json "$id"
-  fi
+  job_json "$id"
 }
 
 # wait_run <id> <run> <token>: wait for one container and renew the in-memory
@@ -663,11 +625,8 @@ job_exists() {
 }
 
 cmd_start() {
-  local interactive=0 tty=0 tool repo prompt id dir ingress=""
-  if [ "${1:-}" = --interactive ]; then
-    interactive=1
-    shift
-  elif [ "${1:-}" = --tty ]; then
+  local tty=0 tool repo prompt id dir
+  if [ "${1:-}" = --tty ]; then
     tty=1
     shift
   fi
@@ -685,19 +644,13 @@ cmd_start() {
     jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
       <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
   fi
-  if [ "$interactive" = 1 ]; then
-    web_tool "$tool" || refuse "tool has no web session"
-    [ -n "${AGENT_DISPATCH_INGRESS_DOMAIN:-}" ] || refuse "--interactive needs AGENT_DISPATCH_INGRESS_DOMAIN"
-  fi
   id="j-$(rand_hex 8)"
   dir="$STATE_DIR/$id"
   mkdir -p "$STATE_DIR"
   mkdir "$dir"
   mkdir -p "$dir/runs/1"
-  if [ "$interactive" = 1 ]; then ingress="https://$id.$AGENT_DISPATCH_INGRESS_DOMAIN"; fi
   jq -n --arg job "$id" --arg tool "$tool" --arg repo "$repo" \
-    --argjson i "$interactive" --argjson t "$tty" --arg ingress "$ingress" \
-    '{job: $job, tool: $tool, repo: $repo, interactive: ($i == 1), tty: ($t == 1), ingress: $ingress}' \
+    --argjson t "$tty" '{job: $job, tool: $tool, repo: $repo, tty: ($t == 1)}' \
     >"$dir/job.json"
   run_job "$id" 1 "$prompt" || return 1
   if [ "$tty" = 1 ]; then attach "$id"; fi
@@ -728,9 +681,6 @@ cmd_continue() {
   valid_job "$id" || refuse "invalid job id"
   valid_text "$2" || refuse "invalid message"
   job_exists "$id"
-  if [ "$(job_get "$id" .interactive)" = true ]; then
-    refuse "an interactive job continues in its web session"
-  fi
   if [ "$(job_get "$id" .tty)" = true ]; then
     refuse "a terminal job ends with its session"
   fi

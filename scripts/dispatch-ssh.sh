@@ -4,7 +4,7 @@
 # SSH_ORIGINAL_COMMAND, accepts only these six verbs, and hands each word to
 # `agent-dispatch` as its own argument:
 #
-#   start [--interactive] <tool> <owner/repo> <prompt...>
+#   start <tool> <owner/repo> <prompt...>
 #   tty <tool> <owner/repo>        (only with a terminal: ssh -t)
 #   continue <job-id> <message...>
 #   status <job-id>
@@ -39,12 +39,7 @@ pop
 verb="$word"
 case "$verb" in
   start)
-    flags=()
     pop
-    if [ "$word" = --interactive ]; then
-      flags=(--interactive)
-      pop
-    fi
     # A flag in the tool position (start --tty ...) would bypass the
     # terminal check below.
     case "$word" in -*) refuse ;; esac
@@ -52,7 +47,7 @@ case "$verb" in
     pop
     repo="$word"
     trim
-    exec agent-dispatch start "${flags[@]}" "$tool" "$repo" "$line"
+    exec agent-dispatch start "$tool" "$repo" "$line"
     ;;
   tty)
     [ -t 0 ] && [ -t 1 ] || refuse

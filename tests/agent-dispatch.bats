@@ -32,7 +32,6 @@ setup() {
   export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
-  export AGENT_DISPATCH_INGRESS_DOMAIN=agents.test
 }
 
 dispatch() { "$AGENT_DISPATCH_BIN/agent-dispatch" "$@"; }
@@ -117,6 +116,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     "start zcode dryvist do it"
     "start --interactive cursor-agent dryvist/nix-ai do it"
     "start --interactive"
+    "start --interactive zcode dryvist/nix-ai do it"
     "start --tty zcode dryvist/nix-ai"
     "tty zcode dryvist/nix-ai"
     "tty"
@@ -167,8 +167,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
       -e)
         case "${a[i + 1]%%=*}" in
           HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | AGENT_TOOL | AGENT_PROFILE | \
-            AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_INTERACTIVE | AGENT_PORT | \
-            AGENT_TTY) ;;
+            AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | AGENT_CONTINUE | AGENT_TTY) ;;
           *)
             echo "unexpected -e ${a[i + 1]%%=*}" >&2
             return 1
@@ -383,31 +382,6 @@ pr: $pr" ]
   run ! grep -rq 'ignore previous' "$STUB_DIR"/http.*.body
 }
 
-@test "--interactive serves a web session behind the ingress labels" {
-  local id web
-  run --separate-stderr dispatch start --interactive zcode dryvist/nix-ai "hello"
-  [ "$status" -eq 0 ]
-  id=$(jq -r .job <<<"$output")
-  web=$(jq -r .web_token <<<"$output")
-  [[ $web =~ ^[0-9a-f]{48}$ ]]
-  [ "$(jq -r .ingress <<<"$output")" = "https://$id.agents.test" ]
-  create_args 1
-  has_pair -e AGENT_INTERACTIVE=1
-  has_pair -e AGENT_PORT=8080
-  has_pair --label traefik.enable=true
-  has_pair --label traefik.docker.network=agents-ingress
-  has_pair --label "traefik.http.routers.agent-$id.rule=Host(\`$id.agents.test\`)"
-  has_pair --label "traefik.http.services.agent-$id.loadbalancer.server.port=8080"
-  grep -qx 'docker network connect agents-ingress cid0123' "$STUB_DIR/argv.log"
-  tar -xOf "$STUB_DIR/cp.1.tar" .agent-env | grep -qx "AGENT_WEB_TOKEN=$web"
-  run ! grep -qF "$web" "$STUB_DIR/argv.log"
-  run ! grep -rqF "$web" "$AGENT_DISPATCH_STATE_DIR"
-  run --separate-stderr dispatch status "$id"
-  [ "$(jq -r 'has("web_token")' <<<"$output")" = false ]
-  run --separate-stderr dispatch continue "$id" "more"
-  [ "$status" -eq 64 ]
-}
-
 @test "a private repository is refused after the mint and its token is revoked" {
   export STUB_REPO_PRIVATE=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
@@ -453,13 +427,6 @@ pr: $pr" ]
   id=$(jq -r .job <<<"$output")
   grep -qx 'docker kill cid0123' "$STUB_DIR/argv.log"
   [ -e "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/cancel" ]
-}
-
-@test "--interactive needs an ingress domain" {
-  unset AGENT_DISPATCH_INGRESS_DOMAIN
-  run --separate-stderr dispatch start --interactive opencode dryvist/nix-ai "hello"
-  [ "$status" -eq 64 ]
-  [ ! -s "$STUB_DIR/argv.log" ]
 }
 
 # run_state <job-json>: the job's state after the waiter finished.
