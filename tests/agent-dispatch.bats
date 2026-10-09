@@ -289,6 +289,27 @@ scope_refused() {
   [[ $stderr == *"required credential file is missing or unreadable"* ]]
   run ! grep -q '^docker' "$STUB_DIR/calls.log"
   run ! grep -q 'auth/approle/login' "$STUB_DIR/calls.log"
+  grep -qx 'reason: credential files are missing or unreadable' "$(http_rec "POST https://ntfy.test/ai-jobs").body"
+}
+
+@test "check logs in and revokes the token; a refusal alerts and exits non-zero" {
+  run --separate-stderr dispatch check
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"login":"ok"}' ]
+  grep -q 'revoke-self token=s.tok' "$STUB_DIR/calls.log"
+  run ! grep -q 'ntfy.test' "$STUB_DIR/calls.log"
+
+  export STUB_LOGIN_FAIL=1
+  run --separate-stderr dispatch check
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "invalid role or secret ID" ]
+  grep -qx 'reason: invalid role or secret ID' "$(http_rec "POST https://ntfy.test/ai-jobs").body"
+  unset STUB_LOGIN_FAIL
+
+  rm "$AGENT_DISPATCH_APPROLE_DIR/role_id"
+  run --separate-stderr dispatch check
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "credential files are missing or unreadable" ]
 }
 
 @test "a refused login posts one role-and-reason alert before any container" {

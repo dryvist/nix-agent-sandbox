@@ -10,6 +10,7 @@
 #   status <job-id>
 #   cancel <job-id>
 #   refresh
+#   check
 #
 # Each job uses one service token to read its profile and mint a GitHub token
 # for the job's repo. A host-side waiter holds it on stdin for notifications
@@ -47,6 +48,7 @@ usage:
   agent-dispatch status <job-id>
   agent-dispatch cancel <job-id>
   agent-dispatch refresh
+  agent-dispatch check
 
 tools: zcode, opencode, cursor-agent (cursor-agent: --tty only)
 EOF
@@ -108,6 +110,27 @@ bao_login() {
     --data-binary @<(ROLE_ID="$role_id" SECRET_ID="$secret_id" \
       jq -n '{role_id: env.ROLE_ID, secret_id: env.SECRET_ID}') \
     "${BAO_ADDR:?}/v1/auth/approle/login"
+}
+
+# service_login: one AppRole login into the caller's $login. On refusal it
+# sets the caller's $reason to a one-line cause and returns 1.
+service_login() {
+  local rc=0
+  login=$(bao_login) || rc=$?
+  if [ "$rc" -eq 64 ]; then
+    reason="credential files are missing or unreadable"
+  elif [ "$rc" -ne 0 ]; then
+    reason=$(jq -r '.errors[0] // empty' <<<"$login" 2>/dev/null || true)
+    reason=${reason//$'\n'/ }
+    reason=${reason//$'\r'/ }
+    reason=${reason:0:300}
+    [ -n "$reason" ] || reason="request failed"
+  elif [ -z "$(jq -r '.auth.client_token // empty' <<<"$login")" ]; then
+    reason="login returned no token"
+  else
+    return 0
+  fi
+  return 1
 }
 
 # bao_req <method> <path> <token> [json-body]
@@ -389,7 +412,7 @@ deliver() {
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
   local tool repo tty cont=0 login tok lease bucket iid mint gh="" budget cid name
-  local router_key_field="" router_key="" login_rc reason
+  local router_key_field="" router_key="" reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
@@ -399,30 +422,12 @@ run_job() {
   echo starting >"$rdir/state"
 
   if [ "$run" = 1 ]; then
-    if login=$(bao_login); then
-      :
-    else
-      login_rc=$?
-      if [ "$login_rc" -eq 64 ]; then
-        reason="credential files are missing or unreadable"
-        abort "$id" "$run" "$reason"
-        return 1
-      else
-        reason=$(jq -r '.errors[0] // empty' <<<"$login" 2>/dev/null || true)
-        reason=${reason//$'\n'/ }
-        reason=${reason//$'\r'/ }
-        reason=${reason:0:300}
-        [ -n "$reason" ] || reason="request failed"
-      fi
+    if ! service_login; then
       abort_login "$id" "$run" "$reason"
       return 1
     fi
-    tok=$(jq -r '.auth.client_token // empty' <<<"$login")
+    tok=$(jq -r '.auth.client_token' <<<"$login")
     lease=$(jq -r '.auth.lease_duration // 0' <<<"$login")
-    [ -n "$tok" ] || {
-      abort_login "$id" "$run" "login returned no token"
-      return 1
-    }
   else
     tok=${4:-}
     lease=$JOB_TOKEN_TTL
@@ -754,6 +759,19 @@ cmd_cancel() {
   job_json "$id" | jq -c '.state = "cancelling"'
 }
 
+# check: one login, then revoke, so a credential that stops working alerts
+# before a job needs it.
+cmd_check() {
+  local login reason
+  if ! service_login; then
+    notify_login_refused "$reason" || echo "agent-dispatch: check: login refusal alert incomplete" >&2
+    jq -cn --arg r "$reason" '{login: "refused", reason: $r}'
+    return 1
+  fi
+  bao_revoke "$(jq -r '.auth.client_token' <<<"$login")"
+  jq -cn '{login: "ok"}'
+}
+
 # refresh: settle runs whose waiter is gone, then prune finished jobs older
 # than AGENT_DISPATCH_RETENTION seconds (container, volume and state).
 cmd_refresh() {
@@ -819,6 +837,10 @@ case "$cmd" in
   refresh)
     [ $# -eq 0 ] || usage
     cmd_refresh
+    ;;
+  check)
+    [ $# -eq 0 ] || usage
+    cmd_check
     ;;
   __job)
     # Internal: the detached job manager run_job starts. Not reachable over SSH.
