@@ -5,6 +5,7 @@
 # workspace. Every verb prints one JSON object on stdout.
 #
 #   start [--interactive] <tool> <owner/repo> <prompt>
+#   start --tty <tool> <owner/repo>
 #   continue <job-id> <message>
 #   status <job-id>
 #   cancel <job-id>
@@ -17,6 +18,11 @@
 # The container receives the GitHub token, the selected profile values and
 # the prompt as files copied in with `docker cp` between create and start. It
 # never receives service credentials, a host path or the Docker socket.
+#
+# `--tty` runs the same job attached to the caller's terminal: the container
+# gets a TTY, and the dispatcher attaches to it after the waiter takes over.
+# A tool whose profile sets ttyLogin signs in by hand inside the session and
+# gets no router key. Only public repositories are accepted.
 
 export LC_ALL=C
 umask 077
@@ -36,12 +42,14 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+  agent-dispatch start --tty <tool> <owner/repo>
   agent-dispatch continue <job-id> <message>
   agent-dispatch status <job-id>
   agent-dispatch cancel <job-id>
   agent-dispatch refresh
 
-tools: zcode, opencode, cursor-agent (--interactive: zcode, opencode)
+tools: zcode, opencode, cursor-agent (--interactive: zcode, opencode;
+       cursor-agent: --tty only)
 EOF
   exit 64
 }
@@ -141,6 +149,22 @@ scope_ok() {
   jq -e --arg r "$2" '.total_count == 1 and
     (.repositories[0].full_name | ascii_downcase) == ($r | ascii_downcase)' \
     <<<"$resp" >/dev/null
+}
+
+# Only public repositories run here.
+repo_public() {
+  local resp
+  resp=$(curl -sS --fail-with-body --max-time 30 \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$1") \
+    "$GITHUB_API/repos/$2") || return 1
+  jq -e '.private == false and .visibility == "public"' <<<"$resp" >/dev/null
+}
+
+# A refused repository's token is revoked at once.
+gh_revoke() {
+  curl -sS --max-time 30 -o /dev/null -X DELETE \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$1") \
+    "$GITHUB_API/installation/token" >/dev/null 2>&1 || true
 }
 
 # --- Job state: $STATE_DIR/<id>/{job.json,pr_url,runs/<n>/...} ---
@@ -295,8 +319,9 @@ abort_login() {
   job_json "$id"
 }
 
-# container_args <id> <run> <tool> <repo> <interactive> <continue>: the
-# `docker create` arguments, into $args. Only non-secret values appear here.
+# container_args <id> <run> <tool> <repo> <interactive> <continue> <tty>:
+# the `docker create` arguments, into $args. Only non-secret values appear
+# here.
 container_args() {
   local proxy="${AGENT_PROXY_URL:-http://proxy:3128}" host router
   args=(
@@ -320,6 +345,7 @@ container_args() {
     --cap-drop ALL
   )
   if [ "$6" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
+  if [ "$7" = 1 ]; then args+=(--interactive --tty -e AGENT_TTY=1); fi
   if [ "$5" = 1 ]; then
     host="$1.$AGENT_DISPATCH_INGRESS_DOMAIN"
     router="agent-$1"
@@ -370,12 +396,13 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo interactive cont=0 login tok lease bucket iid mint gh="" web="" budget cid name
+  local tool repo interactive tty cont=0 login tok lease bucket iid mint gh="" web="" budget cid name
   local router_key_field="" router_key="" login_rc reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
   interactive=$(job_get "$id" 'if .interactive then 1 else 0 end')
+  tty=$(job_get "$id" 'if .tty then 1 else 0 end')
   if [ "$run" != 1 ]; then cont=1; fi
   date +%s >"$rdir/started"
   echo starting >"$rdir/state"
@@ -434,6 +461,9 @@ run_job() {
     }
   done
   router_key_field=$(jq -r --arg t "$tool" '.[$t].routerKeyField // empty' <<<"$AGENT_TASK_PROFILES")
+  if [ "$tty" = 1 ] && jq -e --arg t "$tool" '.[$t].ttyLogin == true' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
+    router_key_field=""
+  fi
   if [ -n "$router_key_field" ]; then
     router_key=$(field "$router_key_field")
     [ -n "$router_key" ] || {
@@ -457,14 +487,20 @@ run_job() {
   }
   gh=$(jq -r '.data.token // empty' <<<"$mint")
   if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
+    if [ -n "$gh" ]; then gh_revoke "$gh"; fi
     abort "$id" "$run" "github token is not scoped to exactly $repo" "$tok"
     return 1
   fi
+  repo_public "$gh" "$repo" || {
+    gh_revoke "$gh"
+    abort "$id" "$run" "private or unknown repository refused: $repo" "$tok"
+    return 1
+  }
 
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"
   echo "$lease" >"$rdir/ttl"
-  container_args "$id" "$run" "$tool" "$repo" "$interactive" "$cont"
+  container_args "$id" "$run" "$tool" "$repo" "$interactive" "$cont" "$tty"
   cid=$(docker create "${args[@]}") || {
     abort "$id" "$run" "container create failed" "$tok"
     return 1
@@ -627,16 +663,28 @@ job_exists() {
 }
 
 cmd_start() {
-  local interactive=0 tool repo prompt id dir ingress=""
+  local interactive=0 tty=0 tool repo prompt id dir ingress=""
   if [ "${1:-}" = --interactive ]; then
     interactive=1
     shift
+  elif [ "${1:-}" = --tty ]; then
+    tty=1
+    shift
   fi
-  [ $# -eq 3 ] || usage
-  tool=$1 repo=$2 prompt=$3
+  if [ "$tty" = 1 ]; then
+    [ $# -eq 2 ] || usage
+  else
+    [ $# -eq 3 ] || usage
+  fi
+  tool=$1 repo=$2 prompt=${3:-}
   valid_tool "$tool" || refuse "unknown tool"
   valid_repo "$repo" || refuse "invalid owner/repo"
-  valid_text "$prompt" || refuse "invalid prompt"
+  if [ "$tty" = 0 ]; then
+    valid_text "$prompt" || refuse "invalid prompt"
+    # A batch job needs a credential it can use without a person.
+    jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
+      <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
+  fi
   if [ "$interactive" = 1 ]; then
     web_tool "$tool" || refuse "tool has no web session"
     [ -n "${AGENT_DISPATCH_INGRESS_DOMAIN:-}" ] || refuse "--interactive needs AGENT_DISPATCH_INGRESS_DOMAIN"
@@ -648,10 +696,29 @@ cmd_start() {
   mkdir -p "$dir/runs/1"
   if [ "$interactive" = 1 ]; then ingress="https://$id.$AGENT_DISPATCH_INGRESS_DOMAIN"; fi
   jq -n --arg job "$id" --arg tool "$tool" --arg repo "$repo" \
-    --argjson i "$interactive" --arg ingress "$ingress" \
-    '{job: $job, tool: $tool, repo: $repo, interactive: ($i == 1), ingress: $ingress}' \
+    --argjson i "$interactive" --argjson t "$tty" --arg ingress "$ingress" \
+    '{job: $job, tool: $tool, repo: $repo, interactive: ($i == 1), tty: ($t == 1), ingress: $ingress}' \
     >"$dir/job.json"
-  run_job "$id" 1 "$prompt"
+  run_job "$id" 1 "$prompt" || return 1
+  if [ "$tty" = 1 ]; then attach "$id"; fi
+}
+
+# attach <id>: the caller's terminal joins the running container. The waiter
+# still owns the job. When the session ends early (hang-up or detach), the
+# container is killed and the run settles as cancelled.
+attach() {
+  local rdir="$STATE_DIR/$1/runs/1" cid
+  cid=$(cat "$rdir/cid")
+  trap 'end_session "$rdir" "$cid"; exit 0' HUP INT TERM
+  docker attach --detach-keys ctrl-^,ctrl-^ "$cid" || true
+  end_session "$rdir" "$cid"
+}
+
+end_session() {
+  if [ "$(docker inspect -f '{{.State.Running}}' "$2" 2>/dev/null)" = true ]; then
+    : >"$1/cancel"
+    docker kill "$2" >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_continue() {
@@ -663,6 +730,9 @@ cmd_continue() {
   job_exists "$id"
   if [ "$(job_get "$id" .interactive)" = true ]; then
     refuse "an interactive job continues in its web session"
+  fi
+  if [ "$(job_get "$id" .tty)" = true ]; then
+    refuse "a terminal job ends with its session"
   fi
   dir="$STATE_DIR/$id"
   last=$(latest_run "$id")

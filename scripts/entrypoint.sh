@@ -13,6 +13,8 @@
 #                     every variable it names must be set (the launcher
 #                     forwards them from the caller's environment)
 #   AGENT_PR_DRAFT=1  open the PR as a draft
+#   AGENT_TTY=1       run the tool's own interactive session on the attached
+#                     terminal; no prompt
 #   ~/.agent-env      optional NAME=value lines, exported (agent-dispatch)
 #   ~/.agent-prompt   optional file that sets AGENT_PROMPT (agent-dispatch)
 #   AGENT_SERVICE_ENV_FILE read-only ZCode service credentials file
@@ -134,7 +136,7 @@ case "${AGENT_TOOL}" in
     ;;
 esac
 
-if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ]; then
+if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ] && [ "${AGENT_TTY:-}" != 1 ]; then
   echo "agent-entrypoint: AGENT_PROMPT is required (or AGENT_SHELL=1)." >&2
   exit 64
 fi
@@ -157,7 +159,8 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
       exit 64
     }
   done < <(jq -r '.env[]' <<<"${profile}")
-  if jq -e 'has("routerKeyField")' <<<"${profile}" >/dev/null; then
+  if jq -e --arg tty "${AGENT_TTY:-}" \
+    'has("routerKeyField") and (($tty == "1" and .ttyLogin == true) | not)' <<<"${profile}" >/dev/null; then
     for var in AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY; do
       [ -n "${!var:-}" ] || {
         echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
@@ -169,6 +172,7 @@ fi
 
 # --- Workspace -------------------------------------------------------------
 branch=""
+base=""
 if [ -n "${AGENT_REPO:-}" ]; then
   branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
   if [ -d repo/.git ]; then
@@ -182,10 +186,20 @@ if [ -n "${AGENT_REPO:-}" ]; then
     git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
     git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
   fi
+  base="$(git rev-parse HEAD)"
 fi
 
 # --- Run -------------------------------------------------------------------
 status=0
+if [ "${AGENT_TTY:-}" = 1 ]; then
+  case "${AGENT_TOOL}" in
+    zcode | opencode | cursor-agent) "${AGENT_TOOL}" || status=$? ;;
+    *)
+      echo "agent-entrypoint: '${AGENT_TOOL}' has no terminal session" >&2
+      exit 64
+      ;;
+  esac
+else
 case "${AGENT_TOOL}" in
   claude)
     claude -p --dangerously-skip-permissions "${AGENT_PROMPT}" || status=$?
@@ -229,6 +243,7 @@ case "${AGENT_TOOL}" in
     exit 64
     ;;
 esac
+fi
 
 # --- Publish ---------------------------------------------------------------
 # The branch/PR is the only durable output; the container is destroyed.
@@ -240,20 +255,20 @@ draft=()
 [ "${AGENT_PR_DRAFT:-}" != 1 ] || draft=(--draft)
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
-  # Pre-push secret scan on exactly the staged diff (gitleaks is baked into
-  # the image). Redacted output only. Any finding — or a scanner error /
-  # missing binary (the `!` catches non-zero either way) — aborts before the
-  # commit reaches origin. `git --staged` is the current form of the
-  # deprecated `protect --staged`.
-  if ! gitleaks git --staged --redact --no-banner; then
-    echo "agent-entrypoint: gitleaks flagged the staged diff (or failed to run); refusing to commit/push." >&2
+  git commit -m "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}
+
+${AGENT_PROMPT:+Prompt: ${AGENT_PROMPT}
+
+}Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
+fi
+# Commits the tool made itself are published too. Before any push, gitleaks
+# scans every new commit (redacted output). Any finding, or a scanner error
+# or missing binary, aborts before anything reaches origin.
+if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
+  if ! gitleaks git --log-opts="${base}..HEAD" --redact --no-banner; then
+    echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
     exit 65
   fi
-  git commit -m "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}
-
-Prompt: ${AGENT_PROMPT}
-
-Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox autonomous run)"
   git push -u origin "${branch}"
   if url="$(gh pr create "${draft[@]}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
@@ -266,7 +281,7 @@ Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox autonomous run)"
 Prompt:
 
 \`\`\`
-${AGENT_PROMPT}
+${AGENT_PROMPT:-}
 \`\`\`")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
   elif url="$(gh pr view "${branch}" --json url --jq .url)"; then

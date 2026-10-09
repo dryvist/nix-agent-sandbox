@@ -76,6 +76,13 @@ case "$url" in
   */installation/repositories)
     resp="{\"total_count\":${STUB_SCOPE_COUNT:-1},\"repositories\":[{\"full_name\":\"${STUB_SCOPE_REPO:-dryvist/nix-ai}\"}]}"
     ;;
+  */repos/*)
+    if [ -n "${STUB_REPO_PRIVATE:-}" ]; then
+      resp='{"private":true,"visibility":"private"}'
+    else
+      resp='{"private":false,"visibility":"public"}'
+    fi
+    ;;
   *) resp='{}' ;;
 esac
 printf '%s\n' "$resp" >"$out"

@@ -121,6 +121,7 @@ container plus one named Docker volume, `agent-job-<id>`, mounted at
 
 ```sh
 agent-dispatch start [--interactive] <tool> <owner/repo> <prompt>
+agent-dispatch start --tty <tool> <owner/repo>
 agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
 agent-dispatch cancel <job-id>
@@ -128,7 +129,11 @@ agent-dispatch refresh
 ```
 
 - **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
-  hex digits.
+  hex digits. A batch job needs a credential that works without a person, so
+  `cursor-agent` runs only with `--tty`.
+- **Repositories**: public only. After the mint, the dispatcher reads the
+  repository with the job's token and refuses a private one. It then revokes
+  that token.
 - **Output**: the container pushes `agent/<tool>/<job-id>` and opens a draft
   PR. The dispatcher records the PR URL only when it points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.
@@ -138,6 +143,13 @@ agent-dispatch refresh
   port 8080 inside the container. The container also joins the ingress
   network and carries Traefik labels for `https://<job-id>.<AGENT_DISPATCH_INGRESS_DOMAIN>`.
   `start` prints that address and a web token once.
+- **`--tty`** runs the job on the caller's terminal (`ssh -t`, verb `tty`).
+  The container gets a TTY and runs the tool's own interactive session with no
+  prompt. When the tool exits, the run publishes like a batch run. A tool whose
+  profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
+  inside the session and gets no router key. A hang-up or detach kills the
+  container and the run settles as cancelled. A terminal job has no
+  `continue`.
 - **Results**: each finished run posts a fixed six-line result (job, tool,
   repo, state, PR URL, duration) to a Vikunja project and an ntfy topic. No
   model output goes into it.
@@ -151,7 +163,8 @@ the Web UI. A controller's own cancellation or timeout state takes precedence
 over a native task's terminal outcome.
 
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
-reads `SSH_ORIGINAL_COMMAND` and accepts only the five verbs. It passes each
+reads `SSH_ORIGINAL_COMMAND` and accepts only the six verbs. `tty` is refused
+without a terminal, so the entry needs the `pty` option. It passes each
 word to `agent-dispatch` as its own argument, and the prompt is the rest of
 the line. No shell evaluates the line, and `agent-dispatch` validates every
 value: the tool allowlist, the `owner/repo` pattern, the job-id pattern and
@@ -212,8 +225,9 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
   `--pids-limit`), hardened (`--security-opt no-new-privileges`,
   `--cap-drop ALL`), and wall-clock-bounded (`AGENT_TIMEOUT`, default 3600s,
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
-- **Secret egress**: before any push, the entrypoint runs `gitleaks` on the
-  staged diff and aborts the commit/push (redacted output) on a finding.
+- **Secret egress**: before any push, the entrypoint runs `gitleaks` on every
+  new commit of the run, including commits the tool made itself, and aborts the
+  push (redacted output) on a finding.
 - **Session and event records**: a `--host` run bind-mounts a per-run host
   spool dir onto the Claude and Codex session subdirs (`~/.claude/projects`,
   `~/.codex/sessions`) and the ZCode CLI event log dir (`~/.zcode/cli/log`)

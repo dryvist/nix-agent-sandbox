@@ -41,8 +41,10 @@ case "$1" in
     if [ "$(next wait)" -lt "${STUB_WAIT_CALLS:-1}" ]; then exec sleep 60; fi
     echo "${STUB_EXIT:-0}"
     ;;
+  attach) ;;
   inspect)
     case "$3" in
+      *Running*) echo "${STUB_RUNNING:-false}" ;;
       *Status*) echo "${STUB_STATUS:-exited}" ;;
       *ExitCode*) echo "${STUB_EXIT:-0}" ;;
     esac
