@@ -3,7 +3,7 @@
 # Contract (all via environment):
 #   AGENT_SANDBOX=1   set by the image itself; refusal guard below
 #   AGENT_PROMPT      required (unless AGENT_SHELL=1): the task
-#   AGENT_TOOL        claude | codex | qwen | zcode | opencode | cursor-agent |
+#   AGENT_TOOL        claude | codex | qwen | qwen-code | zcode | opencode | cursor-agent |
 #                     zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
 #   AGENT_RUN_ID      optional stable run id (default: timestamp)
@@ -36,7 +36,7 @@ fi
 
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 case "${AGENT_TOOL}" in
-  qwen | zcode | opencode | cursor-agent)
+  qwen | qwen-code | zcode | opencode | cursor-agent)
     if [ -n "${AGENT_PROFILE:-}" ] && [ "${AGENT_PROFILE}" != "${AGENT_TOOL}" ]; then
       echo "agent-entrypoint: routed tool '${AGENT_TOOL}' requires its matching task profile." >&2
       exit 64
@@ -101,6 +101,11 @@ AGENT_RUN_ID="${AGENT_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 
 case "${AGENT_TOOL}" in
   qwen) AGENT_PROFILE="${AGENT_PROFILE:-qwen}" ;;
+  qwen-code)
+    AGENT_PROFILE="${AGENT_PROFILE:-qwen-code}"
+    # The router's capability name: the only model this tool runs.
+    AGENT_MODEL=medium
+    ;;
   zcode) AGENT_PROFILE="${AGENT_PROFILE:-zcode}" ;;
   opencode) AGENT_PROFILE="${AGENT_PROFILE:-opencode}" ;;
   cursor-agent) AGENT_PROFILE="${AGENT_PROFILE:-cursor-agent}" ;;
@@ -158,7 +163,8 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
       echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
       exit 64
     }
-  done < <(jq -r '.env[]' <<<"${profile}")
+  done < <(jq -r --arg tty "${AGENT_TTY:-}" \
+    'if $tty == "1" and .ttyLogin == true then [] else .env end | .[]' <<<"${profile}")
   if jq -e --arg tty "${AGENT_TTY:-}" \
     'has("routerKeyField") and (($tty == "1" and .ttyLogin == true) | not)' <<<"${profile}" >/dev/null; then
     for var in AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY; do
@@ -211,7 +217,7 @@ case "${AGENT_TOOL}" in
     # harmless with AGENT_REPO set too, since that cwd is a real clone.
     codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
-  qwen)
+  qwen | qwen-code)
     OPENAI_API_KEY="${AGENT_ROUTER_KEY}" qwen --auth-type openai --model "${AGENT_MODEL}" \
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
     ;;
@@ -239,7 +245,7 @@ case "${AGENT_TOOL}" in
     exec zcode-web-supervisor
     ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|zcode|opencode|cursor-agent|zcode-web)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|cursor-agent|zcode-web)" >&2
     exit 64
     ;;
 esac

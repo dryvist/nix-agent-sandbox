@@ -50,7 +50,7 @@ usage:
   agent-dispatch refresh
   agent-dispatch check
 
-tools: zcode, opencode, cursor-agent (cursor-agent: --tty only)
+tools: zcode, opencode, cursor-agent, qwen-code
 EOF
   exit 64
 }
@@ -63,7 +63,7 @@ refuse() {
 # --- Argument validation (the only validator; dispatch-ssh relies on it) ---
 valid_tool() {
   case "$1" in
-    zcode | opencode | cursor-agent) ;;
+    zcode | opencode | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }
@@ -411,12 +411,18 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo tty cont=0 login tok lease bucket iid mint gh="" budget cid name
+  local tool repo tty tty_login cont=0 login tok lease bucket iid mint gh="" budget cid name
   local router_key_field="" router_key="" reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
   tty=$(job_get "$id" 'if .tty then 1 else 0 end')
+  # A terminal session of a login tool: the user signs in by hand, so the
+  # container gets no router key and no provider key.
+  tty_login=0
+  if [ "$tty" = 1 ] && jq -e --arg t "$tool" '.[$t].ttyLogin == true' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
+    tty_login=1
+  fi
   if [ "$run" != 1 ]; then cont=1; fi
   date +%s >"$rdir/started"
   echo starting >"$rdir/state"
@@ -446,6 +452,7 @@ run_job() {
     return 1
   }
   mapfile -t names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
+  if [ "$tty_login" = 1 ]; then names=(); fi
   jq -e --arg t "$tool" 'has($t)' <<<"$AGENT_TASK_PROFILES" >/dev/null || {
     abort "$id" "$run" "no task profile for $tool" "$tok"
     return 1
@@ -457,9 +464,7 @@ run_job() {
     }
   done
   router_key_field=$(jq -r --arg t "$tool" '.[$t].routerKeyField // empty' <<<"$AGENT_TASK_PROFILES")
-  if [ "$tty" = 1 ] && jq -e --arg t "$tool" '.[$t].ttyLogin == true' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
-    router_key_field=""
-  fi
+  if [ "$tty_login" = 1 ]; then router_key_field=""; fi
   if [ -n "$router_key_field" ]; then
     router_key=$(field "$router_key_field")
     [ -n "$router_key" ] || {
@@ -666,6 +671,9 @@ cmd_start() {
     # A batch job needs a credential it can use without a person.
     jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
       <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
+  else
+    jq -e --arg t "$tool" '.[$t].ttyLogin == true' \
+      <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool has no terminal session"
   fi
   id="j-$(rand_hex 8)"
   dir="$STATE_DIR/$id"

@@ -12,7 +12,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 | Output | What it is |
 | --- | --- |
-| `packages.<linux>.agent-image` | OCI image: coding CLIs and ZCode Web/Server, git/gh/nix, configs baked from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
+| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, git/gh/nix, configs from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `packages.*.zcode-job` | ZCode-only SSH client with JSON output and an approved repository subset. |
@@ -129,9 +129,11 @@ agent-dispatch refresh
 agent-dispatch check
 ```
 
-- **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
-  hex digits. A batch job needs a credential that works without a person, so
-  `cursor-agent` runs only with `--tty`.
+- **Tools**: `zcode`, `opencode`, `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16
+  hex digits. A batch job needs a credential that works without a person:
+  `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret
+  bucket. `qwen-code` batch runs use the router's `medium` capability with
+  `QWEN_CODE_ROUTER_KEY` from the same bucket, and have no terminal session.
 - **Repositories**: public only, and the default branch must have an active
   ruleset that requires a pull request. After the mint, the dispatcher checks
   both with the job's token. It refuses any other repository and revokes that
@@ -155,7 +157,7 @@ agent-dispatch check
   The container gets a TTY and runs the tool's own interactive session with no
   prompt. When the tool exits, the run publishes like a batch run. A tool whose
   profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
-  inside the session and gets no router key. A hang-up or detach kills the
+  inside the session and gets no router key or provider key. A hang-up or detach kills the
   container and the run settles as cancelled. A terminal job has no
   `continue`.
 - **Results**: each finished run posts a fixed six-line result (job, tool,

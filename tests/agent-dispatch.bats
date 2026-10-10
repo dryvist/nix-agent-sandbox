@@ -11,7 +11,7 @@ bats_require_minimum_version 1.5.0
 
 SECRETS=(role-id-value secret-id-value zai-secret-value
   zcode-router-secret-value opencode-router-secret-value cursor-router-secret-value
-  vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
+  cursor-secret-value qwen-code-router-secret-value vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
 
 setup() {
   : "${AGENT_DISPATCH_BIN:?set AGENT_DISPATCH_BIN to the agent-dispatch bin dir}"
@@ -36,12 +36,14 @@ setup() {
 
 dispatch() { "$AGENT_DISPATCH_BIN/agent-dispatch" "$@"; }
 ssh_cmd() { SSH_ORIGINAL_COMMAND="$1" "$AGENT_DISPATCH_BIN/dispatch-ssh"; }
-make_no_router_dispatcher() {
-  local bin="$BATS_TEST_TMPDIR/no-router-bin" line
+# make_dispatcher <profiles-json>: a copy of agent-dispatch whose task profiles
+# are the given JSON; prints its path.
+make_dispatcher() {
+  local bin="$BATS_TEST_TMPDIR/profile-bin" line
   mkdir -p "$bin"
   while IFS= read -r line; do
     if [[ $line == AGENT_TASK_PROFILES=* ]]; then
-      printf '%s\n' "AGENT_TASK_PROFILES='{\"zcode\":{\"env\":[]}}'"
+      printf '%s\n' "AGENT_TASK_PROFILES='$1'"
     else
       printf '%s\n' "$line"
     fi
@@ -211,7 +213,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
 @test "profiles without routerKeyField receive neither router variable" {
   local dispatcher env_data
-  dispatcher=$(make_no_router_dispatcher)
+  dispatcher=$(make_dispatcher '{"zcode":{"env":[],"ttyLogin":true}}')
   run --separate-stderr "$dispatcher" start --tty zcode dryvist/nix-ai
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
@@ -221,7 +223,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
 @test "each routed tool receives its named router key field" {
   local tool n=0 expected env_data
-  for tool in zcode opencode; do
+  for tool in zcode opencode qwen-code; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -229,6 +231,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     case "$tool" in
       zcode) expected=zcode-router-secret-value ;;
       opencode) expected=opencode-router-secret-value ;;
+      qwen-code) expected=qwen-code-router-secret-value ;;
     esac
     grep -qx "AGENT_ROUTER_KEY=$expected" <<<"$env_data"
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
@@ -329,11 +332,24 @@ scope_refused() {
 }
 
 @test "a batch job for a login-only tool is refused before any side effect" {
-  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  local dispatcher
+  dispatcher=$(make_dispatcher '{"cursor-agent":{"env":[],"ttyLogin":true}}')
+  run --separate-stderr "$dispatcher" start cursor-agent dryvist/nix-ai "do the thing"
   [ "$status" -eq 64 ]
   [[ $stderr == *"cursor-agent runs only as a terminal session"* ]]
   [ ! -s "$STUB_DIR/argv.log" ]
   [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "a cursor-agent batch job receives CURSOR_API_KEY and no router variable" {
+  local env_data
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  grep -qx 'CURSOR_API_KEY=cursor-secret-value' <<<"$env_data"
+  [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
+    CURSOR_API_KEY GH_TOKEN GITHUB_TOKEN | sort)" ]
+  no_secret_on_a_command_line
 }
 
 @test "the waiter keeps the job token in memory and revokes it when pruned" {
@@ -693,6 +709,35 @@ SH
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
 }
 
+@test "qwen-code is batch only: a terminal job is refused before any side effect" {
+  run --separate-stderr dispatch start --tty qwen-code dryvist/nix-ai
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"qwen-code has no terminal session"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "Qwen Code batch runs the router's medium capability in YOLO mode" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/qwen-code-home" tools="$BATS_TEST_TMPDIR/qwen-code-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=MODEL_ENDPOINT' 'AGENT_ROUTER_KEY=router-key-value' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/qwen" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/qwen-code-argv"
+test "$OPENAI_API_KEY" = router-key-value
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=qwen-code AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/qwen-code-argv")" = $'--auth-type\nopenai\n--model\nmedium\n--openai-base-url\nMODEL_ENDPOINT\n--prompt\nfix the test\n--yolo' ]
+  [[ ! $(cat "$STUB_DIR/qwen-code-argv") =~ router-key-value ]]
+  [ ! -e "$home/.agent-env" ]
+}
+
 @test "Qwen Code batch uses the routed OpenAI-compatible endpoint in YOLO mode" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/qwen-home" tools="$BATS_TEST_TMPDIR/qwen-tools"
@@ -755,6 +800,37 @@ SH
     AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
+}
+
+@test "cursor-agent batch needs CURSOR_API_KEY; a terminal session runs without it" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/cursor-key-home" tools="$BATS_TEST_TMPDIR/cursor-key-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"cursor-agent":{"env":["CURSOR_API_KEY"],"ttyLogin":true}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/cursor-agent" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
+echo "${CURSOR_API_KEY:-unset}" >"$STUB_DIR/cursor-key"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=cursor-agent AGENT_PROMPT=x bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires CURSOR_API_KEY"* ]]
+
+  printf '%s\n' 'CURSOR_API_KEY=cursor-key-test-value' >"$home/.agent-env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
+  [ "$(cat "$STUB_DIR/cursor-key")" = cursor-key-test-value ]
+  [ ! -e "$home/.agent-env" ]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=cursor-agent AGENT_TTY=1 bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/cursor-key")" = unset ]
 }
 
 @test "zcode-web loads only the mounted service credentials and runs without a prompt" {
