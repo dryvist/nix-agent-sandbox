@@ -111,6 +111,7 @@ jobs:
     name: Multi-arch manifest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 5
     runs-on: ubuntu-26.04
     permissions:
       packages: write
