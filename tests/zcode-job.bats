@@ -40,6 +40,61 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
   done
 }
 
+@test "start defaults to the zcode tool" {
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "start zcode dryvist/example Review" ]
+}
+
+@test "start --tool forwards the chosen tool and returns its job" {
+  jq '.tool = "opencode"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client start --tool opencode dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "start opencode dryvist/example Review" ]
+  [ "$(jq -r '.tool' <<<"$output")" = opencode ]
+}
+
+@test "unknown or incomplete --tool is refused before SSH" {
+  run client start --tool claude dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "Unsupported tool"' <<<"$output"
+  no_ssh
+  run client start --tool
+  [ "$status" -eq 64 ]
+  no_ssh
+  run client start --tool opencode dryvist/example
+  [ "$status" -eq 64 ]
+  no_ssh
+}
+
+@test "start rejects a dispatcher response for a different tool" {
+  run client start --tool opencode dryvist/example Review
+  [ "$status" -eq 1 ]
+  jq -e '.error == "Dispatcher returned a different tool"' <<<"$output"
+}
+
+@test "status and result accept a job of any approved tool" {
+  jq '.tool = "qwen-code"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client status "$JOB"
+  [ "$status" -eq 0 ]
+  run client result "$JOB"
+  [ "$status" -eq 0 ]
+  jq -e '.result | contains("tool: qwen-code")' <<<"$output"
+}
+
+@test "tool allowlist matches the dispatcher's valid_tool" {
+  tools() {
+    sed -n "/^$2()/,/^}/p" "$1" | sed -n 's/^ *\(.*\)) ;;$/\1/p' |
+      tr -d ' ' | tr '|' '\n' | sort
+  }
+  local expected
+  expected=$(tools "$ZCODE_JOB_SCRIPTS/agent-dispatch.sh" valid_tool)
+  [ -n "$expected" ]
+  [ "$(tools "$ZCODE_JOB_SCRIPTS/zcode-job.sh" tool_allowed)" = "$expected" ]
+}
+
 @test "repo outside the installation subset is refused before SSH" {
   run client start other/private 'Review code'
   [ "$status" -eq 64 ]
@@ -120,7 +175,7 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
 
 @test "wrong job, tool, repository or PR is rejected" {
   cp "$STUB_DIR/response.json" "$STUB_DIR/original.json"
-  for mutation in '.job = "j-ffffffffffffffff"' '.tool = "opencode"' \
+  for mutation in '.job = "j-ffffffffffffffff"' '.tool = "claude"' \
     '.pr = "https://github.com/other/private/pull/4"' '.duration = -1'; do
     jq "$mutation" "$STUB_DIR/original.json" >"$STUB_DIR/next.json"
     mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
