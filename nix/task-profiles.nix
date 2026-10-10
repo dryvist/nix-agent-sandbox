@@ -13,7 +13,7 @@
 #   env  list of environment variable names the run requires.
 #   routerKeyField  optional bucket field delivered as AGENT_ROUTER_KEY.
 #   ttyLogin  in a terminal session (agent-dispatch --tty) the user signs in
-#             to the tool by hand, so no router key is delivered.
+#             to the tool by hand, so neither router key nor env is delivered.
 {
   # Estate-context reads only. No secrets exported; model keys come from the
   # caller's environment exactly as before.
@@ -49,9 +49,10 @@
     routerKeyField = "OPENCODE_ROUTER_KEY";
     ttyLogin = true;
   };
-  # Cursor has no router endpoint: it runs only as a terminal session.
+  # Cursor has no router endpoint. A batch run authenticates with its API key
+  # (print mode); a terminal session signs in by hand and gets no key.
   cursor-agent = {
-    env = [ ];
+    env = [ "CURSOR_API_KEY" ];
     ttyLogin = true;
   };
   zcode-web = {

@@ -175,7 +175,7 @@
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
-                  .["cursor-agent"].env == [] and
+                  .["cursor-agent"].env == ["CURSOR_API_KEY"] and
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]

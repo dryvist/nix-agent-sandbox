@@ -130,8 +130,9 @@ agent-dispatch check
 ```
 
 - **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
-  hex digits. A batch job needs a credential that works without a person, so
-  `cursor-agent` runs only with `--tty`.
+  hex digits. A batch job needs a credential that works without a person:
+  `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret
+  bucket.
 - **Repositories**: public only, and the default branch must have an active
   ruleset that requires a pull request. After the mint, the dispatcher checks
   both with the job's token. It refuses any other repository and revokes that
@@ -155,7 +156,7 @@ agent-dispatch check
   The container gets a TTY and runs the tool's own interactive session with no
   prompt. When the tool exits, the run publishes like a batch run. A tool whose
   profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
-  inside the session and gets no router key. A hang-up or detach kills the
+  inside the session and gets no router key or provider key. A hang-up or detach kills the
   container and the run settles as cancelled. A terminal job has no
   `continue`.
 - **Results**: each finished run posts a fixed six-line result (job, tool,

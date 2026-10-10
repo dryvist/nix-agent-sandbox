@@ -158,7 +158,8 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
       echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
       exit 64
     }
-  done < <(jq -r '.env[]' <<<"${profile}")
+  done < <(jq -r --arg tty "${AGENT_TTY:-}" \
+    'if $tty == "1" and .ttyLogin == true then [] else .env end | .[]' <<<"${profile}")
   if jq -e --arg tty "${AGENT_TTY:-}" \
     'has("routerKeyField") and (($tty == "1" and .ttyLogin == true) | not)' <<<"${profile}" >/dev/null; then
     for var in AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY; do
