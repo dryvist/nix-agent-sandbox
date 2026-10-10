@@ -156,7 +156,8 @@
                 ];
               }
               ''
-                ZCODE_JOB_BIN=${client}/bin bats ${./tests/zcode-job.bats}
+                ZCODE_JOB_BIN=${client}/bin ZCODE_JOB_SCRIPTS=${./scripts} \
+                  bats ${./tests/zcode-job.bats}
                 touch $out
               '';
           sandbox-contract =

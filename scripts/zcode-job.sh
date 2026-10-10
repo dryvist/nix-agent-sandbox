@@ -2,16 +2,27 @@ export LC_ALL=C
 
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
   printf '%s\n' \
-    'Usage: zcode-job start <owner/repo> <prompt>' \
+    'Usage: zcode-job start [--tool <tool>] <owner/repo> <prompt>' \
     '       zcode-job continue <job-id> <message>' \
     '       zcode-job status|result|cancel <job-id>' \
-    '       zcode-job live|repos'
+    '       zcode-job live|repos' \
+    'tools: zcode (default), opencode, cursor-agent, qwen-code'
   exit 0
 fi
 
 fail() {
   jq -cn --arg error "$1" '{error: $error}'
   exit "${2:-64}"
+}
+
+# Mirrors valid_tool in scripts/agent-dispatch.sh. The dispatcher runs on
+# another host, so this client cannot read that list at runtime; the bats
+# suite fails when the two lists differ.
+tool_allowed() {
+  case "$1" in
+    zcode | opencode | cursor-agent | qwen-code) ;;
+    *) return 1 ;;
+  esac
 }
 
 valid_repo() {
@@ -46,7 +57,7 @@ verb="${1:-}"
 id=""
 
 request() {
-  local rc
+  local rc returned_tool
   if response=$(timeout 300 "$ZCODE_JOB_SSH" -T -n -o BatchMode=yes -o ConnectTimeout=10 \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
       -o ForwardAgent=no -o ClearAllForwardings=yes -o PermitLocalCommand=no \
@@ -59,14 +70,18 @@ request() {
   response=$(jq -ces 'select(length == 1 and (.[0] | type == "object")) | .[0]' \
     <<<"$response" 2>/dev/null) || fail "Invalid dispatcher JSON" 1
   jq -e --arg id "$id" '(.job | type == "string" and test("^j-[0-9a-f]{16}$")) and
-    ($id == "" or .job == $id) and .tool == "zcode" and
+    ($id == "" or .job == $id) and (.tool | type == "string") and
     (.repo | type == "string") and
     (.state | IN("starting", "running", "cancelling", "succeeded", "failed", "cancelled", "timeout")) and
     (.duration | type == "number" and . >= 0 and floor == .) and
     (.pr | type == "string")' <<<"$response" >/dev/null || fail "Invalid dispatcher result" 1
+  returned_tool=$(jq -r '.tool' <<<"$response")
+  tool_allowed "$returned_tool" || fail "Dispatcher tool is not supported" 1
   repo=$(jq -r '.repo' <<<"$response")
   allowed_repo "$repo" || fail "Dispatcher repository is not approved" 1
   if [ "$verb" = start ]; then
+    [ "$returned_tool" = "$requested_tool" ] ||
+      fail "Dispatcher returned a different tool" 1
     [ "${repo,,}" = "${requested_repo,,}" ] ||
       fail "Dispatcher returned a different repository" 1
   fi
@@ -85,11 +100,18 @@ request() {
 
 case "$verb" in
   start)
-    [ $# -eq 2 ] || fail "usage: zcode-job start <owner/repo> <prompt>"
+    requested_tool=zcode
+    if [ "${1:-}" = --tool ]; then
+      [ $# -ge 2 ] || fail "usage: zcode-job start [--tool <tool>] <owner/repo> <prompt>"
+      requested_tool=$2
+      shift 2
+    fi
+    [ $# -eq 2 ] || fail "usage: zcode-job start [--tool <tool>] <owner/repo> <prompt>"
+    tool_allowed "$requested_tool" || fail "Unsupported tool"
     allowed_repo "$1" || fail "Repository is not approved for ZCode"
     valid_text "$2" || fail "Invalid prompt"
     requested_repo="$1"
-    request "start zcode $requested_repo $2"
+    request "start $requested_tool $requested_repo $2"
     ;;
   continue | status | result | cancel)
     if [ "$verb" = continue ]; then
