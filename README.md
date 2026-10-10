@@ -129,10 +129,11 @@ agent-dispatch refresh
 agent-dispatch check
 ```
 
-- **Tools**: `zcode`, `opencode`, `cursor-agent`. Job ids are `j-` plus 16
+- **Tools**: `zcode`, `opencode`, `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16
   hex digits. A batch job needs a credential that works without a person:
   `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret
-  bucket.
+  bucket. `qwen-code` batch runs use the router's `medium` capability with
+  `QWEN_CODE_ROUTER_KEY` from the same bucket, and have no terminal session.
 - **Repositories**: public only, and the default branch must have an active
   ruleset that requires a pull request. After the mint, the dispatcher checks
   both with the job's token. It refuses any other repository and revokes that

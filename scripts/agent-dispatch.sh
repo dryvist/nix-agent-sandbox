@@ -50,7 +50,7 @@ usage:
   agent-dispatch refresh
   agent-dispatch check
 
-tools: zcode, opencode, cursor-agent
+tools: zcode, opencode, cursor-agent, qwen-code
 EOF
   exit 64
 }
@@ -63,7 +63,7 @@ refuse() {
 # --- Argument validation (the only validator; dispatch-ssh relies on it) ---
 valid_tool() {
   case "$1" in
-    zcode | opencode | cursor-agent) ;;
+    zcode | opencode | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }
@@ -671,6 +671,9 @@ cmd_start() {
     # A batch job needs a credential it can use without a person.
     jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
       <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
+  else
+    jq -e --arg t "$tool" '.[$t].ttyLogin == true' \
+      <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool has no terminal session"
   fi
   id="j-$(rand_hex 8)"
   dir="$STATE_DIR/$id"

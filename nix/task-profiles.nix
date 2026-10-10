@@ -55,6 +55,12 @@
     env = [ "CURSOR_API_KEY" ];
     ttyLogin = true;
   };
+  # Qwen Code: batch only. The entrypoint runs it on the router's `medium`
+  # capability; the caller does not choose the model.
+  qwen-code = {
+    env = [ ];
+    routerKeyField = "QWEN_CODE_ROUTER_KEY";
+  };
   zcode-web = {
     env = [
       "ZAI_SUBSCRIPTION_KEY"

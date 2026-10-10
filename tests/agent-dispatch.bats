@@ -11,7 +11,7 @@ bats_require_minimum_version 1.5.0
 
 SECRETS=(role-id-value secret-id-value zai-secret-value
   zcode-router-secret-value opencode-router-secret-value cursor-router-secret-value
-  cursor-secret-value vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
+  cursor-secret-value qwen-code-router-secret-value vikunja-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
 
 setup() {
   : "${AGENT_DISPATCH_BIN:?set AGENT_DISPATCH_BIN to the agent-dispatch bin dir}"
@@ -223,7 +223,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
 @test "each routed tool receives its named router key field" {
   local tool n=0 expected env_data
-  for tool in zcode opencode; do
+  for tool in zcode opencode qwen-code; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -231,6 +231,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     case "$tool" in
       zcode) expected=zcode-router-secret-value ;;
       opencode) expected=opencode-router-secret-value ;;
+      qwen-code) expected=qwen-code-router-secret-value ;;
     esac
     grep -qx "AGENT_ROUTER_KEY=$expected" <<<"$env_data"
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
@@ -706,6 +707,35 @@ SH
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
+}
+
+@test "qwen-code is batch only: a terminal job is refused before any side effect" {
+  run --separate-stderr dispatch start --tty qwen-code dryvist/nix-ai
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"qwen-code has no terminal session"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "Qwen Code batch runs the router's medium capability in YOLO mode" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/qwen-code-home" tools="$BATS_TEST_TMPDIR/qwen-code-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=MODEL_ENDPOINT' 'AGENT_ROUTER_KEY=router-key-value' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/qwen" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/qwen-code-argv"
+test "$OPENAI_API_KEY" = router-key-value
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=qwen-code AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/qwen-code-argv")" = $'--auth-type\nopenai\n--model\nmedium\n--openai-base-url\nMODEL_ENDPOINT\n--prompt\nfix the test\n--yolo' ]
+  [[ ! $(cat "$STUB_DIR/qwen-code-argv") =~ router-key-value ]]
+  [ ! -e "$home/.agent-env" ]
 }
 
 @test "Qwen Code batch uses the routed OpenAI-compatible endpoint in YOLO mode" {
