@@ -15,7 +15,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, git/gh/nix, configs from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
-| `packages.*.zcode-job` | ZCode-only SSH client with JSON output and an approved repository subset. |
+| `packages.*.zcode-job` | SSH client for the dispatcher's batch tools (`zcode` by default) with JSON output and an approved repository subset. |
 | `homeManagerModules.zcode-job` | Optional client package and configuration for a restricted SSH alias and native Web/Server URL. |
 | `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
 | `lib.taskProfiles` | Task profiles: the environment variables each `--profile` requires. |
@@ -47,6 +47,7 @@ disabled by default and requires an explicit repository list when enabled.
 ```sh
 zcode-job repos
 zcode-job start "$repo" "$prompt"
+zcode-job start --tool opencode "$repo" "$prompt"
 zcode-job status "$job_id"
 zcode-job result "$job_id"
 zcode-job continue "$job_id" "$message"
@@ -57,8 +58,11 @@ zcode-job live
 Every command prints JSON. `result` requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
-Unapproved start requests fail before SSH. Continuations and cancellations
-check the existing job's tool and repository before sending a mutation.
+`start --tool` selects `zcode` (default), `opencode`, `cursor-agent`, or
+`qwen-code`. The dispatcher must report the requested tool, and each job
+reports the tool it ran under. Unapproved repositories and unknown tools fail
+before SSH. Continuations and cancellations check the existing job's tool and
+repository before sending a mutation.
 The dispatcher independently checks its current repository access.
 
 Requests contain the repository or job id and task text. Each SSH call has
