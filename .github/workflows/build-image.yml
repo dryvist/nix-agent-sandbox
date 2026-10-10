@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build (${{ matrix.arch }})
@@ -111,7 +115,8 @@ jobs:
     name: Multi-arch manifest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
     steps:
