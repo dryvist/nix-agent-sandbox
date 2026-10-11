@@ -242,7 +242,7 @@ runs its `fix.command` through the dispatcher's `shell` tool (tier `t1`).
 `ci-resolver learn --workbook-repo <checkout>` writes `learned-<signature>.md`
 entries into that checkout's `automation/ci-workbook/`; it changes files only.
 
-### Environment
+### CI resolver environment
 
 | Name | Use |
 | --- | --- |
