@@ -63,6 +63,16 @@
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
           agent-dispatch = pkgs.callPackage ./nix/agent-dispatch.nix { };
+          ci-resolver = pkgs.writeShellApplication {
+            name = "ci-resolver";
+            runtimeInputs = [
+              pkgs.git
+              pkgs.python3
+            ];
+            text = ''
+              exec python3 ${./scripts/ci-resolver.py} "$@"
+            '';
+          };
           zcode-job = pkgs.callPackage ./nix/zcode-job.nix { };
           default = self.packages.${system}.agent-cli;
         }
@@ -102,6 +112,21 @@
         in
         {
           agent-cli = self.packages.${system}.agent-cli;
+          ci-resolver =
+            pkgs.runCommand "ci-resolver-tests"
+              {
+                nativeBuildInputs = [
+                  pkgs.git
+                  pkgs.python3
+                ];
+              }
+              ''
+                cp -r ${./scripts} scripts
+                cp -r ${./tests} tests
+                chmod -R u+w scripts tests
+                PYTHONPATH="$PWD/scripts" python3 -m unittest discover -s tests -p 'test_ci_resolver.py'
+                touch $out
+              '';
           # Builds (shellchecks) the dispatcher and runs its bats suite
           # against the built binaries, with docker/curl/setsid stubbed.
           agent-dispatch =

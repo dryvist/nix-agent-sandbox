@@ -15,6 +15,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, git/gh/nix, configs from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
+| `packages.*.ci-resolver` | `ci-resolver`: reconcile failed workflow runs into check runs, dispatcher jobs, and review requests. |
 | `packages.*.zcode-job` | SSH client for the dispatcher's batch tools (`zcode` by default) with JSON output and an approved repository subset. |
 | `homeManagerModules.zcode-job` | Optional client package and configuration for a restricted SSH alias and native Web/Server URL. |
 | `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
@@ -250,6 +251,24 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | `~/.agent-env` | Start job: GitHub token, profile values, and optional router values. Fix job: profile values and optional router values. |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
+
+## CI resolver workbook
+
+`ci-resolver` reads workbook entries from `CI_RESOLVER_WORKBOOK_DIR`: the
+`automation/ci-workbook/*.md` OKF fragments of `ai-llm-prompts` (`index.md`
+is skipped). An entry's one-line `ci_workbook` frontmatter field is a JSON
+object with `id`, `class` (`aggregate`, `transient`, `never_retry`,
+`deterministic`, `recipe` or `human`), `match.log` and the optional
+`fix.command` and `reproduce`; the body is the recipe. A `deterministic` entry
+runs its `fix.command` through the dispatcher's `shell` tool (tier `t1`).
+`ci-resolver learn --workbook-repo <checkout>` writes `learned-<signature>.md`
+entries into that checkout's `automation/ci-workbook/`; it changes files only.
+
+### CI resolver environment
+
+| Name | Use |
+| --- | --- |
+| `CI_RESOLVER_APP_ID` | GitHub App ID for the check runs used by the resolver; required for automatic merges |
 
 ## Safety model
 
