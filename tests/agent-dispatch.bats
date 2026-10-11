@@ -1413,7 +1413,8 @@ SH
   export STUB_CONTENTS_404=1
   for json in \
     "$(fix_add_json src/credential.txt 'prefix zai-secret-value suffix')" \
-    "$(fix_add_json src/credential.txt 'prefix zcode-router-secret-value suffix')"; do
+    "$(fix_add_json src/credential.txt 'prefix zcode-router-secret-value suffix')" \
+    "$(fix_add_json docs/endpoint.md 'base: https://router.test/v1')"; do
     set_fix_outputs "$json"
     run --separate-stderr "$dispatcher" fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
     [ "$status" -eq 0 ]

@@ -370,6 +370,8 @@ fix_suppression_added() {
   '
 }
 
+# ponytail: compares definition lines only; a test whose body is gutted but whose
+# definition line stays passes. t2/t3 commits never auto-merge, so review catches it.
 fix_test_definitions_removed() {
   local base_json=$1 new_json=$2
   jq -en --slurpfile b "$base_json" --slurpfile n "$new_json" '
@@ -386,6 +388,8 @@ fix_test_definitions_removed() {
 }
 
 # Keep credential values in shell memory while scanning binary additions.
+# ponytail: verbatim matches only; encoded or split values pass. Add a host-side
+# gitleaks pass over the decoded files if that matters.
 fix_contains_credential() {
   local file=$1 value=$2 chunk
   [ -n "$value" ] || return 1
@@ -487,11 +491,14 @@ publish_fix_token() {
       return 1
     fi
     credential_values+=("$value")
+    value=${AGENT_ROUTER_BASE_URL#*://}
+    value=${value%%/*}
+    [ -z "$value" ] || credential_values+=("$value")
   fi
   # ponytail: refuse all .github edits for now; the caller exception comes later.
   if jq -e --argjson max "$max_files" \
     'any(.additions[].path, .deletions[].path; startswith(".github/")) or
-     any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$")) or
+     any(.deletions[].path; test("(^|/)(tests?|__tests__|spec|t)/|_tests?\\.|_spec\\.|\\.test\\.|\\.spec\\.|(^|/)(test_[^/]*|tests|conftest)\\.py$")) or
      (([.additions[].path, .deletions[].path] | length) > $max)' \
     "$changes" >/dev/null; then
     if jq -e 'any(.additions[].path, .deletions[].path; startswith(".github/workflows/"))' \
@@ -500,7 +507,7 @@ publish_fix_token() {
     elif jq -e 'any(.additions[].path, .deletions[].path; startswith(".github/"))' \
       "$changes" >/dev/null; then
       echo "guard: github path" >"$rdir/reason"
-    elif jq -e 'any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$"))' \
+    elif jq -e 'any(.deletions[].path; test("(^|/)(tests?|__tests__|spec|t)/|_tests?\\.|_spec\\.|\\.test\\.|\\.spec\\.|(^|/)(test_[^/]*|tests|conftest)\\.py$"))' \
       "$changes" >/dev/null; then
       echo "guard: test deletion" >"$rdir/reason"
     else
@@ -573,7 +580,7 @@ publish_fix_token() {
         ;;
     esac
     suppression_rc=0
-    if [[ $path =~ (^|/)(tests?|__tests__|spec)/|_test\.|\.test\.|\.spec\.|test_[^/]*\.py$ ]]; then
+    if [[ $path =~ (^|/)(tests?|__tests__|spec|t)/|_tests?\.|_spec\.|\.test\.|\.spec\.|(^|/)(test_[^/]*|tests|conftest)\.py$ ]]; then
       fix_test_definitions_removed "$base_json" "$new_json" || suppression_rc=$?
       if [ "$suppression_rc" -eq 0 ]; then
         echo "guard: test removal" >"$rdir/reason"
