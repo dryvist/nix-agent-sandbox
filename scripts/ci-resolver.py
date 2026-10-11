@@ -1092,7 +1092,8 @@ def classify_file(path, workbook_dir):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ci-resolver")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("tick")
+    tick_parser = subparsers.add_parser("tick")
+    tick_parser.add_argument("--loop", type=int, metavar="SECONDS", help="repeat every SECONDS, keeping per-repository tokens in memory")
     learn_parser = subparsers.add_parser("learn")
     learn_parser.add_argument("--workbook-repo", required=True, help="ai-llm-prompts checkout; entries go to automation/ci-workbook/ when it exists")
     learn_parser.add_argument("--publish", metavar="OWNER/REPO", help="open one PR with the changed entries; candidates stay queued until it succeeds")
@@ -1120,13 +1121,19 @@ def main(argv=None):
         if not token_cmd:
             print("ci-resolver: CI_RESOLVER_GH_TOKEN_CMD is required", file=sys.stderr)
             return 64
-        try:
-            org = env.get("CI_RESOLVER_ORG", "")
-            Resolver(GitHub(token_cmd, default_repo=env.get("CI_RESOLVER_TOKEN_REPO", "%s/.github" % org)), env=env).tick()
-        except Exception as error:
-            print("ci-resolver: tick failed (%s)" % type(error).__name__, file=sys.stderr)
-            return 1
-    return 0
+        org = env.get("CI_RESOLVER_ORG", "")
+        github = GitHub(token_cmd, default_repo=env.get("CI_RESOLVER_TOKEN_REPO", "%s/.github" % org))
+        while True:
+            try:
+                # A fresh Resolver per pass reloads the workbook; the client keeps its tokens.
+                Resolver(github, env=env).tick()
+            except Exception as error:
+                print("ci-resolver: tick failed (%s)" % type(error).__name__, file=sys.stderr)
+                if not args.loop:
+                    return 1
+            if not args.loop:
+                return 0
+            time.sleep(args.loop)
 
 
 if __name__ == "__main__":
