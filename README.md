@@ -26,10 +26,10 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 ```sh
 # Run the dispatch CLI directly from the flake
-nix run github:dryvist/nix-agent-sandbox -- run --tool claude "task..."
+nix run "github:dryvist/nix-agent-sandbox?ref=vN" -- run --tool claude "task..."
 
 # Or install it into a profile / home-manager packages
-nix profile install github:dryvist/nix-agent-sandbox#agent-cli
+nix profile install "github:dryvist/nix-agent-sandbox?ref=vN#agent-cli"
 ```
 
 The agent image itself is published by CI to
