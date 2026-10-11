@@ -1,0 +1,18 @@
+---
+# Opens or updates the release PR on main and leaves it open for a person to merge.
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release-please:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: dryvist/.github/.github/workflows/_release-please.yml@0aab1ddaecacea5dc9752b075e2ac10491af33bf # v1.11.3
+    secrets:
+      GH_ACTION_RELEASE_PLEASE_PRIVATE_KEY: ${{ secrets.GH_ACTION_RELEASE_PLEASE_PRIVATE_KEY }}
