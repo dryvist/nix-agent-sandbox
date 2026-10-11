@@ -320,12 +320,12 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-local AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/review-local\nrouter prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/medium\nrouter prompt' ]
   jq -e '.provider | keys == ["agent-router"] and
     .["agent-router"].npm == "@ai-sdk/openai-compatible" and
     .["agent-router"].options.baseURL == "https://router.test/v1" and
     .["agent-router"].options.apiKey == "router-test-key" and
-    (.["agent-router"].models | keys == ["review-local"])' \
+    (.["agent-router"].models | keys == ["medium"])' \
     "$home/.config/opencode/opencode.json"
   [ "$(ls -l "$home/.config/opencode/opencode.json" | cut -c2-10)" = rw------- ]
 

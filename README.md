@@ -137,8 +137,8 @@ agent-dispatch check
 - **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`,
   `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
   job needs a credential that works without a person:
-  `opencode-local` uses `AGENT_ROUTER_BASE_URL` and the router key with model
-  `review-local`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
+  `opencode-local` uses `AGENT_ROUTER_BASE_URL` and the router key with the
+  router capability `medium`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
   `zai-coding-plan/glm-5.3`. `shell` is accepted only by `fix`: it runs the
   task text as a `bash` command and needs no model credential.
   `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret

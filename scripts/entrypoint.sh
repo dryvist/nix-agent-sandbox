@@ -353,10 +353,10 @@ case "${AGENT_TOOL}" in
       '{"$schema": "https://opencode.ai/config.json", provider: {"agent-router": {
         npm: "@ai-sdk/openai-compatible", name: "Agent Router",
         options: {baseURL: $url, apiKey: $key},
-        models: {"review-local": {name: "Review Local"}}}}}' \
+        models: {"medium": {name: "Medium"}}}}}' \
       >"${HOME}/.config/opencode/opencode.json"
     chmod 600 "${HOME}/.config/opencode/opencode.json"
-    opencode run --auto --model agent-router/review-local "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
     ;;
   shell)
     bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
