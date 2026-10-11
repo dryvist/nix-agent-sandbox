@@ -61,7 +61,7 @@ class FakeGitHub:
         self.next_check_id = 100
 
     def pages(self, path, field):
-        if path.startswith("/installation/repositories"):
+        if path.startswith("/installation/repositories") or path.startswith("/orgs/"):
             return list(self.repo_data.values())
         if "/actions/runs?status=failure" in path:
             repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
@@ -85,7 +85,7 @@ class FakeGitHub:
             return [item for item in checks if item.get("name") == "ci-resolver"] if "check_name=ci-resolver" in path else checks
         return []
 
-    def json(self, method, path, body=None, headers=None):
+    def json(self, method, path, body=None, headers=None, repo=None):
         headers = headers or {}
         self.calls.append((method, path, body, dict(headers)))
         if method == "GET" and path.startswith("/repos/") and "/actions/runs?status=failure" in path:
@@ -537,6 +537,47 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(self.gh.checks[(REPO, SHA)][-1]["conclusion"], "neutral")
 
 
+class GitHubTokenTests(unittest.TestCase):
+    def test_token_command_gets_the_path_repository_or_the_default(self):
+        seen = []
+
+        class Done:
+            status, headers, body = 200, {}, b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return self.body
+
+        def opener(request, timeout=30):
+            seen.append(request.get_header("Authorization"))
+            return Done()
+
+        client = resolver_module.GitHub("printf tok-%s", opener=opener, default_repo="owner/.github")
+        client.json("GET", "/repos/owner/project/actions/runs")
+        client.json("POST", "/graphql", {}, repo="owner/prompts")
+        client.json("GET", "/orgs/owner/repos")
+        self.assertEqual(seen, ["Bearer tok-owner/project", "Bearer tok-owner/prompts", "Bearer tok-owner/.github"])
+
+
+class VikunjaTests(unittest.TestCase):
+    def test_one_task_per_title_without_reading_the_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"CI_RESOLVER_STATE_DIR": tmp, "CI_RESOLVER_VIKUNJA_URL": "https://tasks.test", "CI_RESOLVER_VIKUNJA_TOKEN_CMD": "printf secret", "CI_RESOLVER_VIKUNJA_PROJECT": "44"}
+            resolver = resolver_module.Resolver(FakeGitHub(), env=env, dispatcher=lambda args: (0, {}), now=lambda: NOW)
+            sent = []
+            with patch.object(resolver_module.Resolver, "external_json", side_effect=lambda *args: sent.append(args) or {}):
+                group = {"repo": REPO, "branch": "main"}
+                resolver.vikunja(group, {"entry": {"id": "markdownlint"}}, "body")
+                resolver.vikunja(group, {"entry": {"id": "markdownlint"}}, "body")
+            self.assertEqual([(call[0], call[1], call[2]) for call in sent], [("PUT", "https://tasks.test/api/v1/projects/44/tasks", "secret")])
+            self.assertEqual(sent[0][3]["title"], "ci-resolver: owner/project markdownlint")
+
+
 class RedirectTests(unittest.TestCase):
     def test_log_redirect_target_does_not_receive_authorization(self):
         seen = []
@@ -563,8 +604,7 @@ class RedirectTests(unittest.TestCase):
             return FakeResponse(200, {}, b"plain log")
 
         client = resolver_module.GitHub("unused", opener=opener)
-        client._token = "test-token"
-        client._token_until = time.time() + 3600
+        client._tokens["owner/project"] = ("test-token", time.time() + 3600)
         response = client.request("GET", "/repos/owner/project/actions/jobs/4/logs", follow_redirect=True)
         self.assertEqual(response.body, b"plain log")
         self.assertTrue(seen[0].get_header("Authorization"))

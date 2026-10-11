@@ -57,23 +57,31 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class GitHub:
-    """Small urllib client with token refresh and unauthenticated log redirects."""
+    """Small urllib client with per-repository tokens and unauthenticated log redirects.
 
-    def __init__(self, token_cmd, opener=None):
+    `token_cmd owner/repo` prints an installation token for that repository; paths
+    outside /repos/<owner>/<repo>/ use `default_repo`.
+    """
+
+    def __init__(self, token_cmd, opener=None, default_repo=""):
         self.token_cmd = token_cmd
+        self.default_repo = default_repo
         self.opener = opener or urllib.request.build_opener(NoRedirect()).open
-        self._token = None
-        self._token_until = 0
+        self._tokens = {}
 
-    def token(self, force=False):
-        if force or self._token is None or time.time() >= self._token_until:
-            result = subprocess.run(self.token_cmd, shell=True, text=True, capture_output=True)
+    def token(self, repo, force=False):
+        token, until = self._tokens.get(repo, (None, 0))
+        if force or token is None or time.time() >= until:
+            result = subprocess.run("%s %s" % (self.token_cmd, shlex.quote(repo)), shell=True, text=True, capture_output=True)
             token = result.stdout.strip()
             if result.returncode or not token:
                 raise RuntimeError("GitHub token command failed")
-            self._token = token
-            self._token_until = time.time() + 50 * 60
-        return self._token
+            self._tokens[repo] = (token, time.time() + 50 * 60)
+        return token
+
+    def repo_for(self, path, repo=None):
+        match = re.match(r"^/repos/([^/?]+/[^/?]+)", path)
+        return repo or (match.group(1) if match else self.default_repo)
 
     def _open(self, request):
         try:
@@ -82,7 +90,8 @@ class GitHub:
         except urllib.error.HTTPError as error:
             return Response(error.code, error.headers, error.read())
 
-    def request(self, method, path, body=None, headers=None, auth=True, follow_redirect=False):
+    def request(self, method, path, body=None, headers=None, auth=True, follow_redirect=False, repo=None):
+        token_repo = self.repo_for(path, repo)
         url = path if path.startswith("https://") else API + path
         payload = None if body is None else json.dumps(body).encode()
         base_headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
@@ -94,10 +103,10 @@ class GitHub:
         while True:
             request_headers = dict(base_headers)
             if auth:
-                request_headers["Authorization"] = "Bearer " + self.token()
+                request_headers["Authorization"] = "Bearer " + self.token(token_repo)
             response = self._open(urllib.request.Request(url, payload, request_headers, method=method))
             if response.status == 401 and auth and not refreshed:
-                self.token(force=True)
+                self.token(token_repo, force=True)
                 refreshed = True
                 continue
             break
@@ -114,8 +123,8 @@ class GitHub:
             raise APIError(response.status, response.body.decode("utf-8", "replace"))
         return response
 
-    def json(self, method, path, body=None, headers=None):
-        response = self.request(method, path, body=body, headers=headers)
+    def json(self, method, path, body=None, headers=None, repo=None):
+        response = self.request(method, path, body=body, headers=headers, repo=repo)
         if not response.body:
             return response.status, {}, response.headers
         return response.status, json.loads(response.body), response.headers
@@ -307,7 +316,9 @@ class Resolver:
     def log(self, message):
         print("ci-resolver: " + message, file=sys.stderr)
 
-    def api(self, method, path, body=None, headers=None):
+    def api(self, method, path, body=None, headers=None, repo=None):
+        if repo:
+            return self.gh.json(method, path, body=body, headers=headers, repo=repo)[1]
         return self.gh.json(method, path, body=body, headers=headers)[1]
 
     def pages(self, path, key):
@@ -318,7 +329,8 @@ class Resolver:
     def repos(self):
         configured = {item.strip().lower() for item in self.env.get("CI_RESOLVER_REPOS", "").split(",") if item.strip()}
         org = self.env.get("CI_RESOLVER_ORG", "").strip().lower()
-        repos = self.pages("/installation/repositories?per_page=100", "repositories")
+        # The dispatcher only works on public repositories, which any token can list.
+        repos = self.pages("/orgs/%s/repos?type=public&per_page=100" % org, "") if org else self.pages("/installation/repositories?per_page=100", "repositories")
         result = []
         for repo in repos:
             name = repo.get("full_name", "")
@@ -888,33 +900,39 @@ class Resolver:
 
     def vikunja(self, group, classification, body):
         base = self.env.get("CI_RESOLVER_VIKUNJA_URL")
-        token_file = self.env.get("CI_RESOLVER_VIKUNJA_TOKEN_FILE")
+        token_cmd = self.env.get("CI_RESOLVER_VIKUNJA_TOKEN_CMD")
         project = self.env.get("CI_RESOLVER_VIKUNJA_PROJECT")
-        if not (base and token_file and project):
+        if not (base and token_cmd and project):
             self.log("Vikunja escalation is not configured")
             return
         key = (classification.get("entry") or {}).get("id") or classification.get("entry_id") or classification.get("signature", "unknown")
         title = "ci-resolver: %s %s" % (group["repo"], key)
         try:
-            token = Path(token_file).read_text().strip()
-            response = self.external_json("GET", base + "/api/v1/tasks?project_id=" + urllib.parse.quote(str(project)) + "&s=" + urllib.parse.quote(title), token, None)
-            tasks = response if isinstance(response, list) else response.get("tasks", [])
-            if tasks:
-                self.external_json("POST", base + "/api/v1/tasks/%s/comments" % tasks[0]["id"], token, {"comment": body})
-            else:
-                self.external_json("PUT", base + "/api/v1/projects/%s/tasks" % urllib.parse.quote(str(project)), token, {"title": title, "description": body})
+            # ponytail: local dedupe; the token may only create tasks, so no search or comment.
+            seen_path = self.state / "vikunja-escalated.json"
+            try:
+                seen = json.loads(seen_path.read_text())
+            except (OSError, ValueError):
+                seen = []
+            if title in seen:
+                self.log("Vikunja task already filed: %s" % title)
+                return
+            token = self.secret(token_cmd)
+            self.external_json("PUT", base + "/api/v1/projects/%s/tasks" % urllib.parse.quote(str(project)), token, {"title": title, "description": body})
+            self.state.mkdir(parents=True, exist_ok=True)
+            seen_path.write_text(json.dumps(sorted(set(seen) | {title})))
         except Exception:
             self.log("Vikunja escalation request failed")
 
     def zammad(self, class_name, signature_value, body):
         base = self.env.get("CI_RESOLVER_ZAMMAD_URL")
-        token_file = self.env.get("CI_RESOLVER_ZAMMAD_TOKEN_FILE")
+        token_cmd = self.env.get("CI_RESOLVER_ZAMMAD_TOKEN_CMD")
         group = self.env.get("CI_RESOLVER_ZAMMAD_GROUP")
-        if self.shadow or not (base and token_file and group):
+        if self.shadow or not (base and token_cmd and group):
             return False
         title = "ci-resolver: runner/infra %s" % class_name
         try:
-            token = Path(token_file).read_text().strip()
+            token = self.secret(token_cmd)
             found = self.external_json("GET", base + "/api/v1/tickets/search?query=" + urllib.parse.quote('title:"%s" state:open' % title), token, None, "Zammad")
             tickets = found if isinstance(found, list) else found.get("tickets", [])
             article = {"subject": title, "body": body, "type": "note", "internal": True}
@@ -927,6 +945,13 @@ class Resolver:
         except Exception:
             self.log("Zammad escalation request failed")
             return False
+
+    @staticmethod
+    def secret(command):
+        result = subprocess.run(command, shell=True, text=True, capture_output=True)
+        if result.returncode or not result.stdout.strip():
+            raise RuntimeError("secret command failed")
+        return result.stdout.strip()
 
     @staticmethod
     def external_json(method, url, token, body, auth_scheme="Bearer"):
@@ -994,7 +1019,7 @@ class Resolver:
         additions = [{"path": Path(path).relative_to(root).as_posix(), "contents": base64.b64encode(Path(path).read_bytes()).decode()} for path in paths]
         headline = "feat(automation): add learned CI workbook entries"
         query = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }"
-        result = self.api("POST", "/graphql", {"query": query, "variables": {"input": {
+        result = self.api("POST", "/graphql", repo=repo, body={"query": query, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": repo, "branchName": branch}, "expectedHeadOid": base,
             "message": {"headline": headline}, "fileChanges": {"additions": additions}}}})
         if result.get("errors"):
@@ -1079,7 +1104,7 @@ def main(argv=None):
         print(json.dumps(classify_file(args.log_file, env.get("CI_RESOLVER_WORKBOOK_DIR", "")), sort_keys=True))
         return 0
     if args.command == "learn":
-        github = GitHub(env["CI_RESOLVER_GH_TOKEN_CMD"]) if args.publish else None
+        github = GitHub(env["CI_RESOLVER_GH_TOKEN_CMD"], default_repo=args.publish) if args.publish else None
         resolver = Resolver(github, env=env)
         for path in resolver.learn(args.workbook_repo, args.publish):
             print(path)
@@ -1096,7 +1121,8 @@ def main(argv=None):
             print("ci-resolver: CI_RESOLVER_GH_TOKEN_CMD is required", file=sys.stderr)
             return 64
         try:
-            Resolver(GitHub(token_cmd), env=env).tick()
+            org = env.get("CI_RESOLVER_ORG", "")
+            Resolver(GitHub(token_cmd, default_repo=env.get("CI_RESOLVER_TOKEN_REPO", "%s/.github" % org)), env=env).tick()
         except Exception as error:
             print("ci-resolver: tick failed (%s)" % type(error).__name__, file=sys.stderr)
             return 1
