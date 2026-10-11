@@ -22,7 +22,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
   export REAL_GIT="$(command -v git)"
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
-    STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_HEAD_MOVED STUB_DEFAULT_BRANCH STUB_FIX_PR_URL
+    STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH STUB_FIX_PR_URL
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -97,6 +97,7 @@ http_rec() {
 line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 last_line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | tail -n 1 | cut -d: -f1; }
 fix_prompt() { printf 'CI-RESOLVER headline=fix%%3A%%20repair%%20test attempt=2 tier=t2 signature=abcdef012345\n%s' "$1"; }
+fix_prompt_tier() { printf 'CI-RESOLVER headline=fix%%3A%%20repair%%20test attempt=2 tier=%s signature=abcdef012345\n%s' "$1" "$2"; }
 fix_add_json() {
   local encoded
   encoded=$(printf '%s' "$2" | base64 | tr -d '\n')
@@ -197,6 +198,22 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   [[ $stderr == *"unknown tool"* ]]
   [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
   [ ! -s "$STUB_DIR/argv.log" ]
+}
+
+@test "fix CI-RESOLVER tier binds t1 to shell in both directions" {
+  local prompt
+  prompt=$(fix_prompt_tier t2 'echo fixed')
+  run --separate-stderr dispatch fix shell dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"invalid CI-RESOLVER header"* ]]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+
+  prompt=$(fix_prompt_tier t1 'repair this failure')
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"invalid CI-RESOLVER header"* ]]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+  [ "$(grep -c 'docker ps' "$STUB_DIR/argv.log" || true)" -eq 0 ]
 }
 
 @test "dispatch-ssh passes fix metadata and task text as separate words" {
@@ -1373,5 +1390,99 @@ SH
   run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
   [ "$status" -eq 0 ]
   [ "$(jq -r .reason <<<"$output")" = 'guard: too many files' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "fix refuses additions that remove test definitions from an existing test file" {
+  local prompt base
+  prompt=$(fix_prompt "repair the tests")
+  base=$(printf 'def test_one():\n    assert True\ndef test_two():\n    assert True\n' | base64 | tr -d '\n')
+  export STUB_BASE_CONTENT="$base"
+  set_fix_outputs "$(fix_add_json tests/test_fixture.py $'def test_one():\n    pass\n')"
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: test removal' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "fix refuses delivered profile and router credential values in additions" {
+  local prompt dispatcher json
+  dispatcher=$(make_dispatcher '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"],"routerKeyField":"ZCODE_ROUTER_KEY"}}')
+  prompt=$(fix_prompt "repair this failure")
+  export STUB_CONTENTS_404=1
+  for json in \
+    "$(fix_add_json src/credential.txt 'prefix zai-secret-value suffix')" \
+    "$(fix_add_json src/credential.txt 'prefix zcode-router-secret-value suffix')"; do
+    set_fix_outputs "$json"
+    run --separate-stderr "$dispatcher" fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r .reason <<<"$output")" = 'guard: credential value' ]
+    [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    rm -rf "$STUB_DIR/fix"
+  done
+}
+
+@test "fix refuses multi-document changes.json before publishing either document" {
+  local prompt malicious benign
+  prompt=$(fix_prompt "repair this failure")
+  malicious=$(fix_add_json .github/workflows/evil.yml 'name: malicious')
+  benign=$(fix_add_json src/fix.txt 'benign')
+  set_fix_outputs "$malicious"$'\n'"$benign"
+  export STUB_CONTENTS_404=1
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: invalid changes.json' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "fix refuses every .github path and distinguishes workflows" {
+  local prompt json reason
+  prompt=$(fix_prompt "repair this failure")
+  for json in \
+    "$(fix_add_json .github/CODEOWNERS 'example')" \
+    "$(fix_delete_json .github/PULL_REQUEST_TEMPLATE.md)" \
+    "$(fix_delete_json .github/workflows/check.yml)"; do
+    set_fix_outputs "$json"
+    export STUB_CONTENTS_404=1
+    run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+    [ "$status" -eq 0 ]
+    reason=$(jq -r .reason <<<"$output")
+    case "$json" in
+      *workflows*) [ "$reason" = 'guard: workflow path' ] ;;
+      *) [ "$reason" = 'guard: github path' ] ;;
+    esac
+    [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    rm -rf "$STUB_DIR/fix"
+  done
+}
+
+@test "fix rejects new suppression forms and base files larger than the contents API limit" {
+  local prompt json
+  prompt=$(fix_prompt "repair this failure")
+  export STUB_CONTENTS_404=1
+  for json in \
+    "$(fix_add_json src/fix.py 'value = 1  #   type: ignore[assignment]')" \
+    "$(fix_add_json src/fix.sh 'set +e')" \
+    "$(fix_add_json src/fix.sh 'command || exit 0')" \
+    "$(fix_add_json tests/test_fix.py '@pytest.mark.skip')" \
+    "$(fix_add_json tests/test_fix.py 'pytest.mark.xfail')"; do
+    set_fix_outputs "$json"
+    run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r .reason <<<"$output")" = 'guard: suppression line' ]
+    [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    rm -rf "$STUB_DIR/fix"
+  done
+
+  unset STUB_CONTENTS_404
+  export STUB_BASE_TOO_LARGE=1
+  set_fix_outputs "$(fix_add_json src/fix.txt 'change')"
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: base file too large' ]
   [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
 }

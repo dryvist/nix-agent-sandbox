@@ -92,7 +92,9 @@ case "$url" in
     fi
     ;;
   */repos/*/contents/*)
-    if [ -n "${STUB_CONTENTS_404:-}" ]; then
+    if [ -n "${STUB_BASE_TOO_LARGE:-}" ]; then
+      resp='{"type":"file","encoding":"none","content":""}'
+    elif [ -n "${STUB_CONTENTS_404:-}" ]; then
       http_code=404
       resp='{"message":"Not Found"}'
     else

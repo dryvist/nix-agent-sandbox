@@ -336,11 +336,12 @@ gh_write() {
 
 fix_changes_valid() {
   local file=$1
-  jq -e '
+  jq -se '
     def path_ok:
       type == "string" and length > 0 and (startswith("/") | not) and
       ((contains("\u0000") or contains("\n") or contains("\r")) | not) and
       (split("/") | all(. != "" and . != "." and . != ".." and . != ".git"));
+    length == 1 and (.[0] |
     type == "object" and (keys == ["additions", "deletions"]) and
     (.additions | type == "array") and (.deletions | type == "array") and
     all(.additions[]; type == "object" and (keys == ["contents", "path"]) and
@@ -349,7 +350,7 @@ fix_changes_valid() {
     all(.deletions[]; type == "object" and (keys == ["path"]) and (.path | path_ok)) and
     (([.additions[].path, .deletions[].path] | length) > 0) and
     (([.additions[].path, .deletions[].path] | length) ==
-      ([.additions[].path, .deletions[].path] | unique | length))
+      ([.additions[].path, .deletions[].path] | unique | length)))
   ' "$file" >/dev/null 2>&1
 }
 
@@ -358,7 +359,7 @@ fix_suppression_added() {
   local base_json=$1 new_json=$2
   jq -en --slurpfile b "$base_json" --slurpfile n "$new_json" '
     def suppressed:
-      test("# noqa|eslint-disable|@ts-ignore|@ts-nocheck|# type: ignore|\\|\\|[[:space:]]*true|continue-on-error: true|pytest\\.mark\\.skip|\\.skip\\(|xit\\(|t\\.Skip\\(");
+      test("#[[:space:]]*noqa|eslint-disable|@ts-ignore|@ts-nocheck|#[[:space:]]*type:[[:space:]]*ignore|\\|\\|[[:space:]]*true|\\|\\|[[:space:]]*:|\\|\\|[[:space:]]*exit 0|set \\+e|continue-on-error: true|pytest\\.mark\\.skip|pytest\\.mark\\.xfail|@pytest\\.mark\\.skip|\\.skip\\(|xit\\(|t\\.Skip\\(");
     ($b[0] | split("\n")) as $base |
     ($n[0] | split("\n")) as $new |
     reduce $new[] as $line ({base: $base, found: false};
@@ -367,6 +368,31 @@ fix_suppression_added() {
         if $index == null then .found = true else .base = (.base | del(.[$index])) end
       else . end) | .found
   '
+}
+
+fix_test_definitions_removed() {
+  local base_json=$1 new_json=$2
+  jq -en --slurpfile b "$base_json" --slurpfile n "$new_json" '
+    def test_definition:
+      test("^[[:space:]]*(async[[:space:]]+)?def test_|^[[:space:]]*(it|test|describe)\\(|^[[:space:]]*func Test|^[[:space:]]*@test |^[[:space:]]*#\\[test\\]");
+    ($b[0] | split("\n")) as $base |
+    ($n[0] | split("\n")) as $new |
+    reduce $base[] as $line ({new: $new, found: false};
+      if ($line | test_definition) then
+        (.new | index($line)) as $index |
+        if $index == null then .found = true else .new = (.new | del(.[$index])) end
+      else . end) | .found
+  '
+}
+
+# Keep credential values in shell memory while scanning binary additions.
+fix_contains_credential() {
+  local file=$1 value=$2 chunk
+  [ -n "$value" ] || return 1
+  while IFS= read -r -d '' chunk || [ -n "$chunk" ]; do
+    [[ $chunk == *"$value"* ]] && return 0
+  done <"$file"
+  return 1
 }
 
 fix_api_path() {
@@ -378,8 +404,10 @@ fix_api_path() {
 publish_fix_token() {
   local id=$1 run=$2 gh=$4 dir="$STATE_DIR/$1" rdir="$STATE_DIR/$1/runs/$2"
   local max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" max_files="${AGENT_FIX_MAX_FILES:-20}"
-  local tmp listing member previous path base64_file base_json new_json api_path suppression_rc
+  local tmp listing member previous path base64_file base_json new_json api_path suppression_rc changes
   local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url
+  local tool router_key_field name value
+  local -a credential_names=() credential_values=()
   local -a members=()
   tmp=$(mktemp -d)
   if [[ ! $max_files =~ ^[0-9]+$ ]]; then
@@ -426,6 +454,12 @@ publish_fix_token() {
     rm -rf "$tmp"
     return 1
   fi
+  if ! jq -sc '.[0]' "$tmp/changes.json" >"$tmp/changes.normalized.json"; then
+    echo "guard: invalid changes.json" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  changes="$tmp/changes.normalized.json"
   branch=$(job_get "$id" .branch)
   sha=$(job_get "$id" .expected_sha)
   if ! valid_job "$id" || [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
@@ -433,17 +467,41 @@ publish_fix_token() {
     rm -rf "$tmp"
     return 1
   fi
-  # ponytail: refuse all workflow edits for now; the caller exception comes later.
+  tool=$(job_get "$id" .tool)
+  mapfile -t credential_names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
+  for name in "${credential_names[@]}"; do
+    value=$(field "$name")
+    if [ -z "$value" ] || [[ $value == *$'\n'* ]]; then
+      echo "guard: credential value unavailable" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    credential_values+=("$value")
+  done
+  router_key_field=$(jq -r --arg t "$tool" '.[$t].routerKeyField // empty' <<<"$AGENT_TASK_PROFILES")
+  if [ -n "$router_key_field" ]; then
+    value=$(field "$router_key_field")
+    if [ -z "$value" ] || [[ $value == *$'\n'* ]] || [[ $value == *$'\r'* ]]; then
+      echo "guard: credential value unavailable" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    credential_values+=("$value")
+  fi
+  # ponytail: refuse all .github edits for now; the caller exception comes later.
   if jq -e --argjson max "$max_files" \
-    'any(.additions[].path, .deletions[].path; startswith(".github/workflows/")) or
+    'any(.additions[].path, .deletions[].path; startswith(".github/")) or
      any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$")) or
      (([.additions[].path, .deletions[].path] | length) > $max)' \
-    "$tmp/changes.json" >/dev/null; then
+    "$changes" >/dev/null; then
     if jq -e 'any(.additions[].path, .deletions[].path; startswith(".github/workflows/"))' \
-      "$tmp/changes.json" >/dev/null; then
+      "$changes" >/dev/null; then
       echo "guard: workflow path" >"$rdir/reason"
+    elif jq -e 'any(.additions[].path, .deletions[].path; startswith(".github/"))' \
+      "$changes" >/dev/null; then
+      echo "guard: github path" >"$rdir/reason"
     elif jq -e 'any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$"))' \
-      "$tmp/changes.json" >/dev/null; then
+      "$changes" >/dev/null; then
       echo "guard: test deletion" >"$rdir/reason"
     else
       echo "guard: too many files" >"$rdir/reason"
@@ -452,13 +510,13 @@ publish_fix_token() {
     return 1
   fi
 
-  jq -r '.additions[].path' "$tmp/changes.json" >"$tmp/paths"
+  jq -r '.additions[].path' "$changes" >"$tmp/paths"
   while IFS= read -r path; do
     base64_file="$tmp/new.b64"
     base_json="$tmp/base.json"
     new_json="$tmp/new.json"
     jq -r --arg p "$path" '.additions[] | select(.path == $p) | .contents' \
-      "$tmp/changes.json" >"$base64_file" || {
+      "$changes" >"$base64_file" || {
       echo "guard: invalid base64 contents" >"$rdir/reason"
       rm -rf "$tmp"
       return 1
@@ -473,6 +531,13 @@ publish_fix_token() {
       rm -rf "$tmp"
       return 1
     fi
+    for value in "${credential_values[@]}"; do
+      if fix_contains_credential "$tmp/new" "$value"; then
+        echo "guard: credential value" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+      fi
+    done
     api_path=$(fix_api_path "$path")
     if ! gh_status_get "$gh" "repos/$(job_get "$id" .repo)/contents/$api_path?ref=$sha"; then
       echo "guard: base file lookup failed" >"$rdir/reason"
@@ -483,7 +548,11 @@ publish_fix_token() {
       200)
         if ! jq -e '.encoding == "base64" and (.content | type == "string")' \
           <<<"$GH_HTTP_BODY" >/dev/null; then
-          echo "guard: base file response invalid" >"$rdir/reason"
+          if jq -e '.encoding == "none"' <<<"$GH_HTTP_BODY" >/dev/null; then
+            echo "guard: base file too large" >"$rdir/reason"
+          else
+            echo "guard: base file response invalid" >"$rdir/reason"
+          fi
           rm -rf "$tmp"
           return 1
         fi
@@ -503,6 +572,19 @@ publish_fix_token() {
         return 1
         ;;
     esac
+    suppression_rc=0
+    if [[ $path =~ (^|/)(tests?|__tests__|spec)/|_test\.|\.test\.|\.spec\.|test_[^/]*\.py$ ]]; then
+      fix_test_definitions_removed "$base_json" "$new_json" || suppression_rc=$?
+      if [ "$suppression_rc" -eq 0 ]; then
+        echo "guard: test removal" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+      elif [ "$suppression_rc" -ne 1 ]; then
+        echo "guard: test line comparison failed" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+      fi
+    fi
     suppression_rc=0
     fix_suppression_added "$base_json" "$new_json" || suppression_rc=$?
     if [ "$suppression_rc" -eq 0 ]; then
@@ -546,7 +628,7 @@ publish_fix_token() {
       return 1
       ;;
   esac
-  jq -n --slurpfile changes "$tmp/changes.json" --arg repo "$(job_get "$id" .repo)" \
+  jq -n --slurpfile changes "$changes" --arg repo "$(job_get "$id" .repo)" \
     --arg branch "$branch" --arg sha "$sha" --arg headline "$headline" --arg body "$body" \
     --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
     '{query: $query, variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch},
@@ -1127,7 +1209,7 @@ cmd_start() {
 }
 
 cmd_fix() {
-  local tool repo branch sha raw_prompt prompt id dir cap running count=0 line
+  local tool repo branch sha raw_prompt prompt id dir cap running count=0 line tier
   [ $# -eq 5 ] || usage
   tool=$1 repo=$2 branch=$3 sha=$4 raw_prompt=$5
   [[ $tool != -* ]] || refuse "unknown tool"
@@ -1137,6 +1219,10 @@ cmd_fix() {
   valid_branch "$branch" || refuse "invalid branch"
   [[ $sha =~ ^[0-9a-f]{40}$ ]] || refuse "invalid expected sha"
   parse_fix_prompt "$raw_prompt" || refuse "invalid CI-RESOLVER header"
+  if { [ "$tier" = t1 ] && [ "$tool" != shell ]; } || \
+    { [ "$tier" != t1 ] && [ "$tool" = shell ]; }; then
+    refuse "invalid CI-RESOLVER header"
+  fi
   prompt=$fix_task
   valid_text "$prompt" || refuse "invalid prompt"
   # shell runs the workbook's deterministic command and needs no model credential.
