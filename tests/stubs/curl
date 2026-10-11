@@ -9,7 +9,7 @@ set -euo pipefail
   printf '\n'
 } >>"$STUB_DIR/argv.log"
 
-method=GET url="" headers="" body="" out=/dev/stdout
+method=GET url="" headers="" body="" out=/dev/stdout write_out="" fail_with_body=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -X)
@@ -19,6 +19,14 @@ while [ $# -gt 0 ]; do
     -o)
       out=$2
       shift 2
+      ;;
+    -w | --write-out)
+      write_out=$2
+      shift 2
+      ;;
+    --fail-with-body)
+      fail_with_body=1
+      shift
       ;;
     -H)
       if [[ $2 == @* ]]; then headers+=$(cat "${2#@}")$'\n'; else headers+=$2$'\n'; fi
@@ -49,7 +57,7 @@ vault=$(sed -n 's/^X-Vault-Token: //p' <<<"$headers")
 echo "curl $method $url${vault:+ token=$vault}" >>"$STUB_DIR/calls.log"
 
 # --fail-with-body: an error answer still writes its body, then exits 22.
-code=0
+code=0 http_code=200
 case "$url" in
   */v1/auth/approle/login)
     if [ -n "${STUB_LOGIN_FAIL:-}" ]; then
@@ -83,14 +91,49 @@ case "$url" in
       resp='[{"type":"deletion"},{"type":"pull_request","parameters":{}}]'
     fi
     ;;
+  */repos/*/contents/*)
+    if [ -n "${STUB_BASE_TOO_LARGE:-}" ]; then
+      resp='{"type":"file","encoding":"none","content":""}'
+    elif [ -n "${STUB_CONTENTS_404:-}" ]; then
+      http_code=404
+      resp='{"message":"Not Found"}'
+    else
+      resp=$(jq -cn --arg c "${STUB_BASE_CONTENT:-}" '{type: "file", encoding: "base64", content: $c}')
+    fi
+    ;;
+  */repos/*/git/ref/heads/*)
+    if [ "${STUB_FIX_BRANCH_EXISTS:-}" = 1 ]; then
+      resp='{"ref":"refs/heads/fix","object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+    else
+      http_code=404
+      resp='{"message":"Not Found"}'
+    fi
+    ;;
+  */repos/*/git/refs)
+    resp='{"ref":"refs/heads/fix"}'
+    ;;
+  */repos/*/pulls)
+    resp=$(jq -cn --arg u "${STUB_FIX_PR_URL:-https://github.com/${STUB_SCOPE_REPO:-dryvist/nix-ai}/pull/8}" '{html_url: $u}')
+    ;;
+  */graphql)
+    if [ -n "${STUB_HEAD_MOVED:-}" ]; then
+      resp='{"errors":[{"message":"Expected branch head to match expectedHeadOid"}]}'
+    else
+      resp='{"data":{"createCommitOnBranch":{"commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}'
+    fi
+    ;;
   */repos/*)
     if [ -n "${STUB_REPO_PRIVATE:-}" ]; then
-      resp='{"private":true,"visibility":"private","default_branch":"main"}'
+      resp="{\"private\":true,\"visibility\":\"private\",\"default_branch\":\"${STUB_DEFAULT_BRANCH:-main}\"}"
     else
-      resp='{"private":false,"visibility":"public","default_branch":"main"}'
+      resp="{\"private\":false,\"visibility\":\"public\",\"default_branch\":\"${STUB_DEFAULT_BRANCH:-main}\"}"
     fi
     ;;
   *) resp='{}' ;;
 esac
 printf '%s\n' "$resp" >"$out"
+[ "$http_code" -lt 400 ] || [ "$fail_with_body" = 0 ] || code=22
+if [ -n "$write_out" ]; then
+  printf '%s' "${write_out//\%\{http_code\}/$http_code}"
+fi
 exit "$code"

@@ -18,6 +18,13 @@ next() {
 }
 
 case "$1" in
+  ps)
+    if [ -n "${STUB_FIX_CONTAINERS:-}" ]; then
+      printf '%s\n' "$STUB_FIX_CONTAINERS"
+    elif [ -n "${STUB_FIX_RUNNING_COUNT:-}" ]; then
+      for ((i = 0; i < STUB_FIX_RUNNING_COUNT; i++)); do printf 'fix-container-%s\n' "$i"; done
+    fi
+    ;;
   create)
     shift
     printf '%s\n' "$@" >"$STUB_DIR/create.$(next create)"
@@ -26,6 +33,11 @@ case "$1" in
   cp)
     if [ "$2" = - ]; then
       cat >"$STUB_DIR/cp.$(next cp).tar"
+    elif [[ "$2" == *"/.agent-fix" ]] && [ -n "${STUB_FIX_DIR:-}" ]; then
+      tar -C "${STUB_FIX_DIR%/*}" -cf - "${STUB_FIX_DIR##*/}"
+    elif [[ "$2" == *"/.agent-fix" ]]; then
+      echo "Error response from daemon: Could not find the file" >&2
+      exit 1
     elif [ -n "${STUB_PR_URL:-}" ]; then
       d=$(mktemp -d)
       printf '%s\n' "$STUB_PR_URL" >"$d/.agent-pr-url"
