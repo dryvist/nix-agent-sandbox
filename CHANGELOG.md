@@ -1,0 +1,52 @@
+# Changelog
+
+## 1.0.0 (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* profiles use `env` (a list of variable names) in place of `kv`, and the container no longer fetches secrets itself.
+
+### Features
+
+* **agent-cli:** inject subscription-OAuth creds per run ([#9](https://github.com/dryvist/nix-agent-sandbox/issues/9)) ([4b480e9](https://github.com/dryvist/nix-agent-sandbox/commit/4b480e986772a4489feaf2269d77e4128987c436))
+* **agent-cli:** persist run transcripts to a host spool for Splunk ([#18](https://github.com/dryvist/nix-agent-sandbox/issues/18)) ([43bacd2](https://github.com/dryvist/nix-agent-sandbox/commit/43bacd2d8978e1c5ca12fbb070785adfc1681d8b))
+* **agent-cli:** spool daily CLI logs ([#50](https://github.com/dryvist/nix-agent-sandbox/issues/50)) ([49c7583](https://github.com/dryvist/nix-agent-sandbox/commit/49c7583b00d047902499fe5b4744ec29fc1cc23f))
+* **agent-dispatch:** add the agent-dispatch job dispatcher ([8530231](https://github.com/dryvist/nix-agent-sandbox/commit/8530231fe7e9055d8b0a640cb16d3fa9dbe2f901))
+* **agent-dispatch:** add the host job dispatcher and its SSH entrypoint ([b0bfc41](https://github.com/dryvist/nix-agent-sandbox/commit/b0bfc41042c87778306fb5ed1d9aac8f0def820c))
+* **agent-dispatch:** renew the login token while a job runs ([3ae6a2f](https://github.com/dryvist/nix-agent-sandbox/commit/3ae6a2f3866eeac75b12aa58432137235b6eccb7))
+* **agent-dispatch:** renew the login token while a job runs ([38f9adf](https://github.com/dryvist/nix-agent-sandbox/commit/38f9adf2df428a72e3124b6c7f175ce9bfd8bc2d))
+* **agent-dispatch:** terminal sessions, public-only repositories, signed publish ([#71](https://github.com/dryvist/nix-agent-sandbox/issues/71)) ([b5587ff](https://github.com/dryvist/nix-agent-sandbox/commit/b5587ffb8256c396bbd3cef245f22011d258876e))
+* **agent-sandbox:** add Qwen Code CLI support ([#60](https://github.com/dryvist/nix-agent-sandbox/issues/60)) ([aca08df](https://github.com/dryvist/nix-agent-sandbox/commit/aca08dfa94510820ef3c60abf3cfc4f01de06af5))
+* **agent:** default sweep concurrency to eight ([d93e5d4](https://github.com/dryvist/nix-agent-sandbox/commit/d93e5d4bffd138e56c7990c18487fc9c856566a4))
+* **agent:** default sweep concurrency to eight ([b2cc3ca](https://github.com/dryvist/nix-agent-sandbox/commit/b2cc3ca702dc792114dc36a255c16ba8dc6a3223))
+* container resource ceilings, hardening flags, timeout, gitleaks pre-push ([#16](https://github.com/dryvist/nix-agent-sandbox/issues/16)) ([b13c890](https://github.com/dryvist/nix-agent-sandbox/commit/b13c89095aa75169b38b7aad63967b82531f7896))
+* **dispatch:** add a check verb and alert on missing credential files ([#72](https://github.com/dryvist/nix-agent-sandbox/issues/72)) ([fcae8b5](https://github.com/dryvist/nix-agent-sandbox/commit/fcae8b54b92e9b2077c6ed14ea9377d4552403f4))
+* **dispatch:** add qwen-code batch tool and cursor-agent batch key ([#77](https://github.com/dryvist/nix-agent-sandbox/issues/77)) ([ed12bc5](https://github.com/dryvist/nix-agent-sandbox/commit/ed12bc5563a9a00559a651c69eac314d40b08431))
+* **egress:** allow provider downloads ([#54](https://github.com/dryvist/nix-agent-sandbox/issues/54)) ([9151b1b](https://github.com/dryvist/nix-agent-sandbox/commit/9151b1b0a87e720d04e5df38309485d868df394f))
+* **image:** add OpenCode and Cursor Agent ([#46](https://github.com/dryvist/nix-agent-sandbox/issues/46)) ([9632563](https://github.com/dryvist/nix-agent-sandbox/commit/9632563c8d8f3d85c9c4b811180a2329032b9373))
+* initial scaffold - agent image, dispatch CLI, egress allowlist ([b256999](https://github.com/dryvist/nix-agent-sandbox/commit/b2569991e3fbc4ed2b3409aac647a331dd110209))
+* OpenBao task profiles, GitHub App tokens, egress-proxied remote runs ([7f0f5b5](https://github.com/dryvist/nix-agent-sandbox/commit/7f0f5b5494d1dd7078ddcaf7545e5913c07b6217))
+* repo groups + agent sweep fan-out ([#11](https://github.com/dryvist/nix-agent-sandbox/issues/11)) ([5c7d56f](https://github.com/dryvist/nix-agent-sandbox/commit/5c7d56f2d22e14c5d18c7006cd4b1014d6d9b548))
+* reuse one dispatcher session for jobs ([#43](https://github.com/dryvist/nix-agent-sandbox/issues/43)) ([dfea2a8](https://github.com/dryvist/nix-agent-sandbox/commit/dfea2a833cec02f9b96b284c26dc0cf997ba8789))
+* **zcode-job:** add --tool option to start ([#81](https://github.com/dryvist/nix-agent-sandbox/issues/81)) ([e222804](https://github.com/dryvist/nix-agent-sandbox/commit/e2228047a450a37b941d74543e5be82ce686f3a5))
+* **zcode-job:** add the restricted SSH offload client ([#40](https://github.com/dryvist/nix-agent-sandbox/issues/40)) ([75a5134](https://github.com/dryvist/nix-agent-sandbox/commit/75a51340aab8d0c820f9f034fa5a11755f1703d7))
+* **zcode:** add persistent Web runtime ([#42](https://github.com/dryvist/nix-agent-sandbox/issues/42)) ([82d44e9](https://github.com/dryvist/nix-agent-sandbox/commit/82d44e91da62f4b5f0abbfa67556d2bc4ebce53b))
+
+
+### Bug Fixes
+
+* **agent-cli,entrypoint:** canary follow-ups — codex repo-check, dead-cred guard, portable epoch ([#10](https://github.com/dryvist/nix-agent-sandbox/issues/10)) ([aa05c50](https://github.com/dryvist/nix-agent-sandbox/commit/aa05c507aecede9764e1dcf9f11b3a1098d56e1b))
+* **agent-cli:** mint GitHub write tokens on the launcher, not in-container ([47d34a4](https://github.com/dryvist/nix-agent-sandbox/commit/47d34a4c104fed650b77fd76e6ee349da11aa396))
+* **agent-cli:** remove orphaned container when OAuth injection fails ([#14](https://github.com/dryvist/nix-agent-sandbox/issues/14)) ([5a117ee](https://github.com/dryvist/nix-agent-sandbox/commit/5a117ee330106fe957fa5cad7ffb178dba00a549))
+* **agent-cli:** string-form github-write mint params — list/number shape is denied ([#6](https://github.com/dryvist/nix-agent-sandbox/issues/6)) ([f82ed35](https://github.com/dryvist/nix-agent-sandbox/commit/f82ed3543b36ab7b9fe8e8dbbbbf50c397bd6621))
+* **agent:** align sweep help with eight-run default ([b95e5ae](https://github.com/dryvist/nix-agent-sandbox/commit/b95e5aed0ef454e0374f3d569d13ed904a46ceff))
+* **ci:** focus pull request flake checks ([#65](https://github.com/dryvist/nix-agent-sandbox/issues/65)) ([ed6a23d](https://github.com/dryvist/nix-agent-sandbox/commit/ed6a23db42fa00352798bca0c63207fd28b74b36))
+* **flake:** repin nix-ai input to main ([#7](https://github.com/dryvist/nix-agent-sandbox/issues/7)) ([17758a4](https://github.com/dryvist/nix-agent-sandbox/commit/17758a4c0733d5fe01cfb8a6d8221daf70a5348f))
+* make zcode-job help config-free ([43f8141](https://github.com/dryvist/nix-agent-sandbox/commit/43f8141613de6b15e8b69f264a45ebec2f92773e))
+* make zcode-job help config-free ([f885685](https://github.com/dryvist/nix-agent-sandbox/commit/f885685cf3370e77418b27ac56e903937734849a))
+
+
+### Refactoring
+
+* take run credentials from the caller's environment ([ed5cb73](https://github.com/dryvist/nix-agent-sandbox/commit/ed5cb730f9cba2d4caa90e37dc9f8e9ce172b604))
