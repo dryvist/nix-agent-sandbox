@@ -570,7 +570,7 @@ class ResolverTests(unittest.TestCase):
     def prepare_merge_pr(self, commits, published):
         branch = "ci-resolver/5"
         sha = commits[-1]
-        listing = {"number": 5, "title": "fix(ci): build", "state": "open", "head": {"ref": branch, "sha": sha, "repo": {"full_name": REPO}}, "html_url": "pr-url"}
+        listing = {"number": 5, "title": "fix(ci): build", "state": "open", "base": {"ref": "main"}, "head": {"ref": branch, "sha": sha, "repo": {"full_name": REPO}}, "html_url": "pr-url"}
         detail = dict(listing, mergeable=True, mergeable_state="clean")
         self.gh.prs[REPO] = [listing]
         self.gh.pr_details[(REPO, 5)] = detail
@@ -602,6 +602,46 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(len(merges), 1)
         self.assertTrue((self.state / "candidates.jsonl").exists())
         self.assertTrue(any(call[1].endswith("/pulls/5") for call in self.gh.calls))
+
+    def test_pr_to_a_non_default_base_does_not_merge(self):
+        sha = "a2" * 20
+        self.prepare_merge_pr([sha], {sha: "t1"})
+        self.gh.pr_details[(REPO, 5)]["base"] = {"ref": "release"}
+        self.resolver.merge_and_learn(REPO)
+        self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
+
+    def test_wrong_app_id_halts_after_one_claim(self):
+        resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": "999"}, dispatcher=self.dispatcher, now=lambda: NOW)
+        resolver.repos = lambda: [REPO]
+        resolver.load_groups = lambda repo: [self.group()]
+        resolver.update_liveness = lambda groups: {}
+        merged = []
+        resolver.merge_and_learn = lambda repo: merged.append(repo)
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            resolver.tick()
+            resolver.tick()
+        claims = [call for call in self.gh.calls if call[0] == "POST" and call[1].endswith("/check-runs")]
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(self.gh.checks[(REPO, SHA)][0]["conclusion"], "neutral")
+        self.assertFalse(any(args[0] == "fix" for args in self.dispatched))
+        self.assertEqual(merged, [])
+        self.assertTrue((self.state / "halted").exists())
+        self.assertIn("halted", output.getvalue())
+
+    def test_failed_status_command_leaves_the_job_running(self):
+        check = self.make_check(external_id="j-running", meta={"tier": "t3", "attempt": 1, "branch": "main", "sha": SHA})
+        self.status_reply = (1, {})
+        self.resolver.process_group(self.group())
+        self.assertEqual(check["status"], "in_progress")
+        self.assertEqual(len(self.gh.checks[(REPO, SHA)]), 1)
+
+    def test_model_tier_escalates_on_a_pr_with_auto_merge(self):
+        pr = {"number": 3, "auto_merge": {"merge_method": "squash"}, "head": {"ref": "feature", "repo": {"full_name": REPO}}}
+        self.resolver.process_group(self.group(run=self.run_row(head_branch="feature"), prs=[pr]))
+        self.assertFalse(any(args[0] == "fix" for args in self.dispatched))
+        self.assertEqual(self.gh.checks[(REPO, SHA)][-1]["conclusion"], "action_required")
+        self.assertIn("auto-merge", self.gh.checks[(REPO, SHA)][-1]["output"]["summary"])
 
     def test_failing_foreign_check_or_foreign_resolver_check_blocks_merge(self):
         sha = "a1" * 20

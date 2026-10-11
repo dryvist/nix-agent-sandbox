@@ -45,6 +45,10 @@ class APIError(Exception):
         self.body = message
 
 
+class WrongApp(Exception):
+    """A created check run belongs to a different App than CI_RESOLVER_APP_ID."""
+
+
 class Response:
     def __init__(self, status, headers, body):
         self.status = status
@@ -314,6 +318,7 @@ class Resolver:
         self.now = now or time.time
         self.state = Path(self.env.get("CI_RESOLVER_STATE_DIR", "/var/lib/ci-resolver"))
         self.app_id = self.env.get("CI_RESOLVER_APP_ID", "").strip()
+        self.halt_file = self.state / "halted"
         self.entries = load_workbook(self.env.get("CI_RESOLVER_WORKBOOK_DIR", ""))
         self.shadow = self.env.get("CI_RESOLVER_SHADOW", "0") == "1"
         self.repo_cache = {}
@@ -524,6 +529,12 @@ class Resolver:
             "status": "in_progress",
             "output": {"title": title[:255], "summary": self.summary("Reconciliation in progress.", meta)},
         })
+        if str((data.get("app") or {}).get("id", "")) != self.app_id:
+            # The claim is invisible to the app_id-filtered reads, so every tick would claim again.
+            self.update_check(group["repo"], data["id"], "completed", "neutral", "CI_RESOLVER_APP_ID is misconfigured.", meta)
+            self.state.mkdir(parents=True, exist_ok=True)
+            self.halt_file.write_text("check run app id does not match CI_RESOLVER_APP_ID\n")
+            raise WrongApp()
         return data
 
     def update_check(self, repo, check_id, status, conclusion=None, message="", meta=None, external_id=None):
@@ -596,7 +607,7 @@ class Resolver:
 
     def dispatch_status(self, job):
         code, result = self.run_dispatcher(["status", job])
-        return result if code == 0 else {"state": "failed", "reason": "status command failed"}
+        return result if code == 0 else None
 
     def branch_for(self, group, repo_data):
         if group["prs"]:
@@ -654,6 +665,9 @@ class Resolver:
         if not branch:
             self.escalate(group, check, meta, "No open same-repository PR for the failing branch.", classification)
             return
+        if tier in ("t2", "t3") and any(pr.get("auto_merge") for pr in group["prs"]):
+            self.escalate(group, check, meta, "The PR has auto-merge enabled; a model fix would merge unreviewed.", classification)
+            return
         attempt = len(history["fixes"]) + 1
         prompt = self.build_prompt(group, classification, tier, attempt, branch)
         tool = {"t1": "shell", "t2": "opencode-local", "t3": "opencode-zai"}[tier]
@@ -692,6 +706,9 @@ class Resolver:
     def process_job(self, group, check, meta):
         job_id = check.get("external_id")
         result = self.dispatch_status(job_id)
+        if result is None:
+            self.log("dispatcher status failed for %s; will retry" % job_id)
+            return
         state = result.get("state", result.get("status", ""))
         commit = result.get("commit") or result.get("commit_oid") or result.get("head_sha")
         if isinstance(commit, dict):
@@ -867,7 +884,7 @@ class Resolver:
                 continue
             pr = self.api("GET", "/repos/%s/pulls/%s" % (repo, number))
             branch = pr.get("head", {}).get("ref", "")
-            if pr.get("state", "open") != "open" or not branch.startswith("ci-resolver/") or pr.get("head", {}).get("repo", {}).get("full_name", "").lower() != repo.lower():
+            if pr.get("state", "open") != "open" or pr.get("base", {}).get("ref") != self.repo(repo).get("default_branch") or not branch.startswith("ci-resolver/") or pr.get("head", {}).get("repo", {}).get("full_name", "").lower() != repo.lower():
                 continue
             sha = pr.get("head", {}).get("sha", "")
             if not sha:
@@ -984,6 +1001,9 @@ class Resolver:
         if not self.app_id:
             self.log("CI_RESOLVER_APP_ID is unset; nothing reconciled")
             return
+        if self.halt_file.exists():
+            self.log("halted: %s is present; fix CI_RESOLVER_APP_ID, then remove it" % self.halt_file)
+            return
         repos = self.repos()
         groups = []
         for repo in repos:
@@ -995,6 +1015,9 @@ class Resolver:
         for group in groups:
             try:
                 self.process_group(group)
+            except WrongApp:
+                self.log("CI_RESOLVER_APP_ID does not match the App that owns this token; halted")
+                return
             except Exception as error:
                 self.log("reconciliation failed for %s (%s)" % (group["repo"], type(error).__name__))
         for repo in repos:
