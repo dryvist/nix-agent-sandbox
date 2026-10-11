@@ -35,6 +35,7 @@ TRANSIENT_PATTERNS = (
     r"Could not resolve host",
 )
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+PROMPT_CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 class APIError(Exception):
@@ -52,7 +53,7 @@ class Response:
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
@@ -177,8 +178,12 @@ def clip_bytes(value, limit):
     return str(value).encode("utf-8")[:limit].decode("utf-8", "ignore")
 
 
+def clean_prompt(value):
+    return PROMPT_CONTROLS.sub("", ANSI.sub("", str(value or "")))
+
+
 def extract_failed_step(log):
-    lines = str(log or "").splitlines()
+    lines = [re.sub(r"^\d{4}-\d\d-\d\dT\S+Z\s?", "", line) for line in str(log or "").splitlines()]
     error_at = next((i for i, line in enumerate(lines) if line.startswith("##[error]")), None)
     if error_at is None:
         errors = [line for line in lines if re.search(r"(?i)error|failed|failure|exception|timed? out|denied", line)]
@@ -308,6 +313,7 @@ class Resolver:
         self.dispatcher = dispatcher
         self.now = now or time.time
         self.state = Path(self.env.get("CI_RESOLVER_STATE_DIR", "/var/lib/ci-resolver"))
+        self.app_id = self.env.get("CI_RESOLVER_APP_ID", "").strip()
         self.entries = load_workbook(self.env.get("CI_RESOLVER_WORKBOOK_DIR", ""))
         self.shadow = self.env.get("CI_RESOLVER_SHADOW", "0") == "1"
         self.repo_cache = {}
@@ -345,25 +351,30 @@ class Resolver:
             self.repo_cache[name] = self.api("GET", "/repos/%s" % name)
         return self.repo_cache[name]
 
-    def _cache_path(self, repo):
-        return self.state / ("runs-" + hashlib.sha1(repo.encode()).hexdigest() + ".json")
+    def _cache_path(self, repo, status="failure"):
+        return self.state / ("runs-" + hashlib.sha1(repo.encode()).hexdigest() + "-" + status + ".json")
 
     def failed_runs(self, repo):
-        path = "/repos/%s/actions/runs?status=failure&per_page=30" % repo
-        cache = self._cache_path(repo)
-        cached = {}
-        try:
-            cached = json.loads(cache.read_text())
-        except (OSError, ValueError):
-            pass
-        headers = {"If-None-Match": cached["etag"]} if cached.get("etag") else {}
-        status, data, response_headers = self.gh.json("GET", path, headers=headers)
-        if status == 304:
-            return cached.get("runs", [])
-        runs = data.get("workflow_runs", [])
-        self.state.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"etag": response_headers.get("ETag"), "runs": runs}))
-        return runs
+        found = {}
+        for conclusion in ("failure", "timed_out", "startup_failure"):
+            path = "/repos/%s/actions/runs?status=%s&per_page=30" % (repo, conclusion)
+            cache = self._cache_path(repo, conclusion)
+            cached = {}
+            try:
+                cached = json.loads(cache.read_text())
+            except (OSError, ValueError):
+                pass
+            headers = {"If-None-Match": cached["etag"]} if cached.get("etag") else {}
+            status, data, response_headers = self.gh.json("GET", path, headers=headers)
+            if status == 304:
+                runs = cached.get("runs", [])
+            else:
+                runs = data.get("workflow_runs", [])
+                self.state.mkdir(parents=True, exist_ok=True)
+                cache.write_text(json.dumps({"etag": response_headers.get("ETag"), "runs": runs}))
+            for run in runs:
+                found[run.get("id", (conclusion, len(found)))] = run
+        return list(found.values())
 
     def open_prs(self, repo, branch=None):
         if repo not in self.pr_cache:
@@ -374,27 +385,7 @@ class Resolver:
         return [pr for pr in self.pr_cache[repo] if pr.get("head", {}).get("ref") == branch and pr.get("head", {}).get("repo", {}).get("full_name", "").lower() == repo.lower()]
 
     def _all_pulls(self, path):
-        # The fake and real clients both expose page-sized arrays here.
-        if hasattr(self.gh, "pages"):
-            page = 1
-            rows = []
-            while True:
-                sep = "&" if "?" in path else "?"
-                batch = self.gh.pages("%s%spage=%d" % (path, sep, page), "")
-                rows.extend(batch)
-                if len(batch) < 100:
-                    return rows
-                page += 1
-        page = 1
-        rows = []
-        while True:
-            sep = "&" if "?" in path else "?"
-            data = self.api("GET", "%s%spage=%d" % (path, sep, page))
-            batch = data if isinstance(data, list) else data.get("pulls", [])
-            rows.extend(batch)
-            if len(batch) < 100:
-                return rows
-            page += 1
+        return self.pages(path, "")
 
     def active_branch(self, repo, run, default_branch):
         branch = run.get("head_branch", "")
@@ -490,11 +481,25 @@ class Resolver:
         return result
 
     def check_runs(self, repo, sha):
-        path = "/repos/%s/commits/%s/check-runs?check_name=%s&per_page=100" % (repo, sha, CHECK_NAME)
+        query = urllib.parse.urlencode({"app_id": self.app_id or "0", "check_name": CHECK_NAME, "per_page": 100})
+        path = "/repos/%s/commits/%s/check-runs?%s" % (repo, sha, query)
         return self.pages(path, "check_runs")
 
     def all_check_runs(self, repo, sha):
         return self.pages("/repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha), "check_runs")
+
+    def published_commits(self):
+        try:
+            published = json.loads((self.state / "published.json").read_text())
+            return published if isinstance(published, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def record_published(self, commit, tier):
+        published = self.published_commits()
+        published[str(commit)] = tier
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "published.json").write_text(json.dumps(published, sort_keys=True))
 
     def metadata(self, check_run):
         summary = (check_run.get("output") or {}).get("summary", "")
@@ -627,11 +632,12 @@ class Resolver:
             "Fix the root cause; run the reproduce or failing command until it passes.",
             "Never edit .github/workflows/, never delete or skip tests, never add suppressions; keep the diff minimal.",
         ])
-        headline = urllib.parse.quote("fix(ci): " + (job.get("name") or group["run"].get("name", "failure"))[:80], safe="")
+        headline = urllib.parse.quote(clip_bytes(clean_prompt("fix(ci): " + (job.get("name") or group["run"].get("name", "failure"))), 100), safe="")
         header = "CI-RESOLVER headline=%s attempt=%d tier=%s signature=%s" % (headline, attempt, tier, classification["signature"])
         if tier == "t1" and command:
-            return header + "\n" + command
+            return clean_prompt(header + "\n" + command)
         prompt = header + "\n\n" + "\n".join(task)
+        prompt = clean_prompt(prompt)
         encoded = prompt.encode("utf-8")
         if len(encoded) <= 16384:
             return prompt
@@ -640,7 +646,7 @@ class Resolver:
         variable = "\n".join(task[:-2])
         budget = max(0, 16384 - len((prefix + fixed).encode("utf-8")))
         variable = variable.encode("utf-8")[:budget].decode("utf-8", "ignore")
-        return prefix + variable + fixed
+        return clean_prompt(prefix + variable + fixed)
 
     def dispatch(self, group, check, meta, classification, tier, history):
         repo_data = self.repo(group["repo"])
@@ -651,16 +657,23 @@ class Resolver:
         attempt = len(history["fixes"]) + 1
         prompt = self.build_prompt(group, classification, tier, attempt, branch)
         tool = {"t1": "shell", "t2": "opencode-local", "t3": "opencode-zai"}[tier]
+        meta.update({"branch": branch, "tier": tier, "attempt": attempt, "signature": classification["signature"], "signature_text": classification["signature_text"], "repo": group["repo"], "sha": group["sha"], "run_id": group["run"]["id"], "classification": classification["class"], "entry_id": (classification.get("entry") or {}).get("id"), "state": "dispatched"})
         code, result = self.run_dispatcher(["fix", tool, group["repo"], branch, group["sha"], prompt])
+        if code == 64:
+            reason = str(result.get("reason") or result.get("error") or "dispatcher refused input (exit 64)")
+            self.escalate(group, check, meta, reason, classification)
+            return
+        job_id = result.get("job") or result.get("job_id") or result.get("id")
+        if job_id:
+            self.update_check(group["repo"], check["id"], "in_progress", message="Dispatcher job is running.", meta=meta, external_id=str(job_id))
+            return
         if code == 75 or result.get("state") == "busy" or result.get("error") == "busy":
             self.log("dispatcher busy; will retry")
             return
-        job_id = result.get("job") or result.get("job_id") or result.get("id")
-        if code != 0 or not job_id:
+        if code != 0:
             self.log("dispatcher did not return a job id")
             return
-        meta.update({"branch": branch, "tier": tier, "attempt": attempt, "signature": classification["signature"], "signature_text": classification["signature_text"], "repo": group["repo"], "sha": group["sha"], "run_id": group["run"]["id"], "classification": classification["class"], "entry_id": (classification.get("entry") or {}).get("id"), "state": "dispatched"})
-        self.update_check(group["repo"], check["id"], "in_progress", message="Dispatcher job is running.", meta=meta, external_id=str(job_id))
+        self.log("dispatcher did not return a job id")
 
     def escalate(self, group, check, meta, reason, classification):
         links = [run.get("html_url", "") for run in group["runs"] if run.get("html_url")]
@@ -686,15 +699,13 @@ class Resolver:
         if state in ("succeeded", "success", "completed") and commit:
             meta["green_commit"] = commit
             self.update_check(group["repo"], check["id"], "completed", "success", "fix pushed: %s" % commit, meta)
+            self.record_published(commit, meta.get("tier", ""))
             return
-        if state == "head moved" or result.get("head_moved"):
+        reason = str(result.get("reason", "no change"))
+        if state == "head moved" or result.get("head_moved") or reason.startswith(("head moved", "exit 66")):
             self.complete_neutral(group, check, "abandoned: branch moved", meta)
             return
-        if state in ("succeeded", "success", "completed", "failed", "failure", "timeout", "timed_out"):
-            reason = str(result.get("reason", "no change"))
-            if reason.startswith("head moved") or result.get("head_moved"):
-                self.complete_neutral(group, check, "abandoned: branch moved", meta)
-                return
+        if state in ("succeeded", "success", "completed", "failed", "failure", "timeout", "timed_out", "no-change", "cancelled"):
             if meta.get("tier") not in ("t1", "t2", "t3"):
                 self.complete_neutral(group, check, reason, meta)
                 return
@@ -850,18 +861,24 @@ class Resolver:
         return data.get("oldest_queued_age_s", 0) <= 900 or data.get("in_progress_jobs", 0) > 0
 
     def merge_and_learn(self, repo):
-        for pr in self.open_prs(repo):
+        for listed_pr in self.open_prs(repo):
+            number = listed_pr.get("number")
+            if not number:
+                continue
+            pr = self.api("GET", "/repos/%s/pulls/%s" % (repo, number))
             branch = pr.get("head", {}).get("ref", "")
-            if not branch.startswith("ci-resolver/") or pr.get("head", {}).get("repo", {}).get("full_name", "").lower() != repo.lower():
+            if pr.get("state", "open") != "open" or not branch.startswith("ci-resolver/") or pr.get("head", {}).get("repo", {}).get("full_name", "").lower() != repo.lower():
                 continue
             sha = pr.get("head", {}).get("sha", "")
+            if not sha:
+                continue
             all_checks = self.all_check_runs(repo, sha)
             if not all_checks or any(item.get("status") != "completed" or item.get("conclusion") not in ("success", "neutral", "skipped") for item in all_checks):
                 continue
-            resolver_check = next((item for item in all_checks if item.get("name") == CHECK_NAME), None)
+            resolver_check = next((item for item in all_checks if item.get("name") == CHECK_NAME and str((item.get("app") or {}).get("id", "")) == self.app_id), None)
             meta = self.metadata(resolver_check or {})
+            commits = self.pages("/repos/%s/pulls/%s/commits?per_page=100" % (repo, number), "")
             if not meta.get("signature"):
-                commits = self.pages("/repos/%s/pulls/%s/commits?per_page=100" % (repo, pr["number"]), "")
                 for commit in commits:
                     commit_sha = commit.get("sha")
                     if not commit_sha:
@@ -874,17 +891,18 @@ class Resolver:
             if meta.get("signature"):
                 compare_url = "https://github.com/%s/compare/%s...%s" % (repo, meta.get("sha", ""), sha)
                 self.append_candidate({"signature": meta["signature"], "signature_text": meta.get("signature_text", ""), "repo": repo, "branch": branch, "failing_sha": meta.get("sha", ""), "green_sha": sha, "tier_or_human": meta.get("tier", "human"), "compare_url": compare_url})
-            commit = self.api("GET", "/repos/%s/commits/%s" % (repo, sha))
-            message = commit.get("commit", {}).get("message", "")
-            tier = trailer(message, "CI-Resolver-Tier")
-            if tier not in ("t0", "t1") or self.shadow or pr.get("mergeable") is not True:
+            published = self.published_commits()
+            commit_shas = [item.get("sha") for item in commits]
+            if not commit_shas or any(published.get(commit_sha) not in ("t0", "t1") for commit_sha in commit_shas):
+                continue
+            if not self.app_id or self.shadow or pr.get("mergeable") is not True or pr.get("mergeable_state") != "clean":
                 continue
             repo_data = self.api("GET", "/repos/%s" % repo)
             self.repo_cache[repo] = repo_data
             method = "squash" if repo_data.get("allow_squash_merge") else "merge" if repo_data.get("allow_merge_commit") else None
             if not method:
                 continue
-            self.api("PUT", "/repos/%s/pulls/%s/merge" % (repo, pr["number"]), {"merge_method": method, "commit_title": "%s (#%s)" % (pr.get("title", ""), pr["number"]), "sha": sha})
+            self.api("PUT", "/repos/%s/pulls/%s/merge" % (repo, number), {"merge_method": method, "commit_title": "%s (#%s)" % (pr.get("title", ""), number), "sha": sha})
 
     def append_candidate(self, candidate):
         path = self.state / "candidates.jsonl"
@@ -963,24 +981,27 @@ class Resolver:
         return json.loads(data) if data else {}
 
     def tick(self):
+        if not self.app_id:
+            self.log("CI_RESOLVER_APP_ID is unset; nothing reconciled")
+            return
         repos = self.repos()
         groups = []
         for repo in repos:
             try:
                 groups.extend(self.load_groups(repo))
-            except APIError as error:
-                self.log("could not inspect repository %s (HTTP %s)" % (repo, error.status))
+            except Exception as error:
+                self.log("could not inspect repository %s (%s)" % (repo, type(error).__name__))
         self.update_liveness(groups)
         for group in groups:
             try:
                 self.process_group(group)
-            except APIError as error:
-                self.log("reconciliation failed for %s (HTTP %s)" % (group["repo"], error.status))
+            except Exception as error:
+                self.log("reconciliation failed for %s (%s)" % (group["repo"], type(error).__name__))
         for repo in repos:
             try:
                 self.merge_and_learn(repo)
-            except APIError as error:
-                self.log("PR reconciliation failed for %s (HTTP %s)" % (repo, error.status))
+            except Exception as error:
+                self.log("PR reconciliation failed for %s (%s)" % (repo, type(error).__name__))
 
     def workbook_file(self, entry, recipe):
         org = self.env.get("CI_RESOLVER_ORG", "dryvist") or "dryvist"

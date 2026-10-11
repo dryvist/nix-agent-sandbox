@@ -242,6 +242,12 @@ runs its `fix.command` through the dispatcher's `shell` tool (tier `t1`).
 `ci-resolver learn --workbook-repo <checkout>` writes `learned-<signature>.md`
 entries into that checkout's `automation/ci-workbook/`; it changes files only.
 
+### Environment
+
+| Name | Use |
+| --- | --- |
+| `CI_RESOLVER_APP_ID` | GitHub App ID for the check runs used by the resolver; required for automatic merges |
+
 ## Safety model
 
 - **Filesystem/process**: disposable container, non-root, `--rm`. On the

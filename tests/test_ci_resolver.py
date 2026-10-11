@@ -1,6 +1,8 @@
 import datetime as dt
+import contextlib
 import fcntl
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -14,6 +16,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 module_spec = importlib.util.spec_from_file_location("ci_resolver", Path(__file__).resolve().parents[1] / "scripts" / "ci-resolver.py")
+assert module_spec is not None and module_spec.loader is not None
 resolver_module = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(resolver_module)
 
@@ -21,6 +24,7 @@ module_spec.loader.exec_module(resolver_module)
 NOW = 1_797_000_000
 SHA = "a" * 40
 REPO = "owner/project"
+APP_ID = "12345"
 
 
 def iso(timestamp=NOW):
@@ -44,9 +48,11 @@ class FakeGitHub:
         self.calls = []
         self.repo_data = {REPO: {"full_name": REPO, "default_branch": "main", "private": False, "archived": False, "allow_squash_merge": True, "allow_merge_commit": True}}
         self.runs = {REPO: []}
+        self.runs_by_status = {}
         self.jobs = {}
         self.heads = {}
         self.prs = {REPO: []}
+        self.pr_details = {}
         self.pull_commits = {REPO: []}
         self.pull_queries = {REPO: []}
         self.checks = {}
@@ -59,19 +65,22 @@ class FakeGitHub:
         self.not_modified = False
         self.redirect_log = ""
         self.next_check_id = 100
+        self.page_calls = []
 
     def pages(self, path, field):
+        self.page_calls.append(path)
         if path.startswith("/installation/repositories") or path.startswith("/orgs/"):
             return list(self.repo_data.values())
-        if "/actions/runs?status=failure" in path:
-            repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
-            return self.runs.get(repo, [])[:30]
-        if "/actions/runs?status=queued" in path:
-            repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
-            return self.queued.get(repo, [])
         if "/actions/runs?status=in_progress" in path:
             repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
             return self.in_progress.get(repo, [])
+        if "/actions/runs?status=queued" in path:
+            repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
+            return self.queued.get(repo, [])
+        if "/actions/runs?status=" in path:
+            repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
+            status = resolver_module.urllib.parse.parse_qs(path.split("?", 1)[1]).get("status", [""])[0]
+            return self.runs_by_status.get(status, self.runs.get(repo, []) if status == "failure" else [])[:30]
         if "/pulls?state=open" in path:
             repo = path.split("/repos/", 1)[1].split("/pulls", 1)[0]
             return self.prs.get(repo, [])
@@ -82,17 +91,25 @@ class FakeGitHub:
             repo = path.split("/repos/", 1)[1].split("/commits/", 1)[0]
             sha = path.split("/commits/", 1)[1].split("/check-runs", 1)[0]
             checks = self.checks.get((repo, sha), [])
-            return [item for item in checks if item.get("name") == "ci-resolver"] if "check_name=ci-resolver" in path else checks
+            if "check_name=ci-resolver" in path:
+                checks = [item for item in checks if item.get("name") == "ci-resolver"]
+            app_id = resolver_module.urllib.parse.parse_qs(path.split("?", 1)[1]).get("app_id")
+            if app_id:
+                checks = [item for item in checks if str((item.get("app") or {}).get("id", "")) == app_id[0]]
+            return checks
         return []
 
     def json(self, method, path, body=None, headers=None, repo=None):
+        body = body or {}
         headers = headers or {}
         self.calls.append((method, path, body, dict(headers)))
-        if method == "GET" and path.startswith("/repos/") and "/actions/runs?status=failure" in path:
+        if method == "GET" and path.startswith("/repos/") and "/actions/runs?status=" in path:
             repo = path.split("/repos/", 1)[1].split("/actions/runs", 1)[0]
+            run_status = resolver_module.urllib.parse.parse_qs(path.split("?", 1)[1]).get("status", [""])[0]
             if self.not_modified and headers.get("If-None-Match"):
                 return 304, {}, {"ETag": '"runs"'}
-            return 200, {"workflow_runs": self.runs.get(repo, [])[:30]}, {"ETag": '"runs"'}
+            runs = self.runs_by_status.get(run_status, self.runs.get(repo, []) if run_status == "failure" else [])
+            return 200, {"workflow_runs": runs[:30]}, {"ETag": '"runs"'}
         if method == "GET" and path.startswith("/repos/") and "/actions/runs/" in path and "/jobs" in path:
             run_id = int(path.split("/actions/runs/", 1)[1].split("/", 1)[0])
             return 200, {"jobs": self.jobs.get(run_id, [])}, {}
@@ -112,12 +129,22 @@ class FakeGitHub:
             return 200, {"id": workflow_id}, {}
         if method == "GET" and path.startswith("/repos/") and "/check-runs/" in path and path.endswith("/annotations"):
             return 200, [], {}
+        if method == "GET" and path.startswith("/repos/") and "/pulls/" in path and path.rsplit("/", 1)[-1].isdigit():
+            repo = path.split("/repos/", 1)[1].split("/pulls/", 1)[0]
+            number = int(path.rsplit("/", 1)[-1])
+            pr = self.pr_details.get((repo, number))
+            if pr is None:
+                pr = next((item for item in self.prs.get(repo, []) if item.get("number") == number), {})
+            return 200, pr, {}
         if method == "GET" and path.startswith("/repos/") and "/commits/" in path and "/check-runs" in path:
             repo = path.split("/repos/", 1)[1].split("/commits/", 1)[0]
             sha = path.split("/commits/", 1)[1].split("/check-runs", 1)[0]
             checks = self.checks.get((repo, sha), [])
             if "check_name=ci-resolver" in path:
                 checks = [item for item in checks if item.get("name") == "ci-resolver"]
+            app_id = resolver_module.urllib.parse.parse_qs(path.split("?", 1)[1]).get("app_id")
+            if app_id:
+                checks = [item for item in checks if str((item.get("app") or {}).get("id", "")) == app_id[0]]
             return 200, {"check_runs": checks}, {}
         if method == "GET" and path.startswith("/repos/") and "/compare/" in path:
             repo = path.split("/repos/", 1)[1].split("/compare/", 1)[0]
@@ -136,7 +163,7 @@ class FakeGitHub:
         if method == "POST" and path.endswith("/check-runs"):
             repo = path.split("/repos/", 1)[1].split("/check-runs", 1)[0]
             self.next_check_id += 1
-            item = {"id": self.next_check_id, "name": body["name"], "head_sha": body["head_sha"], "status": body["status"], "created_at": iso(), "started_at": iso(), "output": body["output"]}
+            item = {"id": self.next_check_id, "name": body["name"], "head_sha": body["head_sha"], "status": body["status"], "created_at": iso(), "started_at": iso(), "output": body["output"], "app": {"id": int(APP_ID)}}
             self.checks.setdefault((repo, body["head_sha"]), []).append(item)
             return 201, item, {}
         if method == "PATCH" and "/check-runs/" in path:
@@ -166,7 +193,7 @@ class ResolverTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = Path(self.tmp.name) / "state"
         self.gh = FakeGitHub()
-        self.env = {"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_MAX_ATTEMPTS": "3"}
+        self.env = {"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_MAX_ATTEMPTS": "3", "CI_RESOLVER_APP_ID": APP_ID}
         self.dispatched = []
         self.dispatch_reply = (0, {"job": "j-0123456789abcdef", "state": "running"})
         self.status_reply = (0, {"state": "running"})
@@ -197,7 +224,7 @@ class ResolverTests(unittest.TestCase):
 
     def make_check(self, status="in_progress", external_id=None, meta=None, age=0, conclusion=None, sha=SHA, repo=REPO):
         started = iso(NOW - age)
-        item = {"id": 44, "name": "ci-resolver", "head_sha": sha, "status": status, "created_at": started, "started_at": started, "external_id": external_id, "output": {"summary": self.resolver.summary("existing", meta or {})}}
+        item = {"id": 44, "name": "ci-resolver", "head_sha": sha, "status": status, "created_at": started, "started_at": started, "external_id": external_id, "output": {"summary": self.resolver.summary("existing", meta or {})}, "app": {"id": int(APP_ID)}}
         if conclusion:
             item["conclusion"] = conclusion
         self.gh.checks.setdefault((repo, sha), []).append(item)
@@ -208,6 +235,31 @@ class ResolverTests(unittest.TestCase):
         right = "2025-09-01 10:11:12 FAILED /home/runner/work/x/y/tmp-999 ffffffffffffffff HTTP 503"
         self.assertEqual(resolver_module.signature(left)[1], resolver_module.signature(right)[1])
         self.assertNotEqual(resolver_module.signature(left)[1], resolver_module.signature("HTTP 404 not found")[1])
+
+    def test_timestamped_failed_step_log_keeps_only_the_failing_step(self):
+        log = "\n".join([
+            "2026-10-10T12:00:00.000Z ##[group]Set up job",
+            "2026-10-10T12:00:01.000Z Downloaded setup tools",
+            "2026-10-10T12:00:02.000Z ##[group]Run npm test",
+            "2026-10-10T12:00:03.000Z running test suite",
+            "2026-10-10T12:00:04.000Z ##[error]test assertion failed",
+        ])
+        kept = resolver_module.extract_failed_step(log)
+        self.assertIn("##[group]Run npm test", kept)
+        self.assertIn("##[error]test assertion failed", kept)
+        self.assertNotIn("Set up job", kept)
+        self.assertNotIn("Downloaded setup tools", kept)
+
+    def test_prompt_strips_ansi_and_controls_and_caps_decoded_headline_bytes(self):
+        group = self.group(jobs=[self.failed_job(name="Build", ci_log_text="\x1b[31mcompiler\x00 failed\x1b[0m")])
+        group["jobs"][0]["name"] = "é" * 100
+        prompt = self.resolver.build_prompt(group, {"signature": "0123456789ab", "signature_text": "failure", "entry": {}}, "t2", 1)
+        decoded = resolver_module.urllib.parse.unquote(prompt.split("headline=", 1)[1].split()[0])
+        self.assertLessEqual(len(decoded.encode("utf-8")), 100)
+        self.assertIn("compiler failed", prompt)
+        self.assertNotIn("\x1b", prompt)
+        self.assertNotIn("\x00", prompt)
+        self.assertFalse(any(ord(char) < 32 and char not in "\t\n" for char in prompt))
 
     def test_workbook_regex_uses_normalized_text(self):
         entry_data = entry("deterministic", r"compiler failed commit SHA", fix={"command": "make check"})
@@ -287,7 +339,7 @@ class ResolverTests(unittest.TestCase):
         pr = {"number": 5, "state": "open", "head": {"ref": branch, "sha": SHA, "repo": {"full_name": REPO}}}
         self.gh2.pull_queries[REPO] = [pr]
         dispatcher_calls = []
-        resolver_module.Resolver(self.gh2, env={"CI_RESOLVER_STATE_DIR": str(self.state / "pr")}, dispatcher=lambda args: (dispatcher_calls.append(args) or (0, {"job": "j-x"})), now=lambda: NOW).tick()
+        resolver_module.Resolver(self.gh2, env={"CI_RESOLVER_STATE_DIR": str(self.state / "pr"), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=lambda args: (dispatcher_calls.append(args) or (0, {"job": "j-x"})), now=lambda: NOW).tick()
         self.assertEqual(dispatcher_calls[0][3], branch)
 
     def test_existing_completed_check_skips_and_stale_claim_retries(self):
@@ -309,6 +361,27 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(self.resolver.failed_runs(REPO), [{**self.run_row()}])
         conditional = [call for call in self.gh.calls if call[0] == "GET" and "/actions/runs?status=failure" in call[1]][-1]
         self.assertEqual(conditional[3].get("If-None-Match"), '"runs"')
+
+    def test_startup_failure_runs_are_polled_and_classified_as_infrastructure(self):
+        run = self.run_row(id=88, conclusion="startup_failure")
+        timed_out = self.run_row(id=89, conclusion="timed_out")
+        self.gh.runs_by_status["startup_failure"] = [run]
+        self.gh.runs_by_status["timed_out"] = [timed_out]
+        fetched = self.resolver.failed_runs(REPO)
+        self.assertIn(run, fetched)
+        self.assertIn(timed_out, fetched)
+        startup = next(item for item in fetched if item["id"] == 88)
+        result = resolver_module.classify_data(startup, [], [], [], REPO)
+        self.assertEqual(result["class"], "infra-startup")
+        self.assertTrue(any("status=startup_failure" in call[1] for call in self.gh.calls))
+        self.assertTrue(any("status=timed_out" in call[1] for call in self.gh.calls))
+
+    def test_open_pull_listing_uses_one_paginated_helper_call_for_100_plus_prs(self):
+        self.gh.prs[REPO] = [{"number": number, "head": {"ref": "feature/%d" % number, "repo": {"full_name": REPO}}} for number in range(101)]
+        self.assertEqual(len(self.resolver.open_prs(REPO)), 101)
+        pull_pages = [path for path in self.gh.page_calls if "/pulls?state=open" in path]
+        self.assertEqual(len(pull_pages), 1)
+        self.assertNotIn("&page=", pull_pages[0])
 
     def test_liveness_opens_one_ticket_after_two_bad_ticks_and_appends_recovery(self):
         run = {"id": 72, "created_at": iso(NOW - 1001)}
@@ -333,7 +406,7 @@ class ResolverTests(unittest.TestCase):
             with self.subTest(attempt=attempt, age=age):
                 self.gh = FakeGitHub()
                 self.state = Path(self.tmp.name) / ("t0-%s-%s" % (attempt, age))
-                self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state)}, dispatcher=self.dispatcher, now=lambda: NOW)
+                self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
                 run = self.run_row(run_attempt=attempt)
                 job = self.failed_job(ci_log_text="ETIMEDOUT from registry")
                 group = self.group(run, [job])
@@ -368,6 +441,53 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(check.get("external_id"), "j-retried")
         self.assertEqual(len(self.dispatched), 2)
 
+    def test_dispatch_exit_one_with_job_id_is_polled_and_refusal_escalates(self):
+        group = self.group()
+        self.resolver.entries = [entry("deterministic", "compiler failure", fix={"command": "make"})]
+        self.dispatch_reply = (1, {"job": "j-failed", "state": "failed", "reason": "exit 1"})
+        self.resolver.process_group(group)
+        check = self.gh.checks[(REPO, SHA)][0]
+        self.assertEqual(check.get("external_id"), "j-failed")
+        self.status_reply = (0, {"state": "failed", "reason": "exit 1"})
+        self.resolver.process_group(group)
+        self.assertEqual(check["conclusion"], "neutral")
+        self.assertEqual(self.resolver.metadata(self.gh.checks[(REPO, SHA)][-1])["forced_tier"], "t2")
+
+        self.gh = FakeGitHub()
+        self.state = Path(self.tmp.name) / "refused"
+        self.dispatched = []
+        self.dispatch_reply = (64, {"reason": "protected branch refused"})
+        self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
+        self.resolver.process_group(self.group())
+        refused = self.gh.checks[(REPO, SHA)][0]
+        self.assertEqual(refused["conclusion"], "action_required")
+        self.assertIn("protected branch refused", refused["output"]["summary"])
+        self.assertIsNone(refused.get("external_id"))
+
+    def test_tick_without_app_id_reconciles_nothing(self):
+        resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state)}, dispatcher=self.dispatcher, now=lambda: NOW)
+        resolver.repos = lambda: self.fail("repos listed without an App ID")
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            resolver.tick()
+        self.assertEqual(output.getvalue().count("CI_RESOLVER_APP_ID is unset"), 1)
+        self.assertEqual(self.gh.calls, [])
+
+    def test_tick_keeps_processing_after_group_error(self):
+        resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
+        resolver.repos = lambda: [REPO]
+        resolver.load_groups = lambda repo: [self.group()]
+        resolver.update_liveness = lambda groups: {}
+        resolver.process_group = lambda group: (_ for _ in ()).throw(ValueError("sensitive detail"))
+        merged = []
+        resolver.merge_and_learn = lambda repo: merged.append(repo)
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            resolver.tick()
+        self.assertEqual(merged, [REPO])
+        self.assertIn("ValueError", output.getvalue())
+        self.assertNotIn("sensitive detail", output.getvalue())
+
     def test_tick_exits_zero_without_token_or_api_work_when_lock_is_held(self):
         self.state.mkdir(parents=True)
         lock_path = self.state / "lock"
@@ -381,12 +501,14 @@ class ResolverTests(unittest.TestCase):
             ({"state": "succeeded"}, "t2"),
             ({"state": "failed", "reason": "guard: changed protected file"}, "t2"),
             ({"state": "timeout", "reason": "deadline"}, "t2"),
+            ({"state": "no-change", "reason": "no diff"}, "t2"),
+            ({"state": "cancelled", "reason": "cancelled"}, "t2"),
         ]
         for reply, expected in cases:
             with self.subTest(reply=reply):
                 self.gh = FakeGitHub()
                 self.state = Path(self.tmp.name) / str(len(reply))
-                self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state)}, dispatcher=self.dispatcher, now=lambda: NOW)
+                self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
                 meta = {"tier": "t1", "signature": "0123456789ab", "signature_text": "failure", "classification": "novel"}
                 check = self.make_check(external_id="j-1", meta=meta)
                 self.status_reply = (0, reply)
@@ -396,12 +518,22 @@ class ResolverTests(unittest.TestCase):
                 self.assertEqual(self.resolver.metadata(created[-1])["forced_tier"], expected)
         self.gh = FakeGitHub()
         self.state = Path(self.tmp.name) / "moved"
-        self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state)}, dispatcher=self.dispatcher, now=lambda: NOW)
+        self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
         check = self.make_check(external_id="j-moved", meta={"tier": "t1"})
         self.status_reply = (0, {"state": "failed", "reason": "head moved"})
         self.resolver.process_group(self.group())
         self.assertEqual(check["conclusion"], "neutral")
         self.assertIn("abandoned: branch moved", check["output"]["summary"])
+
+        self.gh = FakeGitHub()
+        self.state = Path(self.tmp.name) / "exit-66"
+        self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state), "CI_RESOLVER_APP_ID": APP_ID}, dispatcher=self.dispatcher, now=lambda: NOW)
+        check = self.make_check(external_id="j-moved-66", meta={"tier": "t1"})
+        self.status_reply = (0, {"state": "failed", "reason": "exit 66"})
+        self.resolver.process_group(self.group())
+        self.assertEqual(check["conclusion"], "neutral")
+        self.assertIn("abandoned: branch moved", check["output"]["summary"])
+        self.assertEqual(len(self.gh.checks[(REPO, SHA)]), 1)
 
     def test_succeeded_job_with_commit_completes_check_successfully(self):
         meta = {"tier": "t2", "signature": "0123456789ab", "signature_text": "failure"}
@@ -410,6 +542,7 @@ class ResolverTests(unittest.TestCase):
         self.resolver.process_group(self.group())
         self.assertEqual(check["conclusion"], "success")
         self.assertIn("fix pushed: " + "c" * 40, check["output"]["summary"])
+        self.assertEqual(json.loads((self.state / "published.json").read_text()), {"c" * 40: "t2"})
 
     def test_orphaned_workflow_completes_neutral_before_workbook_matching(self):
         self.gh.workflows_missing.add("7")
@@ -434,33 +567,64 @@ class ResolverTests(unittest.TestCase):
         self.assertFalse(self.dispatched)
         self.assertFalse(any("/rerun-failed-jobs" in call[1] or call[1].endswith("/merge") for call in self.gh.calls))
 
-    def test_merge_only_t0_or_t1_with_all_green_checks(self):
+    def prepare_merge_pr(self, commits, published):
         branch = "ci-resolver/5"
-        sha = "b" * 40
-        pr = {"number": 5, "title": "fix(ci): build", "head": {"ref": branch, "sha": sha, "repo": {"full_name": REPO}}, "mergeable": True, "html_url": "pr-url"}
-        self.gh.prs[REPO] = [pr]
-        resolver_check = {"id": 1, "name": "ci-resolver", "status": "completed", "conclusion": "success", "output": {"summary": self.resolver.summary("green", {"signature": "0123456789ab", "signature_text": "broken", "sha": SHA, "tier": "t1"})}}
-        other = {"id": 2, "name": "build", "status": "completed", "conclusion": "success"}
-        self.gh.checks[(REPO, sha)] = [resolver_check, other]
-        self.gh.commit_messages[(REPO, sha)] = "fix build\n\nCI-Resolver-Tier: t1"
-        self.resolver.merge_and_learn(REPO)
-        self.assertEqual(len([call for call in self.gh.calls if call[0] == "PUT" and call[1].endswith("/merge")]), 1)
-        self.assertTrue((self.state / "candidates.jsonl").exists())
+        sha = commits[-1]
+        listing = {"number": 5, "title": "fix(ci): build", "state": "open", "head": {"ref": branch, "sha": sha, "repo": {"full_name": REPO}}, "html_url": "pr-url"}
+        detail = dict(listing, mergeable=True, mergeable_state="clean")
+        self.gh.prs[REPO] = [listing]
+        self.gh.pr_details[(REPO, 5)] = detail
+        self.gh.pull_commits[REPO] = [{"sha": item} for item in commits]
+        resolver_check = {"id": 1, "name": "ci-resolver", "status": "completed", "conclusion": "success", "app": {"id": int(APP_ID)}, "output": {"summary": self.resolver.summary("green", {"signature": "0123456789ab", "signature_text": "broken", "sha": SHA, "tier": "t1"})}}
+        self.gh.checks[(REPO, sha)] = [resolver_check]
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "published.json").write_text(json.dumps(published))
+        self.resolver.pr_cache = {}
 
-        self.gh.calls.clear()
-        self.gh.commit_messages[(REPO, sha)] = "fix build\n\nCI-Resolver-Tier: t0"
-        self.resolver.merge_and_learn(REPO)
-        self.assertEqual(len([call for call in self.gh.calls if call[0] == "PUT" and call[1].endswith("/merge")]), 1)
-        self.gh.calls.clear()
-        self.gh.commit_messages[(REPO, sha)] = "fix build\n\nCI-Resolver-Tier: t2"
+    def test_t3_commit_after_t1_commit_does_not_merge(self):
+        t1, t3 = "b" * 40, "c" * 40
+        self.prepare_merge_pr([t1, t3], {t1: "t1", t3: "t3"})
         self.resolver.merge_and_learn(REPO)
         self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
-        self.gh.calls.clear()
-        self.gh.commit_messages[(REPO, sha)] = "fix build\n\nCI-Resolver-Tier: t3"
+
+    def test_foreign_t1_trailer_does_not_authorize_merge(self):
+        sha = "d" * 40
+        self.prepare_merge_pr([sha], {})
+        self.gh.commit_messages[(REPO, sha)] = "foreign change\n\nCI-Resolver-Tier: t1"
         self.resolver.merge_and_learn(REPO)
         self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
-        self.gh.checks[(REPO, sha)][1]["status"] = "in_progress"
-        self.gh.commit_messages[(REPO, sha)] = "fix build\n\nCI-Resolver-Tier: t1"
+
+    def test_clean_t1_only_pr_merges_from_recorded_commit(self):
+        sha = "e" * 40
+        self.prepare_merge_pr([sha], {sha: "t1"})
+        self.resolver.merge_and_learn(REPO)
+        merges = [call for call in self.gh.calls if call[0] == "PUT" and call[1].endswith("/merge")]
+        self.assertEqual(len(merges), 1)
+        self.assertTrue((self.state / "candidates.jsonl").exists())
+        self.assertTrue(any(call[1].endswith("/pulls/5") for call in self.gh.calls))
+
+    def test_failing_foreign_check_or_foreign_resolver_check_blocks_merge(self):
+        sha = "a1" * 20
+        self.prepare_merge_pr([sha], {sha: "t1"})
+        self.gh.checks[(REPO, sha)].append({"id": 2, "name": "lint", "status": "completed", "conclusion": "failure", "app": {"id": 99}})
+        self.resolver.merge_and_learn(REPO)
+        self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
+        checks = self.gh.checks[(REPO, sha)]
+        checks[:] = [dict(checks[0], app={"id": 99})]
+        self.resolver.merge_and_learn(REPO)
+        self.assertFalse((self.state / "candidates.jsonl").exists())
+
+    def test_merge_requires_clean_single_pr_mergeability_and_configured_app_id(self):
+        sha = "f" * 40
+        self.prepare_merge_pr([sha], {sha: "t1"})
+        self.gh.pr_details[(REPO, 5)]["mergeable_state"] = "blocked"
+        self.resolver.merge_and_learn(REPO)
+        self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
+
+        self.gh = FakeGitHub()
+        self.state = Path(self.tmp.name) / "no-app-id"
+        self.resolver = resolver_module.Resolver(self.gh, env={"CI_RESOLVER_STATE_DIR": str(self.state)}, dispatcher=self.dispatcher, now=lambda: NOW)
+        self.prepare_merge_pr([sha], {sha: "t1"})
         self.resolver.merge_and_learn(REPO)
         self.assertFalse(any(call[1].endswith("/merge") for call in self.gh.calls))
 
@@ -498,7 +662,7 @@ class ResolverTests(unittest.TestCase):
         out = Path(self.tmp.name) / "prompts"
         (out / "automation" / "ci-workbook").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(out)], check=True)
-        subprocess.run(["git", "-C", str(out), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        subprocess.run(["git", "-C", str(out), "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "base"], check=True)
         base = subprocess.run(["git", "-C", str(out), "rev-parse", "HEAD"], text=True, capture_output=True, check=True).stdout.strip()
         self.gh.prs[REPO] = [{"number": 3, "head": {"ref": "ci-resolver/workbook-202601010000", "repo": {"full_name": REPO}}}]
         self.assertEqual(self.resolver.learn(str(out), REPO), [])
