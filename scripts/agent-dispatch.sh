@@ -388,8 +388,8 @@ fix_test_definitions_removed() {
 }
 
 # Keep credential values in shell memory while scanning binary additions.
-# ponytail: verbatim matches only; encoded or split values pass. Add a host-side
-# gitleaks pass over the decoded files if that matters.
+# ponytail: verbatim matches only; encoded or split values pass. fix_gitleaks
+# covers known secret formats.
 fix_contains_credential() {
   local file=$1 value=$2 chunk
   [ -n "$value" ] || return 1
@@ -397,6 +397,15 @@ fix_contains_credential() {
     [[ $chunk == *"$value"* ]] && return 0
   done <"$file"
   return 1
+}
+
+# fix_gitleaks <dir>: scan the decoded additions with the pinned image's
+# gitleaks in a fresh container that has no network and only reads <dir>.
+fix_gitleaks() {
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --user "$(id -u):$(id -g)" \
+    -v "$1:/scan:ro" --entrypoint gitleaks "$IMAGE" \
+    dir /scan --redact --no-banner >/dev/null 2>&1
 }
 
 fix_api_path() {
@@ -518,6 +527,7 @@ publish_fix_token() {
   fi
 
   jq -r '.additions[].path' "$changes" >"$tmp/paths"
+  mkdir "$tmp/scan"
   while IFS= read -r path; do
     base64_file="$tmp/new.b64"
     base_json="$tmp/base.json"
@@ -545,6 +555,9 @@ publish_fix_token() {
         return 1
       fi
     done
+    # fix_changes_valid already refused absolute paths and . or .. segments.
+    mkdir -p "$tmp/scan/$(dirname "$path")"
+    cp "$tmp/new" "$tmp/scan/$path"
     api_path=$(fix_api_path "$path")
     if ! gh_status_get "$gh" "repos/$(job_get "$id" .repo)/contents/$api_path?ref=$sha"; then
       echo "guard: base file lookup failed" >"$rdir/reason"
@@ -604,6 +617,11 @@ publish_fix_token() {
       return 1
     fi
   done <"$tmp/paths"
+  if ! fix_gitleaks "$tmp/scan"; then
+    echo "guard: gitleaks" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
   local commit_data gh_rc=0 request
   commit_data="$dir/commit-message.json"
   headline=$(jq -r .headline "$commit_data")

@@ -1425,6 +1425,27 @@ SH
   done
 }
 
+@test "fix scans the decoded additions with host gitleaks before publishing" {
+  local prompt
+  prompt=$(fix_prompt "repair this failure")
+  set_fix_outputs "$(fix_add_json src/deep/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = succeeded ]
+  [ "$(cat "$STUB_DIR/scan.list")" = ./src/deep/fix.txt ]
+  grep -E '^docker run .*--network none .*--read-only .*--cap-drop ALL .*--entrypoint gitleaks .* dir /scan' "$STUB_DIR/argv.log"
+  [ "$(line_of 'docker run')" -lt "$(line_of 'POST https://api.github.com/graphql')" ]
+
+  rm -rf "$STUB_DIR/fix"
+  export STUB_GITLEAKS_FAIL=1
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: gitleaks' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 1 ]
+}
+
 @test "fix refuses multi-document changes.json before publishing either document" {
   local prompt malicious benign
   prompt=$(fix_prompt "repair this failure")

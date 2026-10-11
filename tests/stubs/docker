@@ -53,6 +53,16 @@ case "$1" in
     if [ "$(next wait)" -lt "${STUB_WAIT_CALLS:-1}" ]; then exec sleep 60; fi
     echo "${STUB_EXIT:-0}"
     ;;
+  run)
+    # Only the publisher's gitleaks scan calls `docker run`.
+    [[ " $* " == *" --network none "* && " $* " == *" --entrypoint gitleaks "* ]] || exit 125
+    for arg in "$@"; do
+      if [[ $arg == *:/scan:ro ]]; then
+        (cd "${arg%:/scan:ro}" && find . -type f | sort) >"$STUB_DIR/scan.list"
+      fi
+    done
+    if [ -n "${STUB_GITLEAKS_FAIL:-}" ]; then exit 1; fi
+    ;;
   attach) ;;
   inspect)
     case "$3" in
