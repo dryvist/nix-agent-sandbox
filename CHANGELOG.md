@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.0.0...v1.1.0) (2026-10-11)
+
+
+### Features
+
+* **ci-resolver:** add the org CI failure reconciler ([#92](https://github.com/dryvist/nix-agent-sandbox/issues/92)) ([5df3235](https://github.com/dryvist/nix-agent-sandbox/commit/5df32353fb5e0f7e4f12d4275f034fd987a5d602))
+* **dispatch:** add a fix mode that publishes a guarded patch from the host ([#91](https://github.com/dryvist/nix-agent-sandbox/issues/91)) ([f0062c3](https://github.com/dryvist/nix-agent-sandbox/commit/f0062c3e2eeee81f7b528ef7a2cba4dc33a875c4))
+* **dispatch:** scan fix-mode additions with gitleaks on the host ([#96](https://github.com/dryvist/nix-agent-sandbox/issues/96)) ([7e2cecd](https://github.com/dryvist/nix-agent-sandbox/commit/7e2cecd35d9a42456f95e84cfd550de7def52d61))
+
+
+### Bug Fixes
+
+* **repo-groups:** update the private docs repository name ([#95](https://github.com/dryvist/nix-agent-sandbox/issues/95)) ([61380ac](https://github.com/dryvist/nix-agent-sandbox/commit/61380ac9450b9cd400c85e08c7291d29b08ef2c5))
+
 ## 1.0.0 (2026-10-11)
 
 
