@@ -20,6 +20,9 @@ setup() {
   : >"$STUB_DIR/argv.log"
   : >"$STUB_DIR/calls.log"
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
+  export REAL_GIT="$(command -v git)"
+  unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
+    STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_HEAD_MOVED STUB_DEFAULT_BRANCH STUB_FIX_PR_URL
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -92,6 +95,28 @@ http_rec() {
 }
 
 line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
+last_line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | tail -n 1 | cut -d: -f1; }
+fix_prompt() { printf 'CI-RESOLVER headline=fix%%3A%%20repair%%20test attempt=2 tier=t2 signature=abcdef012345\n%s' "$1"; }
+fix_add_json() {
+  local encoded
+  encoded=$(printf '%s' "$2" | base64 | tr -d '\n')
+  jq -cn --arg p "$1" --arg c "$encoded" '{additions: [{path: $p, contents: $c}], deletions: []}'
+}
+fix_delete_json() { jq -cn --arg p "$1" '{additions: [], deletions: [{path: $p}]}' ; }
+set_fix_outputs() {
+  export STUB_FIX_DIR="$STUB_DIR/fix/.agent-fix"
+  mkdir -p "$STUB_FIX_DIR"
+  printf '%s\n' "$1" >"$STUB_FIX_DIR/changes.json"
+  : >"$STUB_FIX_DIR/patch.diff"
+  : >"$STUB_FIX_DIR/summary.txt"
+}
+fix_dispatch() {
+  local prompt
+  prompt=$(fix_prompt "${1:-repair this failure}")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+}
+
+FIX_SHA=0123456789abcdef0123456789abcdef01234567
 
 @test "dispatch-ssh refuses hostile or malformed commands before any side effect" {
   local long c
@@ -119,6 +144,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     "start --interactive cursor-agent dryvist/nix-ai do it"
     "start --interactive"
     "start --interactive zcode dryvist/nix-ai do it"
+    "fix -tool dryvist/nix-ai ci/fix 0123456789abcdef0123456789abcdef01234567 task"
     "start --tty zcode dryvist/nix-ai"
     "tty zcode dryvist/nix-ai"
     "tty"
@@ -148,6 +174,40 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
   done
   [ ! -s "$STUB_DIR/argv.log" ]
   [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "fix validates tool, branch, sha and metadata; start refuses the header" {
+  local prompt branch
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix -tool dryvist/nix-ai ci/fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 64 ]
+  for branch in 'ci..fix' '-ci/fix' '/ci/fix' 'ci/fix/' 'ci/fix.lock' 'ci//fix'; do
+    run --separate-stderr dispatch fix zcode dryvist/nix-ai "$branch" "$FIX_SHA" "$prompt"
+    [ "$status" -eq 64 ]
+  done
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai ci/fix "${FIX_SHA^^}" "$prompt"
+  [ "$status" -eq 64 ]
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai ci/fix "$FIX_SHA" 'CI-RESOLVER headline=fix attempt=2 tier=t2 signature=bad\nrepair this failure'
+  [ "$status" -eq 64 ]
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "$prompt"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"CI-RESOLVER header requires fix"* ]]
+  run --separate-stderr dispatch start shell dryvist/nix-ai "repair this failure"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"unknown tool"* ]]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+  [ ! -s "$STUB_DIR/argv.log" ]
+}
+
+@test "dispatch-ssh passes fix metadata and task text as separate words" {
+  local prompt
+  prompt=$(fix_prompt 'repair $(literal)')
+  run --separate-stderr ssh_cmd "fix zcode dryvist/nix-ai ci/ssh-fix $FIX_SHA $prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .mode <<<"$output")" = fix ]
+  [ "$(jq -r .expected_sha <<<"$output")" = "$FIX_SHA" ]
+  [ "$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-prompt)" = 'repair $(literal)' ]
+  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$(jq -r .job <<<"$output")/runs/1/state")" = no-change ]
 }
 
 @test "the prompt reaches the container verbatim; metacharacters are data" {
@@ -223,7 +283,7 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
 
 @test "each routed tool receives its named router key field" {
   local tool n=0 expected env_data
-  for tool in zcode opencode qwen-code; do
+  for tool in zcode opencode opencode-local qwen-code; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -239,6 +299,42 @@ line_of() { grep -nF -- "$1" "$STUB_DIR/calls.log" | head -n 1 | cut -d: -f1; }
     [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
       AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN | sort)" ]
   done
+}
+
+@test "OpenCode fix profiles configure only the router or the built-in ZAI model" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_ROUTER_KEY"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' \
+    >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/opencode" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/opencode-fix-argv"
+printf '%s\n' "${ZHIPU_API_KEY:-unset}" >"$STUB_DIR/opencode-fix-zai-key"
+cp "$HOME/.config/opencode/opencode.json" "$STUB_DIR/opencode-fix-config" 2>/dev/null || true
+SH
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=opencode-local AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/review-local\nrouter prompt' ]
+  jq -e '.provider | keys == ["agent-router"] and
+    .["agent-router"].npm == "@ai-sdk/openai-compatible" and
+    .["agent-router"].options.baseURL == "https://router.test/v1" and
+    .["agent-router"].options.apiKey == "router-test-key" and
+    (.["agent-router"].models | keys == ["review-local"])' \
+    "$home/.config/opencode/opencode.json"
+  [ "$(ls -l "$home/.config/opencode/opencode.json" | cut -c2-10)" = rw------- ]
+
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' >"$home/.agent-env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=opencode-zai AGENT_PROMPT='zai prompt' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nzai-coding-plan/glm-5.3\nzai prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-zai-key")" = zai-plan-key ]
 }
 
 @test "the GitHub token is minted for one repo with contents and pull_requests only" {
@@ -924,6 +1020,34 @@ exit $2
 SH
 }
 
+# fix_entry_fixture <name> <gitleaks exit> [remote branch]: local bare GitHub stand-in.
+fix_entry_fixture() {
+  local branch=${3:-ci/fix} seed="$BATS_TEST_TMPDIR/$1-seed"
+  publish_fixture "$1" "$2"
+  printf '%s\n' '{"zcode":{"env":[]},"shell":{"env":[]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/git" <<'SH'
+args=()
+for arg in "$@"; do
+  if [ "$arg" = https://github.com/dryvist/nix-ai ]; then arg=$(cat "$STUB_DIR/origin-path"); fi
+  args+=("$arg")
+done
+exec "$REAL_GIT" "${args[@]}"
+SH
+  if [ -n "${3:-}" ]; then
+    git -C "$seed" checkout -qb "$branch"
+    git -C "$seed" push -q origin "$branch"
+  fi
+  ENTRY_EXPECTED_SHA=$(git -C "$seed" rev-parse HEAD)
+  ENTRY_BRANCH="$branch"
+}
+
+run_fix_entrypoint() {
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" REAL_GIT="$REAL_GIT" \
+    AGENT_SANDBOX=1 AGENT_MODE=fix AGENT_TOOL="${ENTRY_TOOL:-zcode}" AGENT_REPO=dryvist/nix-ai \
+    AGENT_BRANCH="$ENTRY_BRANCH" AGENT_EXPECTED_SHA="$ENTRY_EXPECTED_SHA" \
+    AGENT_PROMPT="${ENTRY_PROMPT:-repair the failure}" bash -euo pipefail "$ENTRYPOINT"
+}
+
 # run_publish <run id> [NAME=value...]: the entrypoint in a terminal session.
 run_publish() {
   local id=$1
@@ -931,6 +1055,94 @@ run_publish() {
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_DRAFT=1 "$@" \
     bash -euo pipefail "$ENTRYPOINT"
+}
+
+@test "fix entrypoint emits the staged full diff, tool commit summary and review patch" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin expected
+  fix_entry_fixture fix-output 0 ci/fix
+  expected=$ENTRY_EXPECTED_SHA
+  mkdir -p "$home/work/.agent-fix"
+  : >"$home/work/.agent-fix/preseed"
+  bash_stub "$tools/zcode" <<'SH'
+test ! -e "$HOME/work/.agent-fix/preseed"
+echo updated >old-file
+echo untracked >untracked
+git add -A
+git commit -q -m 'tool subject'
+echo dirty >tool-dirty
+SH
+  run_fix_entrypoint
+  [ "$status" -eq 0 ]
+  jq -e '
+    .deletions == [] and
+    ([.additions[] | {path, contents}] | sort_by(.path)) == [
+      {path: "old-file", contents: "dXBkYXRlZAo="},
+      {path: "tool-dirty", contents: "ZGlydHkK"},
+      {path: "untracked", contents: "dW50cmFja2VkCg=="}
+    ]' "$home/work/.agent-fix/changes.json"
+  [ "$(cat "$home/work/.agent-fix/summary.txt")" = 'tool subject' ]
+  grep -q 'updated' "$home/work/.agent-fix/patch.diff"
+  grep -qx -- "--log-opts=$expected..HEAD" "$STUB_DIR/gitleaks-argv"
+  [ ! -e "$home/work/.agent-fix/preseed" ]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+}
+
+@test "the shell tool runs the task text as a command in fix mode only" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  fix_entry_fixture shell-fix 0 ci/fix
+  ENTRY_TOOL=shell ENTRY_PROMPT='echo formatted >old-file' run_fix_entrypoint
+  [ "$status" -eq 0 ]
+  jq -e '.additions == [{path: "old-file", contents: "Zm9ybWF0dGVkCg=="}] and .deletions == []' \
+    "$home/work/.agent-fix/changes.json"
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=shell \
+    AGENT_PROMPT='true' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"the shell tool runs only in fix mode"* ]]
+}
+
+@test "an empty fix removes preseeded outputs and exits successfully after a failed tool" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  fix_entry_fixture empty 0 ci/fix
+  mkdir -p "$home/work/.agent-fix"
+  : >"$home/work/.agent-fix/preseed"
+  bash_stub "$tools/zcode" <<'SH'
+exit 23
+SH
+  run_fix_entrypoint
+  [ "$status" -eq 0 ]
+  [ ! -e "$home/work/.agent-fix" ]
+  [ ! -e "$STUB_DIR/gitleaks-argv" ]
+}
+
+@test "fix entrypoint reports head moved when the remote branch no longer matches" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  fix_entry_fixture moved 0 ci/fix
+  ENTRY_EXPECTED_SHA=ffffffffffffffffffffffffffffffffffffffff
+  bash_stub "$tools/zcode" <<'SH'
+touch "$STUB_DIR/tool-ran"
+SH
+  run_fix_entrypoint
+  [ "$status" -eq 66 ]
+  [[ $output == *"head moved"* ]]
+  [ ! -e "$STUB_DIR/tool-ran" ]
+  [ ! -e "$home/work/.agent-fix" ]
+}
+
+@test "fix entrypoint falls back to the expected commit and emits no outputs when gitleaks finds a secret" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  fix_entry_fixture blocked 1
+  bash_stub "$tools/zcode" <<'SH'
+echo candidate >secret.txt
+git add secret.txt
+git commit -q -m 'tool subject'
+SH
+  run_fix_entrypoint
+  [ "$status" -eq 65 ]
+  [[ $output == *"gitleaks flagged the fix change"* ]]
+  grep -qx -- "--log-opts=$ENTRY_EXPECTED_SHA..HEAD" "$STUB_DIR/gitleaks-argv"
+  [ ! -e "$home/work/.agent-fix" ]
 }
 
 @test "the run's commits publish as one API-created commit and a draft PR, never a push" {
@@ -1002,4 +1214,164 @@ SH
   [[ $output == *"larger than 1024 bytes encoded; nothing was published"* ]]
   [ ! -e "$STUB_DIR/graphql.json" ]
   [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "fix concurrency cap returns busy before login or job creation" {
+  export STUB_FIX_RUNNING_COUNT=3
+  local prompt
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai ci/fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 75 ]
+  [ "$output" = '{"error":"busy"}' ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+  [ "$(grep -c 'docker ps' "$STUB_DIR/argv.log")" -eq 1 ]
+  [ "$(grep -c 'auth/approle/login' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  [ "$(grep -c 'docker create' "$STUB_DIR/argv.log" || true)" -eq 0 ]
+}
+
+@test "continue refuses a fix job and status reports its commit field" {
+  local prompt id
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  jq -e '.mode == "fix" and .branch == "feature/ci-fix" and .expected_sha == $sha and .commit == ""' \
+    --arg sha "$FIX_SHA" <<<"$output"
+  run --separate-stderr dispatch continue "$id" "another attempt"
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"fix jobs run once"* ]]
+  run --separate-stderr dispatch status "$id"
+  [ "$(jq -r .commit <<<"$output")" = "" ]
+}
+
+@test "fix container gets no GitHub token and revokes the contents-read token before create" {
+  local prompt id env_data rec read_mint write_mint
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_FIX_BRANCH_EXISTS=1
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = succeeded ]
+  [ "$(jq -r .commit <<<"$output")" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -r .mode "$AGENT_DISPATCH_STATE_DIR/$id/job.json")" = fix ]
+  create_args 1
+  has_pair --label agent-dispatch.mode=fix
+  has_pair -e AGENT_MODE=fix
+  has_pair -e "AGENT_BRANCH=feature/ci-fix"
+  has_pair -e "AGENT_EXPECTED_SHA=$FIX_SHA"
+  run ! grep -q AGENT_PR_DRAFT "$STUB_DIR/create.1"
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [[ ! $env_data =~ GH_TOKEN|GITHUB_TOKEN ]]
+  grep -qx 'AGENT_ROUTER_KEY=zcode-router-secret-value' <<<"$env_data"
+  [ "$(line_of 'DELETE https://api.github.com/installation/token')" -lt "$(line_of 'docker create')" ]
+  [ "$(last_line_of 'POST https://bao.test/v1/github-agents/token')" -gt "$(line_of 'docker wait')" ]
+  local -a mints=()
+  for rec in "$STUB_DIR"/http.*.req; do
+    [ "$(cat "$rec")" = 'POST https://bao.test/v1/github-agents/token' ] && mints+=("${rec%.req}")
+  done
+  [ "${#mints[@]}" -eq 2 ]
+  read_mint=$(cat "${mints[0]}.body")
+  write_mint=$(cat "${mints[1]}.body")
+  jq -e '.permissions == {contents: "read"} and .repositories == "nix-ai"' <<<"$read_mint"
+  jq -e '.permissions == {contents: "write", pull_requests: "write"}' <<<"$write_mint"
+  grep -qx 'docker rm -f cid0123' "$STUB_DIR/argv.log"
+  no_secret_on_a_command_line
+}
+
+@test "an empty fix is a successful no-change without minting a write token" {
+  local prompt
+  prompt=$(fix_prompt "repair this failure")
+  export STUB_FIX_BRANCH_EXISTS=1
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = no-change ]
+  [ "$(jq -r .commit <<<"$output")" = "" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 1 ]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+}
+
+@test "existing branch fix creates one commit at expectedHeadOid with headline and trailers" {
+  local prompt graphql changes id
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_FIX_BRANCH_EXISTS=1
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  graphql=$(http_rec 'POST https://api.github.com/graphql')
+  jq -e --arg sha "$FIX_SHA" '.variables.input.expectedHeadOid == $sha and
+    .variables.input.message.headline == "fix: repair test" and
+    .variables.input.message.body == "CI-Resolver-Attempt: 2\nCI-Resolver-Tier: t2\nCI-Resolver-Signature: abcdef012345\n\nAssisted-by: zcode (nix-agent-sandbox)" and
+    .variables.input.fileChanges.additions == [{path: "src/fix.txt", contents: "Zml4ZWQgY29udGVudA=="}]' \
+    "$graphql.body"
+  [ "$(jq -r .commit <<<"$output")" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
+  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/commit")" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log")" -eq 1 ]
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/pulls' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "new branch fix creates ref at expected sha and a non-draft PR to the API default branch" {
+  local prompt graphql ref_request pr_request
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = succeeded ]
+  [ "$(jq -r .pr <<<"$output")" = https://github.com/dryvist/nix-ai/pull/8 ]
+  ref_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs')
+  jq -e --arg sha "$FIX_SHA" '.ref == "refs/heads/feature/new-fix" and .sha == $sha' "$ref_request.body"
+  graphql=$(http_rec 'POST https://api.github.com/graphql')
+  jq -e --arg sha "$FIX_SHA" '.variables.input.expectedHeadOid == $sha' "$graphql.body"
+  pr_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')
+  jq -e '.draft == false and .title == "fix: repair test" and .head == "feature/new-fix" and .base == "trunk"' "$pr_request.body"
+}
+
+@test "head moved deletes a newly created branch and leaves no commit or PR" {
+  local prompt
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_HEAD_MOVED=1
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = failed ]
+  [ "$(jq -r .reason <<<"$output")" = 'head moved' ]
+  [ "$(jq -r .commit <<<"$output")" = "" ]
+  grep -q 'DELETE https://api.github.com/repos/dryvist/nix-ai/git/refs/heads/feature/new-fix' "$STUB_DIR/calls.log"
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/pulls' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "fix diff guards reject workflow changes, test deletions, suppression lines and excess files" {
+  local prompt json n
+  prompt=$(fix_prompt "repair this failure")
+  for json in \
+    "$(fix_add_json '.github/workflows/check.yml' 'name: checks')" \
+    "$(fix_delete_json 'src/tests/test_fix.py')"; do
+    set_fix_outputs "$json"
+    export STUB_CONTENTS_404=1
+    run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r .state <<<"$output")" = failed ]
+    [[ $(jq -r .reason <<<"$output") == guard:* ]]
+    [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+    rm -rf "$STUB_DIR/fix"
+  done
+
+  set_fix_outputs "$(fix_add_json 'src/fix.py' $'flag = True  # noqa\n')"
+  export STUB_CONTENTS_404=1
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: suppression line' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+
+  rm -rf "$STUB_DIR/fix"
+  json=$(jq -cn '{additions: [range(0; 21) | {path: ("src/file" + tostring), contents: "eA=="}], deletions: []}')
+  set_fix_outputs "$json"
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .reason <<<"$output")" = 'guard: too many files' ]
+  [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
 }

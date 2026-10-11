@@ -36,7 +36,7 @@ fi
 
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 case "${AGENT_TOOL}" in
-  qwen | qwen-code | zcode | opencode | cursor-agent)
+  qwen | qwen-code | zcode | opencode | opencode-local | opencode-zai | shell | cursor-agent)
     if [ -n "${AGENT_PROFILE:-}" ] && [ "${AGENT_PROFILE}" != "${AGENT_TOOL}" ]; then
       echo "agent-entrypoint: routed tool '${AGENT_TOOL}' requires its matching task profile." >&2
       exit 64
@@ -98,6 +98,25 @@ fi
 # --- Inputs ----------------------------------------------------------------
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 AGENT_RUN_ID="${AGENT_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+AGENT_MODE="${AGENT_MODE:-start}"
+
+case "${AGENT_MODE}" in
+  start) ;;
+  fix)
+    [ -n "${AGENT_REPO:-}" ] && [ -n "${AGENT_BRANCH:-}" ] && [ -n "${AGENT_EXPECTED_SHA:-}" ] || {
+      echo "agent-entrypoint: fix mode requires AGENT_REPO, AGENT_BRANCH and AGENT_EXPECTED_SHA." >&2
+      exit 64
+    }
+    [[ ${AGENT_EXPECTED_SHA} =~ ^[0-9a-f]{40}$ ]] || {
+      echo "agent-entrypoint: invalid AGENT_EXPECTED_SHA." >&2
+      exit 64
+    }
+    ;;
+  *)
+    echo "agent-entrypoint: unknown AGENT_MODE '${AGENT_MODE}'." >&2
+    exit 64
+    ;;
+esac
 
 case "${AGENT_TOOL}" in
   qwen) AGENT_PROFILE="${AGENT_PROFILE:-qwen}" ;;
@@ -108,6 +127,15 @@ case "${AGENT_TOOL}" in
     ;;
   zcode) AGENT_PROFILE="${AGENT_PROFILE:-zcode}" ;;
   opencode) AGENT_PROFILE="${AGENT_PROFILE:-opencode}" ;;
+  opencode-local) AGENT_PROFILE="${AGENT_PROFILE:-opencode-local}" ;;
+  opencode-zai) AGENT_PROFILE="${AGENT_PROFILE:-opencode-zai}" ;;
+  shell)
+    AGENT_PROFILE="${AGENT_PROFILE:-shell}"
+    [ "${AGENT_MODE}" = fix ] || {
+      echo "agent-entrypoint: the shell tool runs only in fix mode." >&2
+      exit 64
+    }
+    ;;
   cursor-agent) AGENT_PROFILE="${AGENT_PROFILE:-cursor-agent}" ;;
   zcode-web)
     AGENT_PROFILE="${AGENT_PROFILE:-zcode-web}"
@@ -180,12 +208,38 @@ fi
 branch=""
 base=""
 if [ -n "${AGENT_REPO:-}" ]; then
-  branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
-  if [ -d repo/.git ]; then
+  if [ "${AGENT_MODE}" = fix ]; then
+    branch="${AGENT_BRANCH}"
+    rm -rf "${workdir}/.agent-fix"
+    repo_url="https://github.com/${AGENT_REPO}"
+    if git ls-remote --exit-code "${repo_url}" "refs/heads/${AGENT_BRANCH}" >/dev/null 2>&1; then
+      git clone --depth 50 --branch "${AGENT_BRANCH}" "${repo_url}" repo
+      cd repo || exit
+    else
+      git clone --depth 50 "${repo_url}" repo
+      cd repo || exit
+      if ! git cat-file -e "${AGENT_EXPECTED_SHA}^{commit}" 2>/dev/null; then
+        git fetch --depth=1 origin "${AGENT_EXPECTED_SHA}" || {
+          echo "agent-entrypoint: head moved; expected commit is no longer available." >&2
+          exit 66
+        }
+      fi
+      git checkout --detach "${AGENT_EXPECTED_SHA}"
+    fi
+    if [ "$(git rev-parse HEAD)" != "${AGENT_EXPECTED_SHA}" ]; then
+      echo "agent-entrypoint: head moved; branch does not match AGENT_EXPECTED_SHA." >&2
+      exit 66
+    fi
+    git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
+    git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
+    base="${AGENT_EXPECTED_SHA}"
+  elif [ -d repo/.git ]; then
+    branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
     # A continued run (agent-dispatch `continue`) reuses its workspace clone.
     cd repo || exit
     git checkout "${branch}"
   else
+    branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
     gh repo clone "${AGENT_REPO}" repo -- --depth 50
     cd repo || exit
     git checkout -b "${branch}"
@@ -194,6 +248,72 @@ if [ -n "${AGENT_REPO:-}" ]; then
   fi
   base="$(git rev-parse HEAD)"
 fi
+
+make_fix_outputs() {
+  local tmp outdir meta path old new kind size subject=""
+  local max="${AGENT_PUBLISH_MAX_BYTES:-8388608}"
+  FIX_NO_CHANGE=0
+  tmp=$(mktemp -d)
+  outdir="${workdir}/.agent-fix"
+  rm -rf "${outdir}"
+  [[ ${max} =~ ^[0-9]+$ ]] || {
+    echo "agent-entrypoint: invalid AGENT_PUBLISH_MAX_BYTES." >&2
+    rm -rf "${tmp}"
+    return 1
+  }
+  git add -A || { rm -rf "${tmp}"; return 1; }
+  if [ "$(git rev-parse HEAD)" != "${AGENT_EXPECTED_SHA}" ]; then
+    subject=$(git log -1 --format=%s)
+    subject=${subject:0:100}
+  fi
+  : >"${tmp}/changes"
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    read -r old new _ _ kind <<<"${meta#:}"
+    case "${old}:${new}" in
+      100644:100644 | 000000:100644 | 100644:000000) ;;
+      *)
+        echo "agent-entrypoint: ${path} changes a file mode or symlink (${old} -> ${new}); the signed publish carries contents only." >&2
+        rm -rf "${tmp}"
+        return 1
+        ;;
+    esac
+    if [ "${kind}" = D ]; then
+      jq -cn --arg p "${path}" '{deletion: {path: $p}}'
+    else
+      base64 -w0 <"${path}" >"${tmp}/contents"
+      jq -cn --arg p "${path}" --rawfile c "${tmp}/contents" '{addition: {path: $p, contents: $c}}'
+    fi >>"${tmp}/changes"
+  done < <(git diff --cached -z --raw --no-renames "${AGENT_EXPECTED_SHA}")
+  if [ ! -s "${tmp}/changes" ]; then
+    rm -rf "${tmp}"
+    rm -rf "${outdir}"
+    FIX_NO_CHANGE=1
+    return 0
+  fi
+  size=$(wc -c <"${tmp}/changes")
+  if [ "${size}" -gt "${max}" ]; then
+    echo "agent-entrypoint: the change is larger than ${max} bytes encoded; nothing was published." >&2
+    rm -rf "${tmp}"
+    return 1
+  fi
+  jq -s '{additions: [.[].addition | select(.)], deletions: [.[].deletion | select(.)]}' \
+    "${tmp}/changes" >"${tmp}/changes.json"
+  if ! git diff --cached --quiet HEAD; then
+    git -c user.name="${AGENT_GIT_NAME:-nix-agent-sandbox}" \
+      -c user.email="${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}" \
+      commit -m "CI resolver change" >/dev/null || { rm -rf "${tmp}"; return 1; }
+  fi
+  if ! gitleaks git --log-opts="${AGENT_EXPECTED_SHA}..HEAD" --redact --no-banner; then
+    echo "agent-entrypoint: gitleaks flagged the fix change (or failed to run); refusing to publish." >&2
+    rm -rf "${tmp}"
+    exit 65
+  fi
+  mkdir -p "${outdir}"
+  mv "${tmp}/changes.json" "${outdir}/changes.json"
+  git diff --binary --cached "${AGENT_EXPECTED_SHA}" >"${outdir}/patch.diff"
+  if [ -n "${subject}" ]; then printf '%s\n' "${subject}" >"${outdir}/summary.txt"; else : >"${outdir}/summary.txt"; fi
+  rm -rf "${tmp}"
+}
 
 # --- Run -------------------------------------------------------------------
 status=0
@@ -227,6 +347,24 @@ case "${AGENT_TOOL}" in
   opencode)
     opencode run --auto "${AGENT_PROMPT}" || status=$?
     ;;
+  opencode-local)
+    mkdir -p "${HOME}/.config/opencode"
+    jq -n --arg url "${AGENT_ROUTER_BASE_URL}" --arg key "${AGENT_ROUTER_KEY}" \
+      '{"$schema": "https://opencode.ai/config.json", provider: {"agent-router": {
+        npm: "@ai-sdk/openai-compatible", name: "Agent Router",
+        options: {baseURL: $url, apiKey: $key},
+        models: {"review-local": {name: "Review Local"}}}}}' \
+      >"${HOME}/.config/opencode/opencode.json"
+    chmod 600 "${HOME}/.config/opencode/opencode.json"
+    opencode run --auto --model agent-router/review-local "${AGENT_PROMPT}" || status=$?
+    ;;
+  shell)
+    bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
+    ;;
+  opencode-zai)
+    ZHIPU_API_KEY="${ZAI_SUBSCRIPTION_KEY}" opencode run --auto \
+      --model zai-coding-plan/glm-5.3 "${AGENT_PROMPT}" || status=$?
+    ;;
   cursor-agent)
     cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
     ;;
@@ -245,10 +383,16 @@ case "${AGENT_TOOL}" in
     exec zcode-web-supervisor
     ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|cursor-agent|zcode-web)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|shell|cursor-agent|zcode-web)" >&2
     exit 64
     ;;
 esac
+fi
+
+if [ "${AGENT_MODE}" = fix ]; then
+  make_fix_outputs || exit $?
+  if [ "${FIX_NO_CHANGE:-}" = 1 ]; then exit 0; fi
+  exit "${status}"
 fi
 
 # --- Publish ---------------------------------------------------------------

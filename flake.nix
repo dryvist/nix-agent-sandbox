@@ -176,11 +176,15 @@
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
                   .["cursor-agent"].env == ["CURSOR_API_KEY"] and
                   .["qwen-code"].env == [] and .["qwen-code"].routerKeyField == "QWEN_CODE_ROUTER_KEY" and
                   (.["qwen-code"] | has("ttyLogin") | not) and
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
+                  ([.["opencode-local"], .["opencode-zai"]] | all(has("ttyLogin") | not)) and
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '

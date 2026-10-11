@@ -6,15 +6,16 @@
 #
 #   start <tool> <owner/repo> <prompt>
 #   start --tty <tool> <owner/repo>
+#   fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
 #   continue <job-id> <message>
 #   status <job-id>
 #   cancel <job-id>
 #   refresh
 #   check
 #
-# Each job uses one service token to read its profile and mint a GitHub token
-# for the job's repo. A host-side waiter holds it on stdin for notifications
-# and continuations; the token is never written to disk or sent to a container.
+# Each job uses one service token to read its profile. Start jobs mint a
+# repository write token; fix jobs use a read token for checks, then mint a
+# write token on the host after the container exits.
 #
 # The container receives the GitHub token, the selected profile values and
 # the prompt as files copied in with `docker cp` between create and start. It
@@ -43,6 +44,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   agent-dispatch start <tool> <owner/repo> <prompt>
+  agent-dispatch fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
   agent-dispatch start --tty <tool> <owner/repo>
   agent-dispatch continue <job-id> <message>
   agent-dispatch status <job-id>
@@ -50,7 +52,8 @@ usage:
   agent-dispatch refresh
   agent-dispatch check
 
-tools: zcode, opencode, cursor-agent, qwen-code
+tools: zcode, opencode, opencode-local, opencode-zai, cursor-agent, qwen-code
+fix-only tool: shell (runs the prompt as a bash command)
 EOF
   exit 64
 }
@@ -63,7 +66,7 @@ refuse() {
 # --- Argument validation (the only validator; dispatch-ssh relies on it) ---
 valid_tool() {
   case "$1" in
-    zcode | opencode | cursor-agent | qwen-code) ;;
+    zcode | opencode | opencode-local | opencode-zai | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }
@@ -77,6 +80,17 @@ valid_repo() {
 
 valid_job() {
   [[ $1 =~ ^j-[0-9a-f]{16}$ ]]
+}
+
+valid_branch() {
+  local part
+  local -a parts
+  [[ $1 =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ $1 != -* ]] && [[ $1 != /* ]] &&
+    [[ $1 != */ ]] && [[ $1 != *.lock ]] && [[ $1 != *..* ]] && [[ $1 != *//* ]] || return 1
+  IFS=/ read -r -a parts <<<"$1"
+  for part in "${parts[@]}"; do
+    [[ -n $part && $part != .* && $part != *..* && $part != *. && $part != *.lock ]] || return 1
+  done
 }
 
 # Prompt or message: non-empty, bounded, no ASCII control characters other
@@ -213,16 +227,17 @@ job_get() {
 }
 
 job_json() {
-  local dir="$STATE_DIR/$1" run rdir started ended
+  local dir="$STATE_DIR/$1" run rdir started ended commit
   run=$(latest_run "$1")
   rdir="$dir/runs/$run"
   started=$(cat "$rdir/started" 2>/dev/null || date +%s)
   ended=$(cat "$rdir/ended" 2>/dev/null || date +%s)
+  commit=$(cat "$dir/commit" 2>/dev/null || true)
   jq -c --arg state "$(cat "$rdir/state" 2>/dev/null || echo starting)" \
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
-    --argjson runs "$run" --argjson duration "$((ended - started))" \
-    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration}' \
+    --arg commit "$commit" --argjson runs "$run" --argjson duration "$((ended - started))" \
+    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit}' \
     "$dir/job.json"
 }
 
@@ -302,12 +317,364 @@ read_pr_url() {
   if [[ $n =~ ^[0-9]+$ ]]; then printf '%s\n' "$url"; fi
 }
 
+# gh_status_get <token> <path>: set GH_HTTP_STATUS and GH_HTTP_BODY.
+gh_status_get() {
+  local response
+  response=$(curl -sS --max-time 30 -w $'\n%{http_code}' \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$1") \
+    "$GITHUB_API/$2") || return 1
+  GH_HTTP_STATUS=${response##*$'\n'}
+  GH_HTTP_BODY=${response%$'\n'*}
+  [[ $GH_HTTP_STATUS =~ ^[0-9]{3}$ ]]
+}
+
+gh_write() {
+  curl -sS --fail-with-body --max-time 60 -X "$1" \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nContent-Type: application/json\n' "$2") \
+    --data-binary @<(printf '%s' "$4") "$GITHUB_API/$3"
+}
+
+fix_changes_valid() {
+  local file=$1
+  jq -e '
+    def path_ok:
+      type == "string" and length > 0 and (startswith("/") | not) and
+      ((contains("\u0000") or contains("\n") or contains("\r")) | not) and
+      (split("/") | all(. != "" and . != "." and . != ".." and . != ".git"));
+    type == "object" and (keys == ["additions", "deletions"]) and
+    (.additions | type == "array") and (.deletions | type == "array") and
+    all(.additions[]; type == "object" and (keys == ["contents", "path"]) and
+      (.path | path_ok) and (.contents | type == "string" and
+        test("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"))) and
+    all(.deletions[]; type == "object" and (keys == ["path"]) and (.path | path_ok)) and
+    (([.additions[].path, .deletions[].path] | length) > 0) and
+    (([.additions[].path, .deletions[].path] | length) ==
+      ([.additions[].path, .deletions[].path] | unique | length))
+  ' "$file" >/dev/null 2>&1
+}
+
+# ponytail: line heuristics for now; a real AST check comes later.
+fix_suppression_added() {
+  local base_json=$1 new_json=$2
+  jq -en --slurpfile b "$base_json" --slurpfile n "$new_json" '
+    def suppressed:
+      test("# noqa|eslint-disable|@ts-ignore|@ts-nocheck|# type: ignore|\\|\\|[[:space:]]*true|continue-on-error: true|pytest\\.mark\\.skip|\\.skip\\(|xit\\(|t\\.Skip\\(");
+    ($b[0] | split("\n")) as $base |
+    ($n[0] | split("\n")) as $new |
+    reduce $new[] as $line ({base: $base, found: false};
+      if ($line | suppressed) then
+        (.base | index($line)) as $index |
+        if $index == null then .found = true else .base = (.base | del(.[$index])) end
+      else . end) | .found
+  '
+}
+
+fix_api_path() {
+  jq -rn --arg p "$1" '$p | split("/") | map(@uri) | join("/")'
+}
+
+# publish_fix_token <id> <run> <container> <token>: all untrusted change
+# data is validated before any GitHub write.
+publish_fix_token() {
+  local id=$1 run=$2 gh=$4 dir="$STATE_DIR/$1" rdir="$STATE_DIR/$1/runs/$2"
+  local max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" max_files="${AGENT_FIX_MAX_FILES:-20}"
+  local tmp listing member previous path base64_file base_json new_json api_path suppression_rc
+  local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url
+  local -a members=()
+  tmp=$(mktemp -d)
+  if [[ ! $max_files =~ ^[0-9]+$ ]]; then
+    echo "invalid publisher limit" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  listing=$(tar -tf "$5" 2>/dev/null) || {
+    echo "guard: invalid fix output archive" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  }
+  while IFS= read -r member; do
+    case "$member" in
+      .agent-fix/ | ./.agent-fix/ | .agent-fix/changes.json | ./.agent-fix/changes.json | \
+        .agent-fix/patch.diff | ./.agent-fix/patch.diff | .agent-fix/summary.txt | ./.agent-fix/summary.txt)
+        for previous in "${members[@]}"; do
+          if [ "$previous" = "$member" ]; then
+            echo "guard: duplicate fix output archive entry" >"$rdir/reason"
+            rm -rf "$tmp"
+            return 1
+          fi
+        done
+        members+=("$member")
+        ;;
+      *)
+        echo "guard: invalid fix output archive" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+        ;;
+    esac
+  done <<<"$listing"
+  member=""
+  for path in "${members[@]}"; do
+    if [[ $path == .agent-fix/changes.json || $path == ./.agent-fix/changes.json ]]; then member=$path; fi
+  done
+  if [ -z "$member" ] || ! tar -xOf "$5" "$member" >"$tmp/changes.json" 2>/dev/null; then
+    echo "guard: missing changes.json" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! fix_changes_valid "$tmp/changes.json"; then
+    echo "guard: invalid changes.json" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  branch=$(job_get "$id" .branch)
+  sha=$(job_get "$id" .expected_sha)
+  if ! valid_job "$id" || [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+    echo "invalid fix metadata" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  # ponytail: refuse all workflow edits for now; the caller exception comes later.
+  if jq -e --argjson max "$max_files" \
+    'any(.additions[].path, .deletions[].path; startswith(".github/workflows/")) or
+     any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$")) or
+     (([.additions[].path, .deletions[].path] | length) > $max)' \
+    "$tmp/changes.json" >/dev/null; then
+    if jq -e 'any(.additions[].path, .deletions[].path; startswith(".github/workflows/"))' \
+      "$tmp/changes.json" >/dev/null; then
+      echo "guard: workflow path" >"$rdir/reason"
+    elif jq -e 'any(.deletions[].path; test("(^|/)(tests?|__tests__|spec)/|_test\\.|\\.test\\.|\\.spec\\.|test_[^/]*\\.py$"))' \
+      "$tmp/changes.json" >/dev/null; then
+      echo "guard: test deletion" >"$rdir/reason"
+    else
+      echo "guard: too many files" >"$rdir/reason"
+    fi
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  jq -r '.additions[].path' "$tmp/changes.json" >"$tmp/paths"
+  while IFS= read -r path; do
+    base64_file="$tmp/new.b64"
+    base_json="$tmp/base.json"
+    new_json="$tmp/new.json"
+    jq -r --arg p "$path" '.additions[] | select(.path == $p) | .contents' \
+      "$tmp/changes.json" >"$base64_file" || {
+      echo "guard: invalid base64 contents" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    }
+    base64 -d "$base64_file" >"$tmp/new" 2>/dev/null || {
+      echo "guard: invalid base64 contents" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    }
+    if ! jq -Rs . <"$tmp/new" >"$new_json"; then
+      echo "guard: invalid added file" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    api_path=$(fix_api_path "$path")
+    if ! gh_status_get "$gh" "repos/$(job_get "$id" .repo)/contents/$api_path?ref=$sha"; then
+      echo "guard: base file lookup failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    case "$GH_HTTP_STATUS" in
+      200)
+        if ! jq -e '.encoding == "base64" and (.content | type == "string")' \
+          <<<"$GH_HTTP_BODY" >/dev/null; then
+          echo "guard: base file response invalid" >"$rdir/reason"
+          rm -rf "$tmp"
+          return 1
+        fi
+        jq -r '.content | gsub("\\s"; "")' <<<"$GH_HTTP_BODY" >"$tmp/base.b64"
+        if ! base64 -d "$tmp/base.b64" >"$tmp/base" 2>/dev/null || ! jq -Rs . <"$tmp/base" >"$base_json"; then
+          echo "guard: base file response invalid" >"$rdir/reason"
+          rm -rf "$tmp"
+          return 1
+        fi
+        ;;
+      404)
+        jq -n '""' >"$base_json"
+        ;;
+      *)
+        echo "guard: base file lookup failed" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+        ;;
+    esac
+    suppression_rc=0
+    fix_suppression_added "$base_json" "$new_json" || suppression_rc=$?
+    if [ "$suppression_rc" -eq 0 ]; then
+      echo "guard: suppression line" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    elif [ "$suppression_rc" -ne 1 ]; then
+      echo "guard: added line comparison failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+  done <"$tmp/paths"
+  local commit_data gh_rc=0 request
+  commit_data="$dir/commit-message.json"
+  headline=$(jq -r .headline "$commit_data")
+  attempt=$(jq -r .attempt "$commit_data")
+  tier=$(jq -r .tier "$commit_data")
+  signature=$(jq -r .signature "$commit_data")
+  body=$(printf 'CI-Resolver-Attempt: %s\nCI-Resolver-Tier: %s\nCI-Resolver-Signature: %s\n\nAssisted-by: %s (nix-agent-sandbox)' \
+    "$attempt" "$tier" "$signature" "$(job_get "$id" .tool)")
+  if ! gh_status_get "$gh" "repos/$(job_get "$id" .repo)/git/ref/heads/$branch"; then
+    echo "github branch lookup failed" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  case "$GH_HTTP_STATUS" in
+    200) ;;
+    404)
+      request=$(jq -cn --arg r "refs/heads/$branch" --arg s "$sha" '{ref: $r, sha: $s}')
+      resp=$(gh_write POST "$gh" "repos/$(job_get "$id" .repo)/git/refs" "$request" 2>/dev/null) || resp=""
+      if [ -z "$resp" ]; then
+        echo "head moved" >"$rdir/reason"
+        rm -rf "$tmp"
+        return 1
+      fi
+      created=1
+      ;;
+    *)
+      echo "github branch lookup failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+      ;;
+  esac
+  jq -n --slurpfile changes "$tmp/changes.json" --arg repo "$(job_get "$id" .repo)" \
+    --arg branch "$branch" --arg sha "$sha" --arg headline "$headline" --arg body "$body" \
+    --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
+    '{query: $query, variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+      expectedHeadOid: $sha, message: {headline: $headline, body: $body},
+      fileChanges: {additions: $changes[0].additions, deletions: $changes[0].deletions}}}}' \
+    >"$tmp/graphql.json" || {
+    echo "github commit request invalid" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  }
+  if ! curl -sS --fail-with-body --max-time 60 -X POST \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nContent-Type: application/json\n' "$gh") \
+    --data-binary @"$tmp/graphql.json" "$GITHUB_API/graphql" >"$tmp/graphql.response" 2>/dev/null; then gh_rc=1; fi
+  resp=$(cat "$tmp/graphql.response" 2>/dev/null || true)
+  if [ "$gh_rc" -ne 0 ] || jq -e '(.errors | type == "array" and length > 0) or (.data.createCommitOnBranch.commit.oid | type != "string")' \
+    <<<"$resp" >/dev/null 2>&1; then
+    if jq -er '[.errors[]?.message // ""] | join(" ") | test("(?i)(head.*moved|expected.*head|head.*expected|updated since)")' \
+      <<<"$resp" >/dev/null 2>&1; then
+      echo "head moved" >"$rdir/reason"
+    else
+      echo "github commit rejected" >"$rdir/reason"
+    fi
+    if [ "$created" = 1 ]; then
+      curl -sS --max-time 30 -o /dev/null -X DELETE \
+        -H @<(printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\n' "$gh") \
+        "$GITHUB_API/repos/$(job_get "$id" .repo)/git/refs/heads/$branch" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$tmp"
+    return 1
+  fi
+  oid=$(jq -r '.data.createCommitOnBranch.commit.oid' <<<"$resp")
+  if [[ ! $oid =~ ^[0-9a-f]{40}$ ]]; then
+    echo "github commit response invalid" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  echo "$oid" >"$dir/commit"
+  if [ "$created" = 1 ]; then
+    if ! gh_status_get "$gh" "repos/$(job_get "$id" .repo)" || \
+      [[ $GH_HTTP_STATUS != 200 ]]; then
+      echo "default branch lookup failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    default_branch=$(jq -r '.default_branch // empty' <<<"$GH_HTTP_BODY")
+    if [ -z "$default_branch" ]; then
+      echo "default branch lookup failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+    request=$(jq -cn --arg title "$headline" --arg head "$branch" --arg base "$default_branch" \
+      '{title: $title, head: $head, base: $base, draft: false, body: ""}')
+    resp=$(gh_write POST "$gh" "repos/$(job_get "$id" .repo)/pulls" "$request" 2>/dev/null) || resp=""
+    pr_url=$(jq -r '.html_url // empty' <<<"$resp")
+    if [[ $pr_url =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$ ]]; then
+      echo "$pr_url" >"$dir/pr_url"
+    else
+      echo "pull request creation failed" >"$rdir/reason"
+      rm -rf "$tmp"
+      return 1
+    fi
+  fi
+  echo succeeded >"$rdir/fix_state"
+  rm -rf "$tmp"
+}
+
+# publish_fix <id> <run> <container> <service-token>: mint the write token
+# only after the container has exited, then revoke it on every path.
+publish_fix() {
+  local id=$1 run=$2 cid=$3 tok=$4 repo iid bucket mint gh
+  local rdir="$STATE_DIR/$1/runs/$2"
+  local tmp request max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" archive_size cp_rc rc=0
+  repo=$(job_get "$id" .repo)
+  tmp=$(mktemp -d)
+  if [[ ! $max_bytes =~ ^[0-9]+$ ]]; then
+    echo "invalid publisher limit" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! docker cp "$cid:/home/agent/work/.agent-fix" - 2>"$tmp/cp.err" | \
+    head -c "$((max_bytes + 1))" >"$tmp/fix.tar"; then cp_rc=1; else cp_rc=0; fi
+  archive_size=$(wc -c <"$tmp/fix.tar")
+  if [ "$archive_size" -gt "$max_bytes" ]; then
+    echo "guard: output exceeds ${max_bytes} bytes" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [ "$cp_rc" -ne 0 ]; then
+    if [[ $(<"$tmp/cp.err") == *"Could not find the file"* ]]; then
+      echo no-change >"$rdir/fix_state"
+      rm -rf "$tmp"
+      return 0
+    fi
+    echo "fix outputs could not be copied" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  bucket=$(bao_req GET "$BUCKET" "$tok") || bucket=""
+  iid=$(field GITHUB_AGENTS_INSTALLATION_ID)
+  if [ -z "$iid" ]; then
+    echo "bucket has no GITHUB_AGENTS_INSTALLATION_ID" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  request=$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
+    '{installation_id: $i, repositories: $r, permissions: {contents: "write", pull_requests: "write"}}')
+  mint=$(bao_req POST github-agents/token "$tok" "$request") || mint=""
+  gh=$(jq -r '.data.token // empty' <<<"$mint")
+  if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
+    if [ -n "$gh" ]; then gh_revoke "$gh"; fi
+    echo "github token is not scoped to exactly $repo" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if publish_fix_token "$id" "$run" "$cid" "$gh" "$tmp/fix.tar"; then rc=0; else rc=$?; fi
+  gh_revoke "$gh"
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # finalize <id> <run>: settle a run's terminal state once, remove its
 # container (the volume stays for `continue`), and post the result.
 finalize() {
-  local id=$1 run=$2 tok=${3:-} rdir="$STATE_DIR/$1/runs/$2" state cid code pr
+  local id=$1 run=$2 tok=${3:-} rdir="$STATE_DIR/$1/runs/$2" state cid code pr mode
   mkdir "$rdir/final" 2>/dev/null || return 0
   code=$(cat "$rdir/exit" 2>/dev/null || true)
+  cid=$(cat "$rdir/cid" 2>/dev/null || true)
+  mode=$(job_get "$id" .mode 2>/dev/null || echo start)
   if [ -f "$rdir/reason" ]; then
     state=failed
   elif [ -e "$rdir/cancel" ]; then
@@ -315,15 +682,25 @@ finalize() {
   elif [ -e "$rdir/timeout" ]; then
     state=timeout
   elif [ "$code" = 0 ]; then
-    state=succeeded
+    if [ "$mode" = fix ]; then
+      if [ -n "$cid" ] && publish_fix "$id" "$run" "$cid" "$tok"; then
+        state=$(cat "$rdir/fix_state" 2>/dev/null || echo succeeded)
+      else
+        state=failed
+        [ -f "$rdir/reason" ] || echo "fix publish failed" >"$rdir/reason"
+      fi
+    else
+      state=succeeded
+    fi
   else
     state=failed
     echo "exit ${code:-unknown}" >"$rdir/reason"
   fi
-  cid=$(cat "$rdir/cid" 2>/dev/null || true)
   if [ -n "$cid" ]; then
-    pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
-    if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
+    if [ "$mode" != fix ]; then
+      pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
+      if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
+    fi
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
   date +%s >"$rdir/ended"
@@ -350,7 +727,7 @@ abort_login() {
   job_json "$id"
 }
 
-# container_args <id> <run> <tool> <repo> <continue> <tty>:
+# container_args <id> <run> <tool> <repo> <continue> <tty> <mode>:
 # the `docker create` arguments, into $args. Only non-secret values appear
 # here.
 container_args() {
@@ -367,7 +744,6 @@ container_args() {
     -e "AGENT_PROFILE=$3"
     -e "AGENT_REPO=$4"
     -e "AGENT_RUN_ID=$1"
-    -e AGENT_PR_DRAFT=1
     -v "agent-job-$1:/home/agent/work"
     --memory "${AGENT_MEMORY:-$AGENT_MEMORY_DEFAULT}"
     --cpus "${AGENT_CPUS:-$AGENT_CPUS_DEFAULT}"
@@ -375,19 +751,26 @@ container_args() {
     --security-opt no-new-privileges
     --cap-drop ALL
   )
+  if [ "$7" = fix ]; then
+    args+=(--label agent-dispatch.mode=fix -e AGENT_MODE=fix
+      -e "AGENT_BRANCH=$(job_get "$1" .branch)"
+      -e "AGENT_EXPECTED_SHA=$(job_get "$1" .expected_sha)")
+  else
+    args+=(-e AGENT_PR_DRAFT=1)
+  fi
   if [ "$5" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
   if [ "$6" = 1 ]; then args+=(--interactive --tty -e AGENT_TTY=1); fi
   args+=("$IMAGE")
 }
 
-# deliver <cid> <prompt>: the run's secrets (NAME=value lines) and prompt, as
+# deliver <cid> <prompt> <mode>: the run's secrets (NAME=value lines) and prompt, as
 # files owned by the container's uid 1000, streamed in with `docker cp`.
 # Uses the caller's $names, $bucket, $gh and optional router key.
 deliver() {
   local tmp name value rc=0
   tmp=$(mktemp -d)
   {
-    printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"
+    if [ "$3" != fix ]; then printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"; fi
     for name in "${names[@]}"; do
       value=$(field "$name")
       [[ $value != *$'\n'* ]] || rc=1
@@ -411,11 +794,12 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo tty tty_login cont=0 login tok lease bucket iid mint gh="" budget cid name
+  local tool repo mode tty tty_login cont=0 login tok lease bucket iid mint gh="" budget cid name request
   local router_key_field="" router_key="" reason
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
+  mode=$(job_get "$id" '(.mode // "start")')
   tty=$(job_get "$id" 'if .tty then 1 else 0 end')
   # A terminal session of a login tool: the user signs in by hand, so the
   # container gets no router key and no provider key.
@@ -478,6 +862,14 @@ run_job() {
     fi
   fi
 
+  if [ "$mode" = fix ]; then
+    request=$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
+      '{installation_id: $i, repositories: $r, permissions: {contents: "read"}}')
+    mint=$(bao_req POST github-agents/token "$tok" "$request") || {
+      abort "$id" "$run" "github token mint refused for $repo" "$tok"
+      return 1
+    }
+  else
   # One repo, contents + pull requests only (no workflow edits). The
   # installation id and repo travel as strings, the form the policy matches.
   mint=$(bao_req POST github-agents/token "$tok" "$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
@@ -486,6 +878,7 @@ run_job() {
     abort "$id" "$run" "github token mint refused for $repo" "$tok"
     return 1
   }
+  fi
   gh=$(jq -r '.data.token // empty' <<<"$mint")
   if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
     if [ -n "$gh" ]; then gh_revoke "$gh"; fi
@@ -498,17 +891,21 @@ run_job() {
     abort "$id" "$run" "$reason" "$tok"
     return 1
   fi
+  if [ "$mode" = fix ]; then
+    gh_revoke "$gh"
+    gh=""
+  fi
 
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"
   echo "$lease" >"$rdir/ttl"
-  container_args "$id" "$run" "$tool" "$repo" "$cont" "$tty"
+  container_args "$id" "$run" "$tool" "$repo" "$cont" "$tty" "$mode"
   cid=$(docker create "${args[@]}") || {
     abort "$id" "$run" "container create failed" "$tok"
     return 1
   }
   echo "$cid" >"$rdir/cid"
-  deliver "$cid" "$prompt" || {
+  deliver "$cid" "$prompt" "$mode" || {
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1
   }
@@ -652,6 +1049,47 @@ job_exists() {
   }
 }
 
+decode_header_value() {
+  local value=$1 i=0 char hex code
+  decoded_value=""
+  while [ "$i" -lt "${#value}" ]; do
+    char=${value:$i:1}
+    case "$char" in
+      +) decoded_value+=" "; i=$((i + 1)) ;;
+      %)
+        hex=${value:$((i + 1)):2}
+        [[ $hex =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
+        code=$((16#$hex))
+        [ "$code" -ge 32 ] && [ "$code" -ne 127 ] || return 1
+        printf -v char '%b' "\\x$hex"
+        decoded_value+="$char"
+        i=$((i + 3))
+        ;;
+      [-A-Za-z0-9._~]) decoded_value+="$char"; i=$((i + 1)) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+parse_fix_prompt() {
+  local header=${1%%$'\n'*} rest re
+  local encoded
+  re='^CI-RESOLVER headline=([-A-Za-z0-9._~+]|%[0-9A-Fa-f]{2})+ attempt=([1-9]) tier=(t[123]) signature=([0-9a-f]{12})$'
+  [[ $header =~ $re ]] || return 1
+  encoded=${header#CI-RESOLVER headline=}
+  encoded=${encoded%% attempt=*}
+  attempt=${BASH_REMATCH[2]}
+  tier=${BASH_REMATCH[3]}
+  signature=${BASH_REMATCH[4]}
+  decode_header_value "$encoded" || return 1
+  headline=$decoded_value
+  re='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9-]+\))?(!)?: .{1,100}$'
+  [[ $headline =~ $re ]] || return 1
+  rest=${1#*$'\n'}
+  [ "$rest" != "$1" ] || return 1
+  fix_task=$rest
+}
+
 cmd_start() {
   local tty=0 tool repo prompt id dir
   if [ "${1:-}" = --tty ]; then
@@ -668,6 +1106,7 @@ cmd_start() {
   valid_repo "$repo" || refuse "invalid owner/repo"
   if [ "$tty" = 0 ]; then
     valid_text "$prompt" || refuse "invalid prompt"
+    [[ ${prompt%%$'\n'*} != CI-RESOLVER* ]] || refuse "CI-RESOLVER header requires fix"
     # A batch job needs a credential it can use without a person.
     jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
       <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
@@ -685,6 +1124,49 @@ cmd_start() {
     >"$dir/job.json"
   run_job "$id" 1 "$prompt" || return 1
   if [ "$tty" = 1 ]; then attach "$id"; fi
+}
+
+cmd_fix() {
+  local tool repo branch sha raw_prompt prompt id dir cap running count=0 line
+  [ $# -eq 5 ] || usage
+  tool=$1 repo=$2 branch=$3 sha=$4 raw_prompt=$5
+  [[ $tool != -* ]] || refuse "unknown tool"
+  # shell is fix-only, so it stays out of valid_tool (the start and client list).
+  [ "$tool" = shell ] || valid_tool "$tool" || refuse "unknown tool"
+  valid_repo "$repo" || refuse "invalid owner/repo"
+  valid_branch "$branch" || refuse "invalid branch"
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || refuse "invalid expected sha"
+  parse_fix_prompt "$raw_prompt" || refuse "invalid CI-RESOLVER header"
+  prompt=$fix_task
+  valid_text "$prompt" || refuse "invalid prompt"
+  # shell runs the workbook's deterministic command and needs no model credential.
+  [ "$tool" = shell ] || jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
+    <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session"
+  cap=${AGENT_FIX_MAX_CONCURRENT:-3}
+  [[ $cap =~ ^[0-9]+$ ]] || refuse "invalid AGENT_FIX_MAX_CONCURRENT"
+  running=$(docker ps --quiet --filter label=agent-dispatch.mode=fix --filter status=running) || {
+    jq -cn '{error: "concurrency check failed"}'
+    return 1
+  }
+  while IFS= read -r line; do
+    [ -n "$line" ] && count=$((count + 1))
+  done <<<"$running"
+  if [ "$count" -ge "$cap" ]; then
+    jq -cn '{error: "busy"}'
+    return 75
+  fi
+  id="j-$(rand_hex 8)"
+  dir="$STATE_DIR/$id"
+  mkdir -p "$STATE_DIR"
+  mkdir "$dir"
+  mkdir -p "$dir/runs/1"
+  jq -n --arg job "$id" --arg tool "$tool" --arg repo "$repo" --arg branch "$branch" \
+    --arg sha "$sha" '{job: $job, tool: $tool, repo: $repo, tty: false,
+      mode: "fix", branch: $branch, expected_sha: $sha}' >"$dir/job.json"
+  jq -n --arg headline "$headline" --arg attempt "$attempt" --arg tier "$tier" \
+    --arg signature "$signature" '{headline: $headline, attempt: $attempt, tier: $tier, signature: $signature}' \
+    >"$dir/commit-message.json"
+  run_job "$id" 1 "$prompt" || return 1
 }
 
 # attach <id>: the caller's terminal joins the running container. The waiter
@@ -712,6 +1194,7 @@ cmd_continue() {
   valid_job "$id" || refuse "invalid job id"
   valid_text "$2" || refuse "invalid message"
   job_exists "$id"
+  [ "$(job_get "$id" '(.mode // "start")')" != fix ] || refuse "fix jobs run once; start a new job"
   if [ "$(job_get "$id" .tty)" = true ]; then
     refuse "a terminal job ends with its session"
   fi
@@ -832,6 +1315,7 @@ cmd="${1:-}"
 
 case "$cmd" in
   start) cmd_start "$@" ;;
+  fix) cmd_fix "$@" ;;
   continue) cmd_continue "$@" ;;
   status)
     [ $# -eq 1 ] || usage

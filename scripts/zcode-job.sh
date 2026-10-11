@@ -6,7 +6,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
     '       zcode-job continue <job-id> <message>' \
     '       zcode-job status|result|cancel <job-id>' \
     '       zcode-job live|repos' \
-    'tools: zcode (default), opencode, cursor-agent, qwen-code'
+    'tools: zcode (default), opencode, opencode-local, opencode-zai, cursor-agent, qwen-code'
   exit 0
 fi
 
@@ -20,7 +20,7 @@ fail() {
 # suite fails when the two lists differ.
 tool_allowed() {
   case "$1" in
-    zcode | opencode | cursor-agent | qwen-code) ;;
+    zcode | opencode | opencode-local | opencode-zai | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }

@@ -49,6 +49,17 @@
     routerKeyField = "OPENCODE_ROUTER_KEY";
     ttyLogin = true;
   };
+  opencode-local = {
+    env = [ ];
+    routerKeyField = "OPENCODE_ROUTER_KEY";
+  };
+  opencode-zai = {
+    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+  };
+  # Runs the prompt as a bash command; fix jobs only, no model credential.
+  shell = {
+    env = [ ];
+  };
   # Cursor has no router endpoint. A batch run authenticates with its API key
   # (print mode); a terminal session signs in by hand and gets no key.
   cursor-agent = {

@@ -1,10 +1,11 @@
 # The `dispatch-ssh` forced-command entrypoint (wrapped by writeShellApplication).
 #
 # Install it as the `command=` of an authorized_keys entry. It reads
-# SSH_ORIGINAL_COMMAND, accepts only these six verbs, and hands each word to
+# SSH_ORIGINAL_COMMAND, accepts only these seven verbs, and hands each word to
 # `agent-dispatch` as its own argument:
 #
 #   start <tool> <owner/repo> <prompt...>
+#   fix <tool> <owner/repo> <branch> <sha> <prompt...>
 #   tty <tool> <owner/repo>        (only with a terminal: ssh -t)
 #   continue <job-id> <message...>
 #   status <job-id>
@@ -48,6 +49,19 @@ case "$verb" in
     repo="$word"
     trim
     exec agent-dispatch start "$tool" "$repo" "$line"
+    ;;
+  fix)
+    pop
+    case "$word" in -*) refuse ;; esac
+    tool="$word"
+    pop
+    repo="$word"
+    pop
+    branch="$word"
+    pop
+    sha="$word"
+    trim
+    exec agent-dispatch fix "$tool" "$repo" "$branch" "$sha" "$line"
     ;;
   tty)
     [ -t 0 ] && [ -t 1 ] || refuse

@@ -58,8 +58,8 @@ zcode-job live
 Every command prints JSON. `result` requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
-`start --tool` selects `zcode` (default), `opencode`, `cursor-agent`, or
-`qwen-code`. The dispatcher must report the requested tool, and each job
+`start --tool` selects `zcode` (default), `opencode`, `opencode-local`,
+`opencode-zai`, `cursor-agent`, or `qwen-code`. The dispatcher must report the requested tool, and each job
 reports the tool it ran under. Unapproved repositories and unknown tools fail
 before SSH. Continuations and cancellations check the existing job's tool and
 repository before sending a mutation.
@@ -125,6 +125,7 @@ container plus one named Docker volume, `agent-job-<id>`, mounted at
 
 ```sh
 agent-dispatch start <tool> <owner/repo> <prompt>
+agent-dispatch fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
 agent-dispatch start --tty <tool> <owner/repo>
 agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
@@ -133,8 +134,13 @@ agent-dispatch refresh
 agent-dispatch check
 ```
 
-- **Tools**: `zcode`, `opencode`, `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16
-  hex digits. A batch job needs a credential that works without a person:
+- **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`,
+  `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
+  job needs a credential that works without a person:
+  `opencode-local` uses `AGENT_ROUTER_BASE_URL` and the router key with model
+  `review-local`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
+  `zai-coding-plan/glm-5.3`. `shell` is accepted only by `fix`: it runs the
+  task text as a `bash` command and needs no model credential.
   `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret
   bucket. `qwen-code` batch runs use the router's `medium` capability with
   `QWEN_CODE_ROUTER_KEY` from the same bucket, and have no terminal session.
@@ -151,6 +157,16 @@ agent-dispatch check
   (default 8 MiB) fails whole. The dispatcher records the PR URL only when it
   points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.
+- **`fix`** applies a change to the named branch at the expected 40-character
+  commit. Its prompt starts with a
+  `CI-RESOLVER headline=<urlencoded> attempt=<1-9> tier=<t1|t2|t3> signature=<12 lowercase hex>`
+  line; the remaining prompt is the task. The dispatcher publishes the
+  validated change with an API-created commit. It refuses workflow edits, test
+  deletions, added suppression lines, and changes over `AGENT_FIX_MAX_FILES`
+  (default 20). If the branch did not exist, it creates the branch at the
+  expected commit and opens a non-draft PR to the repository's default branch.
+  Fix jobs run once and report the created commit oid, or an empty `commit`
+  field when there is no change.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
 - **`check`** logs in once and revokes the token. When the login fails, or a
@@ -177,7 +193,7 @@ the Web UI. A controller's own cancellation or timeout state takes precedence
 over a native task's terminal outcome.
 
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
-reads `SSH_ORIGINAL_COMMAND` and accepts only the six verbs. `tty` is refused
+reads `SSH_ORIGINAL_COMMAND` and accepts only the seven verbs. `tty` is refused
 without a terminal, so the entry needs the `pty` option. It passes each
 word to `agent-dispatch` as its own argument, and the prompt is the rest of
 the line. No shell evaluates the line, and `agent-dispatch` validates every
@@ -186,8 +202,10 @@ the prompt (16 KiB, no control characters other than tab and newline).
 
 ### Credentials
 
-Each job gets a GitHub token scoped to exactly its repo, with `contents` and
-`pull_requests` write. The dispatcher fails closed when the token lists any
+Start jobs get a GitHub token scoped to exactly their repo, with `contents` and
+`pull_requests` write. Fix jobs use a `contents: read` token for repository
+checks and revoke it before container creation; the host mints the write token
+after the container exits. The dispatcher fails closed when a token lists any
 other repo. Notifications and continuations reuse the job's host-side token;
 the dispatcher renews it while a container runs and revokes it when the job
 is pruned or its lease expires.
@@ -210,6 +228,9 @@ the container.
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
+| `AGENT_FIX_MAX_CONCURRENT` | running fix jobs allowed at once (default 3) |
+| `AGENT_FIX_MAX_FILES` | files a fix job may publish (default 20) |
+| `AGENT_PUBLISH_MAX_BYTES` | encoded change size and copied fix output cap (default 8 MiB) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
 Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, each tool's configured
@@ -222,10 +243,11 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | Input | Meaning |
 | --- | --- |
 | `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
-| `AGENT_PR_DRAFT=1` | open the PR as a draft |
+| `AGENT_PR_DRAFT=1` | open the start job's PR as a draft |
+| `AGENT_MODE=fix`, `AGENT_BRANCH`, `AGENT_EXPECTED_SHA` | fix mode and the expected branch head |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
 | `AGENT_TTY=1` | run the tool's own interactive session on the attached terminal |
-| `~/.agent-env` | `GH_TOKEN`, `GITHUB_TOKEN`, the profile's variables, and optional router values |
+| `~/.agent-env` | Start job: GitHub token, profile values, and optional router values. Fix job: profile values and optional router values. |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
 
