@@ -279,7 +279,9 @@ entries into that checkout's `automation/ci-workbook/`; it changes files only.
   then killed). Defaults live in `nix/agent-cli.nix`; each is env-overridable.
 - **Secret egress**: before publishing, the entrypoint runs `gitleaks` on every
   new commit of the run, including commits the tool made itself, and stops
-  (redacted output) on a finding.
+  (redacted output) on a finding. In fix mode the host publisher also runs
+  the pinned image's `gitleaks` over the decoded additions, in a fresh
+  container with no network and a read-only mount, and refuses on a finding.
 - **Session and event records**: a `--host` run bind-mounts a per-run host
   spool dir onto the Claude and Codex session subdirs (`~/.claude/projects`,
   `~/.codex/sessions`) and the ZCode CLI event log dir (`~/.zcode/cli/log`)
