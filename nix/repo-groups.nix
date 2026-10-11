@@ -100,7 +100,7 @@
         branch = "main";
       }
       {
-        name = "docs-starlight";
+        name = "docs-private";
         branch = "main";
       }
     ];
