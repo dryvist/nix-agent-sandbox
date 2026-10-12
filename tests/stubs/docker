@@ -53,6 +53,10 @@ case "$1" in
     if [ "$(next wait)" -lt "${STUB_WAIT_CALLS:-1}" ]; then exec sleep 60; fi
     echo "${STUB_EXIT:-0}"
     ;;
+  logs)
+    [ "$2" = --tail ] || exit 125
+    tail -n "$3" "${STUB_DOCKER_LOG_FILE:-/dev/null}"
+    ;;
   run)
     # Only the publisher's gitleaks scan calls `docker run`.
     [[ " $* " == *" --network none "* && " $* " == *" --entrypoint gitleaks "* ]] || exit 125
