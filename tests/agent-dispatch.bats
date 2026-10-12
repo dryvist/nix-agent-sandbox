@@ -22,7 +22,8 @@ setup() {
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
   export REAL_GIT="$(command -v git)"
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
-    STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH STUB_FIX_PR_URL
+    STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
+    STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -318,7 +319,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   done
 }
 
-@test "OpenCode fix profiles configure only the router or the built-in ZAI model" {
+@test "OpenCode batch profiles configure the router and fix profiles configure their models" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
   mkdir -p "$home" "$tools"
@@ -342,8 +343,10 @@ SH
     .["agent-router"].npm == "@ai-sdk/openai-compatible" and
     .["agent-router"].options.baseURL == "https://router.test/v1" and
     .["agent-router"].options.apiKey == "router-test-key" and
-    (.["agent-router"].models | keys == ["medium"])' \
+    (.["agent-router"].models | keys == ["medium", "small"])' \
     "$home/.config/opencode/opencode.json"
+  jq -e '.model == "agent-router/medium" and
+    .small_model == "agent-router/small"' "$home/.config/opencode/opencode.json"
   [ "$(ls -l "$home/.config/opencode/opencode.json" | cut -c2-10)" = rw------- ]
 
   printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' >"$home/.agent-env"
@@ -644,6 +647,63 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(line_of 'revoke-self token=s.tok1')" -gt "$(line_of 'docker kill')" ]
 }
 
+@test "finalize saves the redacted last 200 container log lines before removal" {
+  local id log token logs_line rm_line
+  {
+    printf '%s\n' 'excluded-first-line'
+    for ((i = 1; i <= 190; i++)); do printf 'filler-%s\n' "$i"; done
+    printf '%s\n' 'ghs_test_secret' 'gho_test_secret' 'ghu_test_secret' 'github_pat_test_secret' \
+      'sk-proj_test_secret' 'Authorization: Bearer authorization_test_secret' \
+      'Bearer bearer_test_secret' 'AGENT_ROUTER_KEY=zcode-router-secret-value' \
+      'GH_TOKEN=abc123' 'last-log-line'
+  } >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  [ -f "$log" ]
+  [ "$(wc -l <"$log" | tr -d '[:space:]')" -eq 200 ]
+  ! grep -Fxq 'excluded-first-line' "$log"
+  grep -Fxq 'last-log-line' "$log"
+  [ "$(grep -Fc '[REDACTED]' "$log")" -eq 9 ]
+  for token in ghs_test_secret gho_test_secret ghu_test_secret github_pat_test_secret \
+    sk-proj_test_secret authorization_test_secret bearer_test_secret \
+    zcode-router-secret-value abc123; do
+    ! grep -Fq "$token" "$log"
+  done
+  [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
+  logs_line=$(grep -nF 'docker logs --tail 200 cid0123' "$STUB_DIR/argv.log" | cut -d: -f1)
+  rm_line=$(grep -nF 'docker rm -f cid0123' "$STUB_DIR/argv.log" | cut -d: -f1)
+  [ -n "$logs_line" ] && [ -n "$rm_line" ]
+  [ "$logs_line" -lt "$rm_line" ]
+  ! jq -e 'has("log_tail") or has("log")' <<<"$output"
+  run --separate-stderr dispatch status "$id"
+  [ "$status" -eq 0 ]
+  jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
+}
+
+@test "status omits log fields and host logs redact router and GitHub key assignments" {
+  local id log
+  printf '%s\n' 'AGENT_ROUTER_KEY=zcode-router-secret-value' 'GH_TOKEN=abc123' >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$log"
+  grep -Fxq 'GH_TOKEN=[REDACTED]' "$log"
+  ! grep -Fq 'zcode-router-secret-value' "$log"
+  ! grep -Fq 'abc123' "$log"
+  [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
+
+  run --separate-stderr dispatch status "$id"
+  [ "$status" -eq 0 ]
+  jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
+  ! grep -Fq 'zcode-router-secret-value' <<<"$output"
+  ! grep -Fq 'abc123' <<<"$output"
+}
+
 @test "cancel kills a running job; refresh settles it as cancelled" {
   local id rec
   export STUB_NO_WAITER=1
@@ -811,15 +871,63 @@ SH
 printf '%s\n' "$@" >"$STUB_DIR/zcode-argv"
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = zcode-router-test-key
+test -r "$ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"
+test -f "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"
+printf '%s\n' "$ZCODE_BUILTIN_PROVIDER_CONFIG_FILE" "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" \
+  >"$STUB_DIR/zcode-provider-config-paths"
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 SH
+  printf '%s\n' '{}' >"$home/zcode-builtin.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE="$home/zcode-builtin.json" \
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
+  [ "$(cat "$STUB_DIR/zcode-provider-config-paths")" = \
+    "$home/zcode-builtin.json"$'\n'"$home/.zcode/v2/provider_config.json" ]
+  jq -e '.schemaVersion == 1 and .config.providerOrder == ["agent-router"] and
+    .config.providerConfigRules.providerRules == [{providerId: "agent-router",
+      providerName: "Agent Router", enabled: true, config: {
+        group: "standard-personal", access: {type: "api-key", apiKey: "zcode-router-test-key"},
+        api: {type: "openai-chat-completions", baseUrl: "https://router.test/v1"},
+        personalModelIds: ["medium"]}}] and
+    .config.modelConfigRules == {providerModelRules: [], manualProviderModelRules: []} and
+    .config.defaultModelSelection == {providerId: "agent-router", modelId: "medium"}' \
+    "$home/.zcode/v2/provider_config.json"
+  [ "$(ls -l "$home/.zcode/v2/provider_config.json" | cut -c2-10)" = rw------- ]
+}
+
+@test "ZCode and OpenCode preserve existing configs without router values" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/no-router-home" tools="$BATS_TEST_TMPDIR/no-router-tools"
+  mkdir -p "$home/.zcode/v2" "$home/.config/opencode" "$tools"
+  printf '%s\n' '{"zcode":{"env":[]},"opencode":{"env":[]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"existing":"zcode"}' >"$home/.zcode/v2/provider_config.json"
+  printf '%s\n' '{"existing":"opencode"}' >"$home/.config/opencode/opencode.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+test -z "${AGENT_ROUTER_BASE_URL:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}"
+test "$(cat "$HOME/.zcode/v2/provider_config.json")" = '{"existing":"zcode"}'
+SH
+  bash_stub "$tools/opencode" <<'SH'
+test -z "${AGENT_ROUTER_BASE_URL:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test "$(cat "$HOME/.config/opencode/opencode.json")" = '{"existing":"opencode"}'
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=zcode \
+    AGENT_PROMPT='run zcode' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
+    AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
 }
 
 @test "qwen-code is batch only: a terminal job is refused before any side effect" {
@@ -890,6 +998,7 @@ echo 1000
 SH
 bash_stub "$tools/opencode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
+cp "$HOME/.config/opencode/opencode.json" "$STUB_DIR/opencode-batch-config"
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = opencode-router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
@@ -905,7 +1014,11 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\nopencode prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/medium\nopencode prompt' ]
+  jq -e '.model == "agent-router/medium" and .small_model == "agent-router/small" and
+    .provider["agent-router"].options == {baseURL: "https://router.test/v1", apiKey: "opencode-router-test-key"} and
+    (.provider["agent-router"].models | keys == ["medium", "small"])' \
+    "$STUB_DIR/opencode-batch-config"
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"

@@ -236,7 +236,8 @@ job_json() {
   jq -c --arg state "$(cat "$rdir/state" 2>/dev/null || echo starting)" \
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
-    --arg commit "$commit" --argjson runs "$run" --argjson duration "$((ended - started))" \
+    --arg commit "$commit" \
+    --argjson runs "$run" --argjson duration "$((ended - started))" \
     '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit}' \
     "$dir/job.json"
 }
@@ -808,6 +809,16 @@ finalize() {
       pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
+    if docker logs --tail 200 "$cid" 2>/dev/null | jq -Rr \
+      'gsub("(?i)(?<prefix>authorization:[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
+       gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
+       gsub("ghs_[A-Za-z0-9_-]+|gho_[A-Za-z0-9_-]+|ghu_[A-Za-z0-9_-]+|github_pat_[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|(?i)bearer[[:space:]]+[^[:space:]]+"; "[REDACTED]")' \
+      >"$rdir/log"; then
+      :
+    else
+      : >"$rdir/log"
+    fi
+    chmod 600 "$rdir/log"
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
   date +%s >"$rdir/ended"
