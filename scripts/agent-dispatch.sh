@@ -227,22 +227,18 @@ job_get() {
 }
 
 job_json() {
-  local dir="$STATE_DIR/$1" run rdir started ended commit log_tail="" include_log=${2:-0}
+  local dir="$STATE_DIR/$1" run rdir started ended commit
   run=$(latest_run "$1")
   rdir="$dir/runs/$run"
   started=$(cat "$rdir/started" 2>/dev/null || date +%s)
   ended=$(cat "$rdir/ended" 2>/dev/null || date +%s)
   commit=$(cat "$dir/commit" 2>/dev/null || true)
-  if [ "$include_log" = 1 ] && [ -f "$rdir/log" ]; then
-    log_tail=$(tail -n 20 "$rdir/log")
-  fi
   jq -c --arg state "$(cat "$rdir/state" 2>/dev/null || echo starting)" \
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
-    --arg commit "$commit" --arg log_tail "$log_tail" --argjson include_log "$include_log" \
+    --arg commit "$commit" \
     --argjson runs "$run" --argjson duration "$((ended - started))" \
-    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit} +
-      (if $include_log == 1 and $log_tail != "" then {log_tail: $log_tail} else {} end)' \
+    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit}' \
     "$dir/job.json"
 }
 
@@ -814,7 +810,9 @@ finalize() {
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
     if docker logs --tail 200 "$cid" 2>/dev/null | jq -Rr \
-      'gsub("ghs_[A-Za-z0-9_]+|gho_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]+|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[^[:space:]]+"; "[REDACTED]")' \
+      'gsub("(?i)(?<prefix>authorization:[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
+       gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
+       gsub("ghs_[A-Za-z0-9_-]+|gho_[A-Za-z0-9_-]+|ghu_[A-Za-z0-9_-]+|github_pat_[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|(?i)bearer[[:space:]]+[^[:space:]]+"; "[REDACTED]")' \
       >"$rdir/log"; then
       :
     else
@@ -1444,7 +1442,7 @@ case "$cmd" in
   status)
     [ $# -eq 1 ] || usage
     job_exists "$1"
-    job_json "$1" 1
+    job_json "$1"
     ;;
   cancel)
     [ $# -eq 1 ] || usage

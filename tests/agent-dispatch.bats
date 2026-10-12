@@ -651,9 +651,11 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   local id log token logs_line rm_line
   {
     printf '%s\n' 'excluded-first-line'
-    for ((i = 1; i <= 194; i++)); do printf 'filler-%s\n' "$i"; done
-    printf '%s\n' 'ghs_test_secret' 'gho_test_secret' 'github_pat_test_secret' \
-      'sk-proj_test_secret' 'Bearer bearer_test_secret' 'last-log-line'
+    for ((i = 1; i <= 190; i++)); do printf 'filler-%s\n' "$i"; done
+    printf '%s\n' 'ghs_test_secret' 'gho_test_secret' 'ghu_test_secret' 'github_pat_test_secret' \
+      'sk-proj_test_secret' 'Authorization: Bearer authorization_test_secret' \
+      'Bearer bearer_test_secret' 'AGENT_ROUTER_KEY=zcode-router-secret-value' \
+      'GH_TOKEN=abc123' 'last-log-line'
   } >"$STUB_DIR/container.log"
   export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
@@ -664,9 +666,10 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(wc -l <"$log" | tr -d '[:space:]')" -eq 200 ]
   ! grep -Fxq 'excluded-first-line' "$log"
   grep -Fxq 'last-log-line' "$log"
-  [ "$(grep -Fc '[REDACTED]' "$log")" -eq 5 ]
-  for token in ghs_test_secret gho_test_secret github_pat_test_secret \
-    sk-proj_test_secret bearer_test_secret; do
+  [ "$(grep -Fc '[REDACTED]' "$log")" -eq 9 ]
+  for token in ghs_test_secret gho_test_secret ghu_test_secret github_pat_test_secret \
+    sk-proj_test_secret authorization_test_secret bearer_test_secret \
+    zcode-router-secret-value abc123; do
     ! grep -Fq "$token" "$log"
   done
   [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
@@ -674,15 +677,31 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   rm_line=$(grep -nF 'docker rm -f cid0123' "$STUB_DIR/argv.log" | cut -d: -f1)
   [ -n "$logs_line" ] && [ -n "$rm_line" ]
   [ "$logs_line" -lt "$rm_line" ]
-  ! jq -e 'has("log_tail")' <<<"$output"
+  ! jq -e 'has("log_tail") or has("log")' <<<"$output"
   run --separate-stderr dispatch status "$id"
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.log_tail | split("\n") | length' <<<"$output")" -eq 20 ]
-  jq -e '.log_tail | contains("[REDACTED]") and contains("last-log-line")' <<<"$output"
-  for token in ghs_test_secret gho_test_secret github_pat_test_secret \
-    sk-proj_test_secret bearer_test_secret; do
-    ! jq -r '.log_tail' <<<"$output" | grep -Fq "$token"
-  done
+  jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
+}
+
+@test "status omits log fields and host logs redact router and GitHub key assignments" {
+  local id log
+  printf '%s\n' 'AGENT_ROUTER_KEY=zcode-router-secret-value' 'GH_TOKEN=abc123' >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$log"
+  grep -Fxq 'GH_TOKEN=[REDACTED]' "$log"
+  ! grep -Fq 'zcode-router-secret-value' "$log"
+  ! grep -Fq 'abc123' "$log"
+  [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
+
+  run --separate-stderr dispatch status "$id"
+  [ "$status" -eq 0 ]
+  jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
+  ! grep -Fq 'zcode-router-secret-value' <<<"$output"
+  ! grep -Fq 'abc123' <<<"$output"
 }
 
 @test "cancel kills a running job; refresh settles it as cancelled" {
