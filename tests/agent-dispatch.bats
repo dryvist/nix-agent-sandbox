@@ -900,6 +900,36 @@ SH
   [ "$(ls -l "$home/.zcode/v2/provider_config.json" | cut -c2-10)" = rw------- ]
 }
 
+@test "ZCode and OpenCode preserve existing configs without router values" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/no-router-home" tools="$BATS_TEST_TMPDIR/no-router-tools"
+  mkdir -p "$home/.zcode/v2" "$home/.config/opencode" "$tools"
+  printf '%s\n' '{"zcode":{"env":[]},"opencode":{"env":[]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"existing":"zcode"}' >"$home/.zcode/v2/provider_config.json"
+  printf '%s\n' '{"existing":"opencode"}' >"$home/.config/opencode/opencode.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+test -z "${AGENT_ROUTER_BASE_URL:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}"
+test "$(cat "$HOME/.zcode/v2/provider_config.json")" = '{"existing":"zcode"}'
+SH
+  bash_stub "$tools/opencode" <<'SH'
+test -z "${AGENT_ROUTER_BASE_URL:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test "$(cat "$HOME/.config/opencode/opencode.json")" = '{"existing":"opencode"}'
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=zcode \
+    AGENT_PROMPT='run zcode' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
+    AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+}
+
 @test "qwen-code is batch only: a terminal job is refused before any side effect" {
   run --separate-stderr dispatch start --tty qwen-code dryvist/nix-ai
   [ "$status" -eq 64 ]

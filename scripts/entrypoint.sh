@@ -342,40 +342,44 @@ case "${AGENT_TOOL}" in
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
     ;;
   zcode)
-    personal_provider_config="${ZCODE_DATA_BASE_DIR:-${HOME}}/.zcode/v2/provider_config.json"
-    mkdir -p "${personal_provider_config%/*}"
-    # ZCode v2 provider_config.json schema is defined in nix-ai's
-    # packages/provider-node/src/provider-config-file-codec.ts and
-    # packages/provider/src/config/{provider-data-schema,rule-data-schema}.ts.
-    jq -n --arg url "${AGENT_ROUTER_BASE_URL}" --arg key "${AGENT_ROUTER_KEY}" \
-      '{schemaVersion: 1, config: {
-        providerOrder: ["agent-router"],
-        providerConfigRules: {providerRules: [{
-          providerId: "agent-router", providerName: "Agent Router", enabled: true,
-          config: {
-            group: "standard-personal",
-            access: {type: "api-key", apiKey: $key},
-            api: {type: "openai-chat-completions", baseUrl: $url},
-            personalModelIds: ["medium"]
-          }
-        }]},
-        modelConfigRules: {providerModelRules: [], manualProviderModelRules: []},
-        defaultModelSelection: {providerId: "agent-router", modelId: "medium"}
-      }}' >"${personal_provider_config}"
-    chmod 600 "${personal_provider_config}"
-    export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="${personal_provider_config}"
+    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
+      personal_provider_config="${ZCODE_DATA_BASE_DIR:-${HOME}}/.zcode/v2/provider_config.json"
+      mkdir -p "${personal_provider_config%/*}"
+      # ZCode v2 provider_config.json schema is defined in nix-ai's
+      # packages/provider-node/src/provider-config-file-codec.ts and
+      # packages/provider/src/config/{provider-data-schema,rule-data-schema}.ts.
+      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
+        '{schemaVersion: 1, config: {
+          providerOrder: ["agent-router"],
+          providerConfigRules: {providerRules: [{
+            providerId: "agent-router", providerName: "Agent Router", enabled: true,
+            config: {
+              group: "standard-personal",
+              access: {type: "api-key", apiKey: $key},
+              api: {type: "openai-chat-completions", baseUrl: $url},
+              personalModelIds: ["medium"]
+            }
+          }]},
+          modelConfigRules: {providerModelRules: [], manualProviderModelRules: []},
+          defaultModelSelection: {providerId: "agent-router", modelId: "medium"}
+        }}' >"${personal_provider_config}"
+      chmod 600 "${personal_provider_config}"
+      export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="${personal_provider_config}"
+    fi
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    mkdir -p "${HOME}/.config/opencode"
-    jq -n --arg url "${AGENT_ROUTER_BASE_URL}" --arg key "${AGENT_ROUTER_KEY}" \
-      '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
-        small_model: "agent-router/small", provider: {"agent-router": {
-        npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-        options: {baseURL: $url, apiKey: $key},
-        models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
-      >"${HOME}/.config/opencode/opencode.json"
-    chmod 600 "${HOME}/.config/opencode/opencode.json"
+    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
+      mkdir -p "${HOME}/.config/opencode"
+      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
+        '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
+          small_model: "agent-router/small", provider: {"agent-router": {
+          npm: "@ai-sdk/openai-compatible", name: "Agent Router",
+          options: {baseURL: $url, apiKey: $key},
+          models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
+        >"${HOME}/.config/opencode/opencode.json"
+      chmod 600 "${HOME}/.config/opencode/opencode.json"
+    fi
     opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
     ;;
   shell)
