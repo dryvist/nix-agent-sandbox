@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.1.0...v1.1.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **dispatch:** route batch agents through the router ([#97](https://github.com/dryvist/nix-agent-sandbox/issues/97)) ([c652be8](https://github.com/dryvist/nix-agent-sandbox/commit/c652be84b98882ce3e5d3bdb7178419119a6e9db))
+
 ## [1.1.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.0.0...v1.1.0) (2026-10-11)
 
 
