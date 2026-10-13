@@ -752,6 +752,8 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   local id log
   printf '%s\n' 'AGENT_ROUTER_KEY=zcode-router-secret-value' 'GH_TOKEN=abc123' >"$STUB_DIR/container.log"
   printf '%s\n' 'X-Vault-Token: vault_test_secret' >>"$STUB_DIR/container.log"
+  printf '%s\n' '{"env":{"ZAMMAD_HTTP_TOKEN": "json_test_secret","ZAMMAD_URL":"https://zammad.test"}}' \
+    >>"$STUB_DIR/container.log"
   export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
@@ -760,8 +762,10 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$log"
   grep -Fxq 'GH_TOKEN=[REDACTED]' "$log"
   grep -Fxq 'X-Vault-Token: [REDACTED]' "$log"
+  grep -Fxq '{"env":{"ZAMMAD_HTTP_TOKEN": "[REDACTED]","ZAMMAD_URL":"https://zammad.test"}}' "$log"
   ! grep -Fq 'zcode-router-secret-value' "$log"
   ! grep -Fq 'vault_test_secret' "$log"
+  ! grep -Fq 'json_test_secret' "$log"
   ! grep -Fq 'abc123' "$log"
   [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
 

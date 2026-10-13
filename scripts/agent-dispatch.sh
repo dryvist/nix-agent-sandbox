@@ -865,6 +865,7 @@ finalize() {
     if docker logs --tail 200 "$cid" 2>/dev/null | jq -Rr \
       'gsub("(?i)(?<prefix>(?:authorization|x-vault-token):[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
+       gsub("(?i)(?<prefix>\"[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*\"[[:space:]]*:[[:space:]]*)\"[^\"]*\""; "\(.prefix)\"[REDACTED]\"") |
        gsub("ghs_[A-Za-z0-9_-]+|gho_[A-Za-z0-9_-]+|ghu_[A-Za-z0-9_-]+|github_pat_[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|(?i)bearer[[:space:]]+[^[:space:]]+"; "[REDACTED]")' \
       >"$rdir/log"; then
       :
