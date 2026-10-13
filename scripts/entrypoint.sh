@@ -174,203 +174,69 @@ case "${AGENT_TOOL}" in
     ;;
 esac
 
-openbao_request() {
-  local method=$1 path=$2 token=$3 body=${4:-}
-  if [ -n "$body" ]; then
-    curl --silent --show-error --fail --max-time 60 -X "$method" \
-      -H @<(printf 'X-Vault-Token: %s\n' "$token") \
-      --data-binary @<(printf '%s' "$body") "${BAO_ADDR}/v1/${path}"
-  else
-    curl --silent --show-error --fail --max-time 60 -X "$method" \
-      -H @<(printf 'X-Vault-Token: %s\n' "$token") "${BAO_ADDR}/v1/${path}"
-  fi
-}
-
-revoke_sandbox_token() {
-  [ -z "${sandbox_bao_token:-}" ] || {
-    openbao_request POST auth/token/revoke-self "$sandbox_bao_token" >/dev/null 2>&1 || true
-    sandbox_bao_token=""
-  }
-}
-
-merge_mcp_config() {
-  local path=$1 key=$2 tmp
-  local filter
-  filter=$(cat <<'JQ'
-def servers:
-    if $tool == "opencode" or $tool == "opencode-local" or $tool == "opencode-zai" then
-      {vikunja:{type:"local",command:[$v],environment:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
-       zammad:{type:"local",command:([$z] + $zargs),environment:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
-    else
-      {vikunja:{command:$v,args:[],env:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
-       zammad:{command:$z,args:$zargs,env:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
-    end;
-JQ
-  )
-  local -a jq_args=(--arg key "$key" --arg tool "$AGENT_TOOL" \
-    --arg v "$AGENT_MCP_VIKUNJA_COMMAND" --arg z "$AGENT_MCP_ZAMMAD_COMMAND" \
-    --argjson zargs "$AGENT_MCP_ZAMMAD_ARGS")
-  mkdir -p "${path%/*}"
-  chmod 700 "${path%/*}"
-  tmp=$(mktemp "${path}.XXXXXX")
-  if [ -f "$path" ]; then
-    if ! VIKUNJA_URL="$VIKUNJA_URL" VIKUNJA_API_TOKEN="$VIKUNJA_API_TOKEN" \
-      ZAMMAD_URL="$ZAMMAD_URL" ZAMMAD_HTTP_TOKEN="$ZAMMAD_HTTP_TOKEN" \
-      jq "${jq_args[@]}" "$filter . + {(\$key): servers}" "$path" >"$tmp"; then
-      rm -f "$tmp"
-      echo "agent-entrypoint: could not update MCP configuration." >&2
-      return 1
-    fi
-  elif ! VIKUNJA_URL="$VIKUNJA_URL" VIKUNJA_API_TOKEN="$VIKUNJA_API_TOKEN" \
-    ZAMMAD_URL="$ZAMMAD_URL" ZAMMAD_HTTP_TOKEN="$ZAMMAD_HTTP_TOKEN" \
-    jq -n "${jq_args[@]}" "$filter { (\$key): servers }" >"$tmp"; then
-    rm -f "$tmp"
-    echo "agent-entrypoint: could not create MCP configuration." >&2
-    return 1
-  fi
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$path"
-}
-
-configure_sandbox_mcp() {
-  local config_path config_key
-  case "${AGENT_TOOL}" in
-    zcode | opencode | opencode-local | opencode-zai | qwen-code) ;;
-    *) return 0 ;;
-  esac
-  [ -n "${VIKUNJA_URL:-}" ] && [ -n "${VIKUNJA_API_TOKEN:-}" ] && \
-    [ -n "${ZAMMAD_URL:-}" ] && [ -n "${ZAMMAD_HTTP_TOKEN:-}" ] || {
-    echo "agent-entrypoint: MCP credentials or service URLs are missing." >&2
-    return 1
-  }
-  [ -n "${AGENT_MCP_VIKUNJA_COMMAND:-}" ] && [ -n "${AGENT_MCP_ZAMMAD_COMMAND:-}" ] || {
-    echo "agent-entrypoint: MCP server commands are missing." >&2
-    return 1
-  }
-  AGENT_MCP_ZAMMAD_ARGS="${AGENT_MCP_ZAMMAD_ARGS:-[]}"
-  jq -e 'type == "array" and all(.[]; type == "string")' \
-    <<<"${AGENT_MCP_ZAMMAD_ARGS}" >/dev/null || {
-    echo "agent-entrypoint: Zammad MCP arguments are invalid." >&2
-    return 1
-  }
-  case "${AGENT_TOOL}" in
-    zcode)
-      config_path="${HOME}/.zcode/cli/config.json"
-      config_key=mcpServers
-      ;;
-    opencode | opencode-local | opencode-zai)
-      config_path="${HOME}/.config/opencode/opencode.json"
-      config_key=mcp
-      ;;
-    qwen-code)
-      config_path="${HOME}/.qwen/settings.json"
-      config_key=mcpServers
-      ;;
-  esac
-  merge_mcp_config "$config_path" "$config_key"
-}
-
-load_sandbox_credentials() {
-  local wrap_token unwrap_response secret_id login_body login_response kv profile_key router_key
+openbao_child="${AGENT_OPENBAO_CHILD:-}"
+export -n openbao_child
+openbao_agent_dir="${AGENT_OPENBAO_AUTH_DIR:-/dev/shm/agent-openbao}"
+unset AGENT_OPENBAO_AUTH_DIR
+if [ "${openbao_child}" != 1 ] && \
+  { [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; }; then
   [ -n "${BAO_ADDR:-}" ] && [ -n "${SANDBOX_ROLE_ID:-}" ] && \
     [ -n "${SANDBOX_WRAPPED_SECRET_ID:-}" ] || {
     echo "agent-entrypoint: sandbox AppRole inputs are incomplete." >&2
-    return 1
+    exit 64
   }
-  [[ $BAO_ADDR =~ ^https?://[^[:space:]]+$ ]] || {
-    echo "agent-entrypoint: OpenBao address is invalid." >&2
-    return 1
-  }
-  [[ ${GIT_MIRROR_URL:-} =~ ^https://[^[:space:]]+$ ]] && \
-    [[ ${SANDBOX_ROLE_ID} != *$'\n'* && ${SANDBOX_ROLE_ID} != *$'\r'* ]] && \
-    [[ ${SANDBOX_WRAPPED_SECRET_ID} != *$'\n'* && ${SANDBOX_WRAPPED_SECRET_ID} != *$'\r'* ]] || {
-    echo "agent-entrypoint: sandbox identity or mirror URL is invalid." >&2
-    return 1
-  }
-  wrap_token=$SANDBOX_WRAPPED_SECRET_ID
-  unset SANDBOX_WRAPPED_SECRET_ID
-  unwrap_response=$(openbao_request POST sys/wrapping/unwrap "$wrap_token") || {
-    unset wrap_token SANDBOX_ROLE_ID
-    echo "agent-entrypoint: sandbox SecretID unwrap failed." >&2
-    return 1
-  }
-  unset wrap_token
-  secret_id=$(jq -r '.data.secret_id // empty' <<<"$unwrap_response")
-  unset unwrap_response
-  [ -n "$secret_id" ] || {
-    unset secret_id SANDBOX_ROLE_ID
-    echo "agent-entrypoint: sandbox SecretID unwrap returned no value." >&2
-    return 1
-  }
-  login_body=$(SANDBOX_ROLE_ID="$SANDBOX_ROLE_ID" SANDBOX_SECRET_ID="$secret_id" \
-    jq -cn '{role_id:env.SANDBOX_ROLE_ID,secret_id:env.SANDBOX_SECRET_ID}')
-  unset secret_id SANDBOX_ROLE_ID
-  login_response=$(curl --silent --show-error --fail --max-time 60 -X POST \
-    --data-binary @<(printf '%s' "$login_body") "${BAO_ADDR}/v1/auth/approle/login") || {
-    unset login_body
-    echo "agent-entrypoint: sandbox AppRole login failed." >&2
-    return 1
-  }
-  unset login_body
-  sandbox_bao_token=$(jq -r '.auth.client_token // empty' <<<"$login_response")
-  unset login_response
-  [ -n "$sandbox_bao_token" ] || {
-    echo "agent-entrypoint: sandbox AppRole login returned no token." >&2
-    return 1
-  }
-  kv=$(openbao_request GET secret/data/apps/sandbox-agent "$sandbox_bao_token") || {
-    echo "agent-entrypoint: sandbox credential read failed." >&2
-    return 1
-  }
-  profile_key=$(jq -r --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
-    '.[$p].sandboxRouterKeyField // empty' "${HOME}/.agent-profiles.json")
-  if [ -n "$profile_key" ]; then
-    if [ "${AGENT_TTY:-}" = 1 ] && jq -e --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
-      '.[$p].ttyLogin == true' "${HOME}/.agent-profiles.json" >/dev/null; then
-      profile_key=""
-    fi
+  mkdir -p "${openbao_agent_dir}" && chmod 700 "${openbao_agent_dir}"
+  printf '%s' "${SANDBOX_ROLE_ID}" >"${openbao_agent_dir}/role-id"
+  printf '%s' "${SANDBOX_WRAPPED_SECRET_ID}" >"${openbao_agent_dir}/wrapped-secret-id"
+  chmod 600 "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
+  unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_ROUTER_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
+
+  profile_key="$(jq -r --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" --arg tty "${AGENT_TTY:-}" \
+    'if $tty == "1" and .[$p].ttyLogin == true then "" else .[$p].sandboxRouterKeyField // "" end' \
+    "${HOME}/.agent-profiles.json")"
+  export AGENT_SANDBOX_ROUTER_KEY_FIELD="${profile_key}"
+  export AGENT_OPENBAO_CHILD=1
+
+  if [ "${AGENT_MODE:-start}" = fix ]; then
+    openbao_agent_config=/etc/openbao-agent/read.hcl
+  else
+    openbao_agent_config=/etc/openbao-agent/write.hcl
   fi
-  if [ -n "$profile_key" ]; then
-    router_key=$(jq -r --arg k "$profile_key" ".data.data[\$k] // empty" <<<"$kv")
-    [ -n "$router_key" ] && [ -n "${AGENT_ROUTER_BASE_URL:-}" ] || {
-      unset router_key kv
-      echo "agent-entrypoint: sandbox router credentials are missing." >&2
-      return 1
-    }
-    AGENT_ROUTER_KEY=$router_key
-    export AGENT_ROUTER_KEY
-    unset router_key
-  fi
+  agent_status=0
+  bao agent -config="${openbao_agent_config}" || agent_status=$?
+  rm -f "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
+  exit "${agent_status}"
+fi
+unset AGENT_OPENBAO_CHILD AGENT_SANDBOX_ROUTER_KEY_FIELD
+
+configure_sandbox_mcp() {
+  local config_path config_content
   case "${AGENT_TOOL}" in
-    zcode | opencode | opencode-local | opencode-zai | qwen-code)
-      VIKUNJA_API_TOKEN=$(jq -r '.data.data.vikunja_token // empty' <<<"$kv")
-      ZAMMAD_HTTP_TOKEN=$(jq -r '.data.data.zammad_token // empty' <<<"$kv")
-      export VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
-      configure_sandbox_mcp || { unset kv; return 1; }
-      unset VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
-      ;;
+    zcode) config_path="${HOME}/.zcode/cli/config.json"; config_content="${ZCODE_MCP_CONFIG}" ;;
+    qwen-code) config_path="${HOME}/.qwen/settings.json"; config_content="${QWEN_MCP_CONFIG}" ;;
+    *) return 0 ;;
   esac
-  unset kv
-  revoke_sandbox_token
-  unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID
+  mkdir -p "${config_path%/*}"
+  chmod 700 "${config_path%/*}"
+  printf '%s\n' "${config_content}" >"${config_path}"
+  chmod 600 "${config_path}"
 }
 
 trap '
-  revoke_sandbox_token
+  rm -f "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
   if [ "${AGENT_DISPATCHED_JOB:-}" = 1 ]; then
     case "${AGENT_TOOL:-}" in
       zcode) rm -f "${HOME}/.zcode/cli/config.json" "${HOME}/.zcode/v2/provider_config.json" ;;
-      opencode | opencode-local | opencode-zai) rm -f "${HOME}/.config/opencode/opencode.json" ;;
       qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
     esac
   fi
   unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
-    SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID sandbox_bao_token
+    SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_SANDBOX_ROUTER_KEY_FIELD
 ' EXIT
-if [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || \
-  [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; then
-  load_sandbox_credentials || exit 64
+if [ "${openbao_child:-}" = 1 ]; then
+  configure_sandbox_mcp
 fi
+unset openbao_child
 
 if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ] && [ "${AGENT_TTY:-}" != 1 ]; then
   echo "agent-entrypoint: AGENT_PROMPT is required (or AGENT_SHELL=1)." >&2
@@ -577,31 +443,6 @@ case "${AGENT_TOOL}" in
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
-      local_config="${HOME}/.config/opencode/opencode.json"
-      mkdir -p "${HOME}/.config/opencode"
-      config_tmp=$(mktemp "${local_config}.XXXXXX")
-      if [ -f "$local_config" ]; then
-        AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-          jq '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
-            small_model: "agent-router/small", mcp:(.mcp // {}), provider: {"agent-router": {
-            npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-            options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
-            models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
-          "$local_config" >"$config_tmp"
-      else
-        AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-          jq -n '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
-            small_model: "agent-router/small", mcp:{}, provider: {"agent-router": {
-            npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-            options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
-            models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
-          >"$config_tmp"
-      fi
-      chmod 600 "$config_tmp"
-      mv -f "$config_tmp" "$local_config"
-      unset AGENT_ROUTER_KEY
-    fi
     opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
     ;;
   shell)

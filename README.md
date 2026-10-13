@@ -119,6 +119,11 @@ The entrypoint refuses to start unless `AGENT_SANDBOX=1` (set only by the
 image) and the uid is non-root. The autonomous configs are never rendered
 onto a host filesystem by any code path.
 
+Dispatched jobs authenticate through OpenBao Agent with a one-use,
+response-wrapped AppRole SecretID. Agent injects the selected KV credentials
+into the tool process, and transient identity and tool configuration files
+are removed when the job exits.
+
 ## Host dispatcher
 
 `agent-dispatch` runs on the sandbox Docker host. A job is one disposable
