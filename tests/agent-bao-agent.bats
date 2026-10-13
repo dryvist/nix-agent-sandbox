@@ -71,6 +71,7 @@ SH
   local worktree="$PWD" auth_dir="$BATS_TEST_TMPDIR/auth"
   local port address role_id wrapped_id root_token=agent-test-root-token
   local config="$BATS_TEST_TMPDIR/agent.hcl" child="$BATS_TEST_TMPDIR/verify-env"
+  local agent_output agent_status value
   mkdir -p "$auth_dir"
   port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
   address="http://127.0.0.1:${port}"
@@ -141,14 +142,23 @@ SH
     -e "s#/etc/openbao-agent/templates#${worktree}/templates/bao-agent#g" \
     "$worktree/templates/bao-agent/read.hcl" >"$config"
 
-  BAO_ADDR="$address" AGENT_TOOL=zcode \
+  agent_status=0
+  agent_output=$(BAO_ADDR="$address" AGENT_TOOL=zcode \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key \
     AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
     AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]' \
     BAO_TEST_ROUTER_KEY=router-test-key \
     BAO_TEST_VIKUNJA_TOKEN=vikunja-test-token \
     BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
-    "$BAO_BIN" agent -config="$config" >/dev/null 2>&1
+    "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
+  if [ "$agent_status" -ne 0 ]; then
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key \
+      vikunja-test-token zammad-test-token; do
+      agent_output=${agent_output//"$value"/[REDACTED]}
+    done
+    printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g'
+    return "$agent_status"
+  fi
   [ ! -e "$auth_dir/wrapped-secret-id" ]
 
   wrapped_id=$(BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" \
@@ -157,7 +167,8 @@ SH
   printf '%s' "$role_id" >"$auth_dir/role-id"
   printf '%s' "$wrapped_id" >"$auth_dir/wrapped-secret-id"
   chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
-  BAO_ADDR="$address" AGENT_TOOL=opencode \
+  agent_status=0
+  agent_output=$(BAO_ADDR="$address" AGENT_TOOL=opencode \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key \
     AGENT_ROUTER_BASE_URL=https://router.test/v1 \
     AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
@@ -165,7 +176,15 @@ SH
     BAO_TEST_ROUTER_KEY=router-test-key \
     BAO_TEST_VIKUNJA_TOKEN=vikunja-test-token \
     BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
-    "$BAO_BIN" agent -config="$config" >/dev/null 2>&1
+    "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
+  if [ "$agent_status" -ne 0 ]; then
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key \
+      vikunja-test-token zammad-test-token; do
+      agent_output=${agent_output//"$value"/[REDACTED]}
+    done
+    printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g'
+    return "$agent_status"
+  fi
   [ ! -e "$auth_dir/wrapped-secret-id" ]
 }
 
