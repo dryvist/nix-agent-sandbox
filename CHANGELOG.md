@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.1.1...v1.2.0) (2026-10-13)
+
+
+### Features
+
+* **sandbox:** add job credentials, MCP configuration and repository scope checks ([#101](https://github.com/dryvist/nix-agent-sandbox/issues/101)) ([1ec8484](https://github.com/dryvist/nix-agent-sandbox/commit/1ec84845a890744d5c651a7a60f7da8540400423))
+
 ## [1.1.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.1.0...v1.1.1) (2026-10-12)
 
 
