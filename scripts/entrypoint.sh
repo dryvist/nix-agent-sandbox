@@ -22,6 +22,9 @@
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
 
+set +x
+umask 077
+
 # --- Boundary guards -------------------------------------------------------
 if [ "${AGENT_SANDBOX:-}" != "1" ]; then
   echo "agent-entrypoint: refusing to run: AGENT_SANDBOX=1 is not set." >&2
@@ -64,7 +67,8 @@ done
 agent_env_name_allowed() {
   local profile="${AGENT_PROFILE:-${AGENT_TOOL:-claude}}"
   case "$1" in
-    GH_TOKEN | GITHUB_TOKEN | AGENT_ROUTER_BASE_URL | AGENT_ROUTER_KEY) return 0 ;;
+    GH_TOKEN | GITHUB_TOKEN | AGENT_ROUTER_BASE_URL | AGENT_ROUTER_KEY | BAO_ADDR | \
+      SANDBOX_ROLE_ID | SANDBOX_WRAPPED_SECRET_ID | GIT_MIRROR_URL | VIKUNJA_URL | ZAMMAD_URL) return 0 ;;
   esac
   jq -e --arg profile "$profile" --arg name "$1" \
     '.[$profile].env | index($name) != null' \
@@ -72,6 +76,7 @@ agent_env_name_allowed() {
 }
 
 if [ -f "${HOME}/.agent-env" ]; then
+  chmod 600 "${HOME}/.agent-env"
   env_file_error=0
   while IFS= read -r line || [ -n "${line}" ]; do
     [ -n "${line}" ] || continue
@@ -168,6 +173,111 @@ case "${AGENT_TOOL}" in
     export ZAI_SUBSCRIPTION_KEY AGENT_WEB_TOKEN
     ;;
 esac
+
+openbao_request() {
+  local method=$1 path=$2 token=$3 body=${4:-}
+  if [ -n "$body" ]; then
+    curl --silent --show-error --fail --max-time 60 -X "$method" \
+      -H @<(printf 'X-Vault-Token: %s\n' "$token") \
+      --data-binary @<(printf '%s' "$body") "${BAO_ADDR}/v1/${path}"
+  else
+    curl --silent --show-error --fail --max-time 60 -X "$method" \
+      -H @<(printf 'X-Vault-Token: %s\n' "$token") "${BAO_ADDR}/v1/${path}"
+  fi
+}
+
+revoke_sandbox_token() {
+  [ -z "${sandbox_bao_token:-}" ] || {
+    openbao_request POST auth/token/revoke-self "$sandbox_bao_token" >/dev/null 2>&1 || true
+    sandbox_bao_token=""
+  }
+}
+
+load_sandbox_credentials() {
+  local wrap_token unwrap_response secret_id login_body login_response kv profile_key router_key
+  [ -n "${BAO_ADDR:-}" ] && [ -n "${SANDBOX_ROLE_ID:-}" ] && \
+    [ -n "${SANDBOX_WRAPPED_SECRET_ID:-}" ] || {
+    echo "agent-entrypoint: sandbox AppRole inputs are incomplete." >&2
+    return 1
+  }
+  [[ $BAO_ADDR =~ ^https?://[^[:space:]]+$ ]] || {
+    echo "agent-entrypoint: OpenBao address is invalid." >&2
+    return 1
+  }
+  [[ ${GIT_MIRROR_URL:-} =~ ^https://[^[:space:]]+$ ]] && \
+    [[ ${SANDBOX_ROLE_ID} != *$'\n'* && ${SANDBOX_ROLE_ID} != *$'\r'* ]] && \
+    [[ ${SANDBOX_WRAPPED_SECRET_ID} != *$'\n'* && ${SANDBOX_WRAPPED_SECRET_ID} != *$'\r'* ]] || {
+    echo "agent-entrypoint: sandbox identity or mirror URL is invalid." >&2
+    return 1
+  }
+  wrap_token=$SANDBOX_WRAPPED_SECRET_ID
+  unset SANDBOX_WRAPPED_SECRET_ID
+  unwrap_response=$(openbao_request POST sys/wrapping/unwrap "$wrap_token") || {
+    unset wrap_token SANDBOX_ROLE_ID
+    echo "agent-entrypoint: sandbox SecretID unwrap failed." >&2
+    return 1
+  }
+  unset wrap_token
+  secret_id=$(jq -r '.data.secret_id // empty' <<<"$unwrap_response")
+  unset unwrap_response
+  [ -n "$secret_id" ] || {
+    unset secret_id SANDBOX_ROLE_ID
+    echo "agent-entrypoint: sandbox SecretID unwrap returned no value." >&2
+    return 1
+  }
+  login_body=$(SANDBOX_ROLE_ID="$SANDBOX_ROLE_ID" SANDBOX_SECRET_ID="$secret_id" \
+    jq -cn '{role_id:env.SANDBOX_ROLE_ID,secret_id:env.SANDBOX_SECRET_ID}')
+  unset secret_id SANDBOX_ROLE_ID
+  login_response=$(curl --silent --show-error --fail --max-time 60 -X POST \
+    --data-binary @<(printf '%s' "$login_body") "${BAO_ADDR}/v1/auth/approle/login") || {
+    unset login_body
+    echo "agent-entrypoint: sandbox AppRole login failed." >&2
+    return 1
+  }
+  unset login_body
+  sandbox_bao_token=$(jq -r '.auth.client_token // empty' <<<"$login_response")
+  unset login_response
+  [ -n "$sandbox_bao_token" ] || {
+    echo "agent-entrypoint: sandbox AppRole login returned no token." >&2
+    return 1
+  }
+  kv=$(openbao_request GET secret/data/apps/sandbox-agent "$sandbox_bao_token") || {
+    echo "agent-entrypoint: sandbox credential read failed." >&2
+    return 1
+  }
+  profile_key=$(jq -r --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
+    '.[$p].sandboxRouterKeyField // empty' "${HOME}/.agent-profiles.json")
+  if [ -n "$profile_key" ]; then
+    if [ "${AGENT_TTY:-}" = 1 ] && jq -e --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
+      '.[$p].ttyLogin == true' "${HOME}/.agent-profiles.json" >/dev/null; then
+      profile_key=""
+    fi
+  fi
+  if [ -n "$profile_key" ]; then
+    router_key=$(jq -r --arg k "$profile_key" ".data.data[\$k] // empty" <<<"$kv")
+    [ -n "$router_key" ] && [ -n "${AGENT_ROUTER_BASE_URL:-}" ] || {
+      unset router_key kv
+      echo "agent-entrypoint: sandbox router credentials are missing." >&2
+      return 1
+    }
+    AGENT_ROUTER_KEY=$router_key
+    export AGENT_ROUTER_KEY
+    unset router_key
+  fi
+  unset kv
+  revoke_sandbox_token
+  unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID
+}
+
+trap '
+  revoke_sandbox_token
+  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
+    SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID sandbox_bao_token
+' EXIT
+if [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || \
+  [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; then
+  load_sandbox_credentials || exit 64
+fi
 
 if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ] && [ "${AGENT_TTY:-}" != 1 ]; then
   echo "agent-entrypoint: AGENT_PROMPT is required (or AGENT_SHELL=1)." >&2
@@ -348,15 +458,16 @@ case "${AGENT_TOOL}" in
       # ZCode v2 provider_config.json schema is defined in nix-ai's
       # packages/provider-node/src/provider-config-file-codec.ts and
       # packages/provider/src/config/{provider-data-schema,rule-data-schema}.ts.
-      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
+      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+        jq -n \
         '{schemaVersion: 1, config: {
           providerOrder: ["agent-router"],
           providerConfigRules: {providerRules: [{
             providerId: "agent-router", providerName: "Agent Router", enabled: true,
             config: {
               group: "standard-personal",
-              access: {type: "api-key", apiKey: $key},
-              api: {type: "openai-chat-completions", baseUrl: $url},
+              access: {type: "api-key", apiKey: env.AGENT_ROUTER_KEY},
+              api: {type: "openai-chat-completions", baseUrl: env.AGENT_ROUTER_BASE_URL},
               personalModelIds: ["medium"]
             }
           }]},
@@ -371,11 +482,12 @@ case "${AGENT_TOOL}" in
   opencode | opencode-local)
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
       mkdir -p "${HOME}/.config/opencode"
-      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
+      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+        jq -n \
         '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
           small_model: "agent-router/small", provider: {"agent-router": {
           npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-          options: {baseURL: $url, apiKey: $key},
+          options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
           models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
         >"${HOME}/.config/opencode/opencode.json"
       chmod 600 "${HOME}/.config/opencode/opencode.json"

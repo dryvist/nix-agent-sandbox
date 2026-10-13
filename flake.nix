@@ -200,12 +200,16 @@
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
+                  .zcode.sandboxRouterKeyField == "router_key" and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .opencode.sandboxRouterKeyField == "router_key" and
                   .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .["opencode-local"].sandboxRouterKeyField == "router_key" and
                   .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
-                  .["cursor-agent"].env == ["CURSOR_API_KEY"] and
+                  .["cursor-agent"].env == [] and .["cursor-agent"].ttyLogin == true and
                   .["qwen-code"].env == [] and .["qwen-code"].routerKeyField == "QWEN_CODE_ROUTER_KEY" and
+                  .["qwen-code"].sandboxRouterKeyField == "router_key" and
                   (.["qwen-code"] | has("ttyLogin") | not) and
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and

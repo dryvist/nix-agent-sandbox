@@ -73,7 +73,15 @@ case "$url" in
       resp="{\"auth\":{\"lease_duration\":${STUB_RENEW_LEASE:-${STUB_LEASE:-900}}}}"
     fi
     ;;
+  */v1/auth/approle/role/sandbox-agent-read/role-id | */v1/auth/approle/role/sandbox-agent-write/role-id)
+    resp='{"data":{"role_id":"sandbox-agent-role-id-value"}}'
+    ;;
+  */v1/auth/approle/role/sandbox-agent-read/secret-id | */v1/auth/approle/role/sandbox-agent-write/secret-id)
+    resp='{"wrap_info":{"token":"sandbox-agent-wrapped-id-value"}}'
+    ;;
   */v1/secret/data/apps/open-llm) resp=$(cat "$STUB_DIR/bucket.json") ;;
+  */v1/secret/data/apps/sandbox-agent) resp=$(cat "$BATS_TEST_DIRNAME/fixtures/sandbox-agent.json") ;;
+  */v1/secret/data/secrets-external/zai-coding) resp=$(cat "$BATS_TEST_DIRNAME/fixtures/zai-external.json") ;;
   */v1/github-agents/token)
     if [ -n "${STUB_MINT_FAIL:-}" ]; then
       resp='{"errors":["1 error occurred:\n\t* permission denied\n\n"]}' code=22

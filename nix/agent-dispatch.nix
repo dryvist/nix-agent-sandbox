@@ -22,8 +22,7 @@ let
       gnutar
       jq
     ];
-    # Task profiles name the bucket fields each tool receives; the same
-    # table the image bakes for the entrypoint's profile check.
+    # The image and host dispatcher share one task-profile table.
     text = ''
       AGENT_TASK_PROFILES=${lib.escapeShellArg (builtins.toJSON (import ./task-profiles.nix))}
       AGENT_MEMORY_DEFAULT=${lib.escapeShellArg hardeningDefaults.memory}

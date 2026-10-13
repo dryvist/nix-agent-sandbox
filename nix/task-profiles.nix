@@ -11,7 +11,8 @@
 #
 # Shape per profile:
 #   env  list of environment variable names the run requires.
-#   routerKeyField  optional bucket field delivered as AGENT_ROUTER_KEY.
+#   routerKeyField  host-side value used when scanning published changes.
+#   sandboxRouterKeyField  container leaf field exported as AGENT_ROUTER_KEY.
 #   ttyLogin  in a terminal session (agent-dispatch --tty) the user signs in
 #             to the tool by hand, so neither router key nor env is delivered.
 {
@@ -27,8 +28,8 @@
   };
 
   # agent-dispatch tools: each job uses the profile named after its tool.
-  # The dispatcher copies each named field of its secret bucket into the
-  # container under the same name. Routed CLIs receive only the router URL/key.
+  # The dispatcher resolves each named value from its configured store and
+  # copies it into the container. Routed CLIs receive only their router URL/key.
   zai = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
   };
@@ -42,16 +43,19 @@
   zcode = {
     env = [ ];
     routerKeyField = "ZCODE_ROUTER_KEY";
+    sandboxRouterKeyField = "router_key";
     ttyLogin = true;
   };
   opencode = {
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
+    sandboxRouterKeyField = "router_key";
     ttyLogin = true;
   };
   opencode-local = {
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
+    sandboxRouterKeyField = "router_key";
   };
   opencode-zai = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
@@ -60,10 +64,10 @@
   shell = {
     env = [ ];
   };
-  # Cursor has no router endpoint. A batch run authenticates with its API key
-  # (print mode); a terminal session signs in by hand and gets no key.
+  # Cursor has no router endpoint or batch credential. A terminal session
+  # signs in by hand.
   cursor-agent = {
-    env = [ "CURSOR_API_KEY" ];
+    env = [ ];
     ttyLogin = true;
   };
   # Qwen Code: batch only. The entrypoint runs it on the router's `medium`
@@ -71,6 +75,7 @@
   qwen-code = {
     env = [ ];
     routerKeyField = "QWEN_CODE_ROUTER_KEY";
+    sandboxRouterKeyField = "router_key";
   };
   zcode-web = {
     env = [

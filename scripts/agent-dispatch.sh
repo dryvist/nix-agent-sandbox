@@ -28,12 +28,14 @@
 # a pull request are accepted.
 
 export LC_ALL=C
+set +x
 umask 077
 
 IMAGE="${AGENT_IMAGE:-ghcr.io/dryvist/nix-agent-sandbox/agent:latest}"
 STATE_DIR="${AGENT_DISPATCH_STATE_DIR:-/var/lib/agent-dispatch}"
 APPROLE_DIR="${AGENT_DISPATCH_APPROLE_DIR:-/etc/agent-dispatch/approle}"
 BUCKET=secret/data/apps/open-llm
+ZAI_BUCKET=secret/data/secrets-external/zai-coding
 GITHUB_API=https://api.github.com
 MAX_TEXT=16384
 JOB_MANAGER=0
@@ -100,6 +102,10 @@ valid_text() {
   [ -n "$1" ] && [ "${#1}" -le "$MAX_TEXT" ] && [[ $1 != *$control* ]]
 }
 
+single_line() {
+  [[ $1 != *$'\n'* && $1 != *$'\r'* ]]
+}
+
 rand_hex() {
   od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'
 }
@@ -163,9 +169,27 @@ bao_revoke() {
   bao_req POST auth/token/revoke-self "$1" >/dev/null 2>&1 || true
 }
 
+bao_wrap_req() {
+  curl -sS --fail-with-body --max-time 60 -X POST \
+    -H @<(printf 'X-Vault-Token: %s\n' "$2") \
+    -H 'X-Vault-Wrap-TTL: 15m' "${BAO_ADDR:?}/v1/auth/approle/role/$1/secret-id"
+}
+
+bao_revoke_wrap() {
+  bao_req POST sys/wrapping/revoke "$1" >/dev/null 2>&1 || true
+}
+
 # field <name>: one value from the caller's $bucket (a KV v2 read).
 field() {
   jq -r --arg k "$1" '.data.data[$k] // empty' <<<"$bucket"
+}
+
+external_field() {
+  jq -r --arg k "$1" '.data.data[$k] // empty' <<<"$external_bucket"
+}
+
+credential_value() {
+  if [ "$1" = ZAI_SUBSCRIPTION_KEY ]; then external_field "$1"; else field "$1"; fi
 }
 
 # The token must list exactly the job's repo: the mint request names only the
@@ -420,7 +444,7 @@ publish_fix_token() {
   local max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" max_files="${AGENT_FIX_MAX_FILES:-20}"
   local tmp listing member previous path base64_file base_json new_json api_path suppression_rc changes
   local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url
-  local tool router_key_field name value
+  local tool router_key_field name value external_bucket="" need_zai=0
   local -a credential_names=() credential_values=()
   local -a members=()
   tmp=$(mktemp -d)
@@ -484,7 +508,13 @@ publish_fix_token() {
   tool=$(job_get "$id" .tool)
   mapfile -t credential_names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
   for name in "${credential_names[@]}"; do
-    value=$(field "$name")
+    if [ "$name" = ZAI_SUBSCRIPTION_KEY ]; then need_zai=1; fi
+  done
+  if [ "$need_zai" -eq 1 ]; then
+    external_bucket=$(bao_req GET "$ZAI_BUCKET" "${6:-}") || external_bucket=""
+  fi
+  for name in "${credential_names[@]}"; do
+    value=$(credential_value "$name")
     if [ -z "$value" ] || [[ $value == *$'\n'* ]]; then
       echo "guard: credential value unavailable" >"$rdir/reason"
       rm -rf "$tmp"
@@ -618,6 +648,8 @@ publish_fix_token() {
       return 1
     fi
   done <"$tmp/paths"
+  unset external_bucket value
+  credential_values=()
   if ! fix_gitleaks "$tmp/scan"; then
     echo "guard: gitleaks" >"$rdir/reason"
     rm -rf "$tmp"
@@ -769,7 +801,7 @@ publish_fix() {
     rm -rf "$tmp"
     return 1
   fi
-  if publish_fix_token "$id" "$run" "$cid" "$gh" "$tmp/fix.tar"; then rc=0; else rc=$?; fi
+  if publish_fix_token "$id" "$run" "$cid" "$gh" "$tmp/fix.tar" "$tok"; then rc=0; else rc=$?; fi
   gh_revoke "$gh"
   rm -rf "$tmp"
   return "$rc"
@@ -810,7 +842,7 @@ finalize() {
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
     if docker logs --tail 200 "$cid" 2>/dev/null | jq -Rr \
-      'gsub("(?i)(?<prefix>authorization:[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
+      'gsub("(?i)(?<prefix>(?:authorization|x-vault-token):[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
        gsub("ghs_[A-Za-z0-9_-]+|gho_[A-Za-z0-9_-]+|ghu_[A-Za-z0-9_-]+|github_pat_[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|(?i)bearer[[:space:]]+[^[:space:]]+"; "[REDACTED]")' \
       >"$rdir/log"; then
@@ -860,6 +892,7 @@ container_args() {
     -e "https_proxy=$proxy"
     -e "AGENT_TOOL=$3"
     -e "AGENT_PROFILE=$3"
+    -e AGENT_DISPATCHED_JOB=1
     -e "AGENT_REPO=$4"
     -e "AGENT_RUN_ID=$1"
     -v "agent-job-$1:/home/agent/work"
@@ -889,13 +922,17 @@ deliver() {
   tmp=$(mktemp -d)
   {
     if [ "$3" != fix ]; then printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"; fi
+    printf 'BAO_ADDR=%s\nSANDBOX_ROLE_ID=%s\nSANDBOX_WRAPPED_SECRET_ID=%s\n' \
+      "$BAO_ADDR" "$sandbox_role_id" "$sandbox_wrapped_secret_id"
+    printf 'GIT_MIRROR_URL=%s\nVIKUNJA_URL=%s\nZAMMAD_URL=%s\n' \
+      "$GIT_MIRROR_URL" "$VIKUNJA_URL" "$ZAMMAD_URL"
     for name in "${names[@]}"; do
-      value=$(field "$name")
-      [[ $value != *$'\n'* ]] || rc=1
+      value=$(credential_value "$name")
+      single_line "$value" || rc=1
       printf '%s=%s\n' "$name" "$value"
     done
-    if [ -n "$router_key" ]; then
-      printf 'AGENT_ROUTER_BASE_URL=%s\nAGENT_ROUTER_KEY=%s\n' "$AGENT_ROUTER_BASE_URL" "$router_key"
+    if [ -n "$router_key_field" ]; then
+      printf 'AGENT_ROUTER_BASE_URL=%s\n' "$AGENT_ROUTER_BASE_URL"
     fi
   } >"$tmp/.agent-env"
   chmod 600 "$tmp/.agent-env"
@@ -912,8 +949,8 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo mode tty tty_login cont=0 login tok lease bucket iid mint gh="" budget cid name request
-  local router_key_field="" router_key="" reason
+  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" iid mint gh="" budget cid name request
+  local router_key_field="" sandbox_role_id="" sandbox_wrapped_secret_id="" sandbox_role="" role_response wrapped_response reason value
   local -a names args
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
@@ -940,6 +977,7 @@ run_job() {
     tok=${4:-}
     lease=$JOB_TOKEN_TTL
   fi
+  unset login
   [ -n "$tok" ] || {
     abort "$id" "$run" "job token is empty"
     return 1
@@ -954,30 +992,44 @@ run_job() {
     return 1
   }
   mapfile -t names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
+  for name in "${names[@]}"; do
+    if [ "$name" = ZAI_SUBSCRIPTION_KEY ]; then
+      external_bucket=$(bao_req GET "$ZAI_BUCKET" "$tok") || {
+        abort "$id" "$run" "external credential read failed" "$tok"
+        return 1
+      }
+      break
+    fi
+  done
   if [ "$tty_login" = 1 ]; then names=(); fi
   jq -e --arg t "$tool" 'has($t)' <<<"$AGENT_TASK_PROFILES" >/dev/null || {
     abort "$id" "$run" "no task profile for $tool" "$tok"
     return 1
   }
   for name in "${names[@]}"; do
-    [ -n "$(field "$name")" ] || {
-      abort "$id" "$run" "bucket has no $name" "$tok"
+    value=$(credential_value "$name")
+    if [ -n "$value" ] && single_line "$value"; then :; else
+      abort "$id" "$run" "profile credential is missing or invalid" "$tok"
       return 1
-    }
+    fi
   done
   router_key_field=$(jq -r --arg t "$tool" '.[$t].routerKeyField // empty' <<<"$AGENT_TASK_PROFILES")
   if [ "$tty_login" = 1 ]; then router_key_field=""; fi
   if [ -n "$router_key_field" ]; then
-    router_key=$(field "$router_key_field")
-    [ -n "$router_key" ] || {
-      abort "$id" "$run" "bucket has no $router_key_field" "$tok"
-      return 1
-    }
     if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [[ $AGENT_ROUTER_BASE_URL == *$'\n'* ]] || \
-      [[ $AGENT_ROUTER_BASE_URL == *$'\r'* ]] || [[ $router_key == *$'\n'* ]] || [[ $router_key == *$'\r'* ]]; then
+      [[ $AGENT_ROUTER_BASE_URL == *$'\r'* ]]; then
       abort "$id" "$run" "router configuration is missing or invalid" "$tok"
       return 1
     fi
+  fi
+
+  if [ -z "${BAO_ADDR:-}" ] || [ -z "${GIT_MIRROR_URL:-}" ] || \
+    [ -z "${VIKUNJA_URL:-}" ] || [ -z "${ZAMMAD_URL:-}" ] || \
+    ! single_line "$BAO_ADDR" || ! single_line "$GIT_MIRROR_URL" || \
+    ! single_line "$VIKUNJA_URL" || ! single_line "$ZAMMAD_URL" || \
+    [[ ! $BAO_ADDR =~ ^https?://[^[:space:]]+$ ]]; then
+    abort "$id" "$run" "sandbox service configuration is missing or invalid" "$tok"
+    return 1
   fi
 
   if [ "$mode" = fix ]; then
@@ -998,7 +1050,7 @@ run_job() {
   }
   fi
   gh=$(jq -r '.data.token // empty' <<<"$mint")
-  if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
+  if [ -z "$gh" ] || ! single_line "$gh" || ! scope_ok "$gh" "$repo"; then
     if [ -n "$gh" ]; then gh_revoke "$gh"; fi
     abort "$id" "$run" "github token is not scoped to exactly $repo" "$tok"
     return 1
@@ -1014,23 +1066,48 @@ run_job() {
     gh=""
   fi
 
+  sandbox_role=sandbox-agent-write
+  if [ "$mode" = fix ]; then sandbox_role=sandbox-agent-read; fi
+  role_response=$(bao_req GET "auth/approle/role/$sandbox_role/role-id" "$tok") || {
+    abort "$id" "$run" "sandbox role lookup failed" "$tok"
+    return 1
+  }
+  sandbox_role_id=$(jq -r '.data.role_id // empty' <<<"$role_response")
+  if [ -z "$sandbox_role_id" ] || ! single_line "$sandbox_role_id"; then
+    abort "$id" "$run" "sandbox role lookup returned no role ID" "$tok"
+    return 1
+  fi
+  wrapped_response=$(bao_wrap_req "$sandbox_role" "$tok") || {
+    abort "$id" "$run" "sandbox SecretID wrapping failed" "$tok"
+    return 1
+  }
+  sandbox_wrapped_secret_id=$(jq -r '.wrap_info.token // empty' <<<"$wrapped_response")
+  if [ -z "$sandbox_wrapped_secret_id" ] || ! single_line "$sandbox_wrapped_secret_id"; then
+    abort "$id" "$run" "sandbox SecretID wrapping returned no token" "$tok"
+    return 1
+  fi
+
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"
   echo "$lease" >"$rdir/ttl"
   container_args "$id" "$run" "$tool" "$repo" "$cont" "$tty" "$mode"
   cid=$(docker create "${args[@]}") || {
+    bao_revoke_wrap "$sandbox_wrapped_secret_id"
     abort "$id" "$run" "container create failed" "$tok"
     return 1
   }
   echo "$cid" >"$rdir/cid"
   deliver "$cid" "$prompt" "$mode" || {
+    bao_revoke_wrap "$sandbox_wrapped_secret_id"
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1
   }
   docker start "$cid" >/dev/null || {
+    bao_revoke_wrap "$sandbox_wrapped_secret_id"
     abort "$id" "$run" "container start failed" "$tok"
     return 1
   }
+  unset bucket external_bucket value role_response wrapped_response sandbox_role_id sandbox_wrapped_secret_id
   echo running >"$rdir/state"
 
   if [ "$JOB_MANAGER" -eq 1 ]; then
