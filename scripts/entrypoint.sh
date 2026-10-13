@@ -181,14 +181,9 @@ openbao_agent_dir="${AGENT_OPENBAO_AUTH_DIR:-/dev/shm/agent-openbao}"
 unset AGENT_OPENBAO_AUTH_DIR
 if [ "${openbao_child}" != 1 ] && \
   { [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; }; then
-  [ -n "${BAO_ADDR:-}" ] && [ -n "${SANDBOX_ROLE_ID:-}" ] && \
-    [ -n "${SANDBOX_WRAPPED_SECRET_ID:-}" ] || {
-    echo "agent-entrypoint: sandbox AppRole inputs are incomplete." >&2
-    exit 64
-  }
   mkdir -p "${openbao_agent_dir}" && chmod 700 "${openbao_agent_dir}"
-  printf '%s' "${SANDBOX_ROLE_ID}" >"${openbao_agent_dir}/role-id"
-  printf '%s' "${SANDBOX_WRAPPED_SECRET_ID}" >"${openbao_agent_dir}/wrapped-secret-id"
+  printf '%s' "${SANDBOX_ROLE_ID:-}" >"${openbao_agent_dir}/role-id"
+  printf '%s' "${SANDBOX_WRAPPED_SECRET_ID:-}" >"${openbao_agent_dir}/wrapped-secret-id"
   chmod 600 "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
   unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_ROUTER_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
 

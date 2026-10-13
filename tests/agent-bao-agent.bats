@@ -63,6 +63,33 @@ SH
   [ "$(wc -l <"$BATS_TEST_TMPDIR/configs" | tr -d ' ')" = 2 ]
 }
 
+@test "entrypoint delegates missing AppRole inputs to OpenBao Agent" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/missing-home" tools="$BATS_TEST_TMPDIR/missing-bin"
+  local auth_dir="$BATS_TEST_TMPDIR/missing-auth"
+  mkdir -p "$home" "$tools" "$auth_dir"
+  printf '%s\n' '{"zcode":{"env":[]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/bao" <<'SH'
+test "$1" = agent
+test "$2" = -config=/etc/openbao-agent/write.hcl
+test ! -s "$STUB_AUTH_DIR/role-id"
+test ! -s "$STUB_AUTH_DIR/wrapped-secret-id"
+test "$(ls -l "$STUB_AUTH_DIR/role-id" | cut -c2-10)" = rw-------
+test "$(ls -l "$STUB_AUTH_DIR/wrapped-secret-id" | cut -c2-10)" = rw-------
+exit 42
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_AUTH_DIR="$auth_dir" \
+    AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 AGENT_TOOL=zcode AGENT_PROFILE=zcode \
+    AGENT_PROMPT='Inspect the repository' BAO_ADDR=https://bao.test \
+    AGENT_OPENBAO_AUTH_DIR="$auth_dir" bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 42 ]
+  [ ! -e "$auth_dir/role-id" ]
+  [ ! -e "$auth_dir/wrapped-secret-id" ]
+}
+
 @test "OpenBao Agent consumes a wrapped SecretID and injects KV templates" {
   if [ -z "${BAO_BIN:-}" ]; then
     skip "BAO_BIN is not included in the current Bats test environment"
