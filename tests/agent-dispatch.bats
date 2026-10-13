@@ -1619,8 +1619,8 @@ SH
     [ "$status" -eq 0 ]
     job=$(jq -r .job <<<"$output")
     state=running attempts=0
-    while [ "$state" = running ] && [ "$attempts" -lt 100 ]; do
-      sleep 0.02
+    while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+      sleep 0.1
       run --separate-stderr "$dispatcher" status "$job"
       [ "$status" -eq 0 ]
       state=$(jq -r .state <<<"$output")
@@ -1706,8 +1706,8 @@ SH
     [ "$status" -eq 0 ]
     job=$(jq -r .job <<<"$output")
     state=running attempts=0
-    while [ "$state" = running ] && [ "$attempts" -lt 100 ]; do
-      sleep 0.02
+    while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+      sleep 0.1
       status_json=$(dispatch status "$job")
       state=$(jq -r .state <<<"$status_json")
       attempts=$((attempts + 1))
@@ -1725,8 +1725,8 @@ SH
   [ "$status" -eq 0 ]
   job=$(jq -r .job <<<"$output")
   state=running attempts=0
-  while [ "$state" = running ] && [ "$attempts" -lt 100 ]; do
-    sleep 0.02
+  while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+    sleep 0.1
     status_json=$(dispatch status "$job")
     state=$(jq -r .state <<<"$status_json")
     attempts=$((attempts + 1))
