@@ -35,6 +35,11 @@ in
       default = pkgs.callPackage ./zcode-job.nix { };
       description = "The ZCode job client package.";
     };
+    agentPackage = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ./zcode-agent.nix { zcodeJob = cfg.package; };
+      description = "The public-repository ZCode agent package.";
+    };
   };
   config = lib.mkIf (!cfg.disabled) {
     assertions = [
@@ -43,7 +48,10 @@ in
         message = "zcode-job requires an approved repository list, SSH alias and HTTPS session URL.";
       }
     ];
-    home.packages = [ cfg.package ];
+    home.packages = [
+      cfg.package
+      cfg.agentPackage
+    ];
     xdg.configFile."zcode-job/config.json".text = builtins.toJSON {
       inherit (cfg) sshHost allowedRepos liveUrl;
     };
