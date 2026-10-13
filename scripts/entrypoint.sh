@@ -193,6 +193,79 @@ revoke_sandbox_token() {
   }
 }
 
+merge_mcp_config() {
+  local path=$1 key=$2 tmp
+  local filter='def servers:
+    if $tool == "opencode" or $tool == "opencode-local" or $tool == "opencode-zai" then
+      {vikunja:{type:"local",command:[$v],environment:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
+       zammad:{type:"local",command:([$z] + $zargs),environment:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
+    else
+      {vikunja:{command:$v,args:[],env:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
+       zammad:{command:$z,args:$zargs,env:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
+    end;'
+  local -a jq_args=(--arg key "$key" --arg tool "$AGENT_TOOL" \
+    --arg v "$AGENT_MCP_VIKUNJA_COMMAND" --arg z "$AGENT_MCP_ZAMMAD_COMMAND" \
+    --argjson zargs "$AGENT_MCP_ZAMMAD_ARGS")
+  mkdir -p "${path%/*}"
+  chmod 700 "${path%/*}"
+  tmp=$(mktemp "${path}.XXXXXX")
+  if [ -f "$path" ]; then
+    if ! VIKUNJA_URL="$VIKUNJA_URL" VIKUNJA_API_TOKEN="$VIKUNJA_API_TOKEN" \
+      ZAMMAD_URL="$ZAMMAD_URL" ZAMMAD_HTTP_TOKEN="$ZAMMAD_HTTP_TOKEN" \
+      jq "${jq_args[@]}" "$filter . + {(\$key): servers}" "$path" >"$tmp"; then
+      rm -f "$tmp"
+      echo "agent-entrypoint: could not update MCP configuration." >&2
+      return 1
+    fi
+  elif ! VIKUNJA_URL="$VIKUNJA_URL" VIKUNJA_API_TOKEN="$VIKUNJA_API_TOKEN" \
+    ZAMMAD_URL="$ZAMMAD_URL" ZAMMAD_HTTP_TOKEN="$ZAMMAD_HTTP_TOKEN" \
+    jq -n "${jq_args[@]}" "$filter { (\$key): servers }" >"$tmp"; then
+    rm -f "$tmp"
+    echo "agent-entrypoint: could not create MCP configuration." >&2
+    return 1
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$path"
+}
+
+configure_sandbox_mcp() {
+  local config_path config_key
+  case "${AGENT_TOOL}" in
+    zcode | opencode | opencode-local | opencode-zai | qwen-code) ;;
+    *) return 0 ;;
+  esac
+  [ -n "${VIKUNJA_URL:-}" ] && [ -n "${VIKUNJA_API_TOKEN:-}" ] && \
+    [ -n "${ZAMMAD_URL:-}" ] && [ -n "${ZAMMAD_HTTP_TOKEN:-}" ] || {
+    echo "agent-entrypoint: MCP credentials or service URLs are missing." >&2
+    return 1
+  }
+  [ -n "${AGENT_MCP_VIKUNJA_COMMAND:-}" ] && [ -n "${AGENT_MCP_ZAMMAD_COMMAND:-}" ] || {
+    echo "agent-entrypoint: MCP server commands are missing." >&2
+    return 1
+  }
+  AGENT_MCP_ZAMMAD_ARGS="${AGENT_MCP_ZAMMAD_ARGS:-[]}"
+  jq -e 'type == "array" and all(.[]; type == "string")' \
+    <<<"${AGENT_MCP_ZAMMAD_ARGS}" >/dev/null || {
+    echo "agent-entrypoint: Zammad MCP arguments are invalid." >&2
+    return 1
+  }
+  case "${AGENT_TOOL}" in
+    zcode)
+      config_path="${HOME}/.zcode/cli/config.json"
+      config_key=mcpServers
+      ;;
+    opencode | opencode-local | opencode-zai)
+      config_path="${HOME}/.config/opencode/opencode.json"
+      config_key=mcp
+      ;;
+    qwen-code)
+      config_path="${HOME}/.qwen/settings.json"
+      config_key=mcpServers
+      ;;
+  esac
+  merge_mcp_config "$config_path" "$config_key"
+}
+
 load_sandbox_credentials() {
   local wrap_token unwrap_response secret_id login_body login_response kv profile_key router_key
   [ -n "${BAO_ADDR:-}" ] && [ -n "${SANDBOX_ROLE_ID:-}" ] && \
@@ -264,6 +337,15 @@ load_sandbox_credentials() {
     export AGENT_ROUTER_KEY
     unset router_key
   fi
+  case "${AGENT_TOOL}" in
+    zcode | opencode | opencode-local | opencode-zai | qwen-code)
+      VIKUNJA_API_TOKEN=$(jq -r '.data.data.vikunja_token // empty' <<<"$kv")
+      ZAMMAD_HTTP_TOKEN=$(jq -r '.data.data.zammad_token // empty' <<<"$kv")
+      export VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
+      configure_sandbox_mcp || { unset kv; return 1; }
+      unset VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
+      ;;
+  esac
   unset kv
   revoke_sandbox_token
   unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID
@@ -271,6 +353,13 @@ load_sandbox_credentials() {
 
 trap '
   revoke_sandbox_token
+  if [ "${AGENT_DISPATCHED_JOB:-}" = 1 ]; then
+    case "${AGENT_TOOL:-}" in
+      zcode) rm -f "${HOME}/.zcode/cli/config.json" "${HOME}/.zcode/v2/provider_config.json" ;;
+      opencode | opencode-local | opencode-zai) rm -f "${HOME}/.config/opencode/opencode.json" ;;
+      qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
+    esac
+  fi
   unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
     SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID sandbox_bao_token
 ' EXIT
@@ -448,8 +537,11 @@ case "${AGENT_TOOL}" in
     codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
   qwen | qwen-code)
-    OPENAI_API_KEY="${AGENT_ROUTER_KEY}" qwen --auth-type openai --model "${AGENT_MODEL}" \
+    qwen_router_key=${AGENT_ROUTER_KEY}
+    unset AGENT_ROUTER_KEY
+    OPENAI_API_KEY="${qwen_router_key}" qwen --auth-type openai --model "${AGENT_MODEL}" \
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
+    unset qwen_router_key
     ;;
   zcode)
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
@@ -481,16 +573,29 @@ case "${AGENT_TOOL}" in
     ;;
   opencode | opencode-local)
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
+      local_config="${HOME}/.config/opencode/opencode.json"
       mkdir -p "${HOME}/.config/opencode"
-      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-        jq -n \
-        '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
-          small_model: "agent-router/small", provider: {"agent-router": {
-          npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-          options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
-          models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
-        >"${HOME}/.config/opencode/opencode.json"
-      chmod 600 "${HOME}/.config/opencode/opencode.json"
+      config_tmp=$(mktemp "${local_config}.XXXXXX")
+      if [ -f "$local_config" ]; then
+        AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+          jq '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
+            small_model: "agent-router/small", mcp:(.mcp // {}), provider: {"agent-router": {
+            npm: "@ai-sdk/openai-compatible", name: "Agent Router",
+            options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
+            models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
+          "$local_config" >"$config_tmp"
+      else
+        AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+          jq -n '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
+            small_model: "agent-router/small", mcp:{}, provider: {"agent-router": {
+            npm: "@ai-sdk/openai-compatible", name: "Agent Router",
+            options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
+            models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
+          >"$config_tmp"
+      fi
+      chmod 600 "$config_tmp"
+      mv -f "$config_tmp" "$local_config"
+      unset AGENT_ROUTER_KEY
     fi
     opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
     ;;
@@ -498,8 +603,11 @@ case "${AGENT_TOOL}" in
     bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
     ;;
   opencode-zai)
-    ZHIPU_API_KEY="${ZAI_SUBSCRIPTION_KEY}" opencode run --auto \
+    zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
+    unset ZAI_SUBSCRIPTION_KEY
+    ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto \
       --model zai-coding-plan/glm-5.3 "${AGENT_PROMPT}" || status=$?
+    unset zai_subscription_key
     ;;
   cursor-agent)
     cursor-agent -p --force "${AGENT_PROMPT}" || status=$?

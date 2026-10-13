@@ -32,6 +32,10 @@
   opencode,
   qwenCode,
   ripgrep,
+  uv,
+  vikunjaMcp,
+  zammadMcpVersion,
+  mcpSdkBound,
   renderAutonomous,
   zcodeWeb,
 }:
@@ -63,12 +67,28 @@ let
     '';
   };
 
+  zammadMcp = writeShellApplication {
+    name = "sandbox-zammad-mcp";
+    runtimeInputs = [
+      coreutils
+      uv
+    ];
+    text = ''
+      exec env -u PYTHONPATH -u PYTHONHOME uvx --from \
+        ${lib.escapeShellArg "git+https://github.com/basher83/zammad-mcp.git@v${zammadMcpVersion}"} \
+        --with ${lib.escapeShellArg mcpSdkBound} mcp-zammad "$@"
+    '';
+  };
+
   toolPackages = [
     claude-code
     codex
     zcodeWeb
     zcodeWebSupervisor
     zcodeWebTask
+    vikunjaMcp
+    uv
+    zammadMcp
     opencode
     cursorAgent
     qwenCode
@@ -161,6 +181,9 @@ dockerTools.streamLayeredImage {
       # This is the bundled provider catalog consumed alongside ZCode's
       # personal provider config (see nix-ai modules/zcode/web.nix).
       "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${zcodeWeb}/lib/zcode/apps/zcode-cli/packages/cli/dist/provider/zcode-builtin.json"
+      "AGENT_MCP_VIKUNJA_COMMAND=${vikunjaMcp}/bin/vikunja-mcp"
+      "AGENT_MCP_ZAMMAD_COMMAND=${zammadMcp}/bin/sandbox-zammad-mcp"
+      "AGENT_MCP_ZAMMAD_ARGS=[]"
       "PATH=/bin:/usr/bin"
     ];
   };

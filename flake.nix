@@ -77,13 +77,21 @@
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
-          agent-image = pkgs.callPackage ./nix/agent-image.nix {
-            renderAutonomous = nix-ai.lib.renderAutonomous;
-            zcodeWeb = nix-ai.packages.${system}.zcode-web;
-            inherit (pkgs) opencode;
-            cursorAgent = llm-agents.packages.${system}.cursor-agent;
-            qwenCode = llm-agents.packages.${system}.qwen-code;
-          };
+          agent-image =
+            let
+              mcpVersions = import "${nix-ai.outPath}/lib/versions.nix";
+              npmMcpPackages = import "${nix-ai.outPath}/modules/mcp/packages-npm.nix" { inherit pkgs; };
+            in
+            pkgs.callPackage ./nix/agent-image.nix {
+              renderAutonomous = nix-ai.lib.renderAutonomous;
+              zcodeWeb = nix-ai.packages.${system}.zcode-web;
+              vikunjaMcp = npmMcpPackages.vikunja-mcp;
+              zammadMcpVersion = mcpVersions.zammadMcp;
+              inherit (mcpVersions) mcpSdkBound;
+              inherit (pkgs) opencode uv;
+              cursorAgent = llm-agents.packages.${system}.cursor-agent;
+              qwenCode = llm-agents.packages.${system}.qwen-code;
+            };
         }
       );
 

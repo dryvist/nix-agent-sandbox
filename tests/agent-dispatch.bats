@@ -1689,3 +1689,130 @@ SH
   [ "$status" -eq 37 ]
   [[ $output == *"exited with status 37; refusing to publish"* ]]
 }
+
+@test "dispatched tools unwrap AppRole and receive leaf-backed MCP config" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/sandbox-mcp-home" tools="$BATS_TEST_TMPDIR/sandbox-mcp-tools"
+  local tool tool_cmd config real_jq
+  mkdir -p "$home" "$tools"
+  real_jq=$(command -v jq)
+  jq -n '{
+    zcode:{env:[],sandboxRouterKeyField:"router_key",ttyLogin:true},
+    opencode:{env:[],sandboxRouterKeyField:"router_key"},
+    "opencode-local":{env:[],sandboxRouterKeyField:"router_key"},
+    "qwen-code":{env:[],sandboxRouterKeyField:"router_key"}
+  }' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/curl" <<'SH'
+set -euo pipefail
+method=GET url= headers= body=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -X) method=$2; shift 2 ;;
+    -H) headers+="$(cat "${2#@}")"; shift 2 ;;
+    --data-binary) body=$(cat "${2#@}"); shift 2 ;;
+    --max-time) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+case "$url" in
+  */v1/sys/wrapping/unwrap)
+    [[ $method == POST && $headers == *'sandbox-agent-wrapped-id-value'* ]] || exit 1
+    printf '%s\n' '{"data":{"secret_id":"sandbox-secret-id-fixture"}}'
+    ;;
+  */v1/auth/approle/login)
+    [[ $method == POST ]] || exit 1
+    jq -e '.role_id == "sandbox-agent-role-id-value" and .secret_id == "sandbox-secret-id-fixture"' \
+      <<<"$body" >/dev/null || exit 1
+    printf '%s\n' '{"auth":{"client_token":"sandbox-token-fixture"}}'
+    ;;
+  */v1/secret/data/apps/sandbox-agent)
+    [[ $method == GET && $headers == *'sandbox-token-fixture'* ]] || exit 1
+    cat "$BATS_TEST_DIRNAME/fixtures/sandbox-agent.json"
+    ;;
+  */v1/auth/token/revoke-self)
+    [[ $method == POST && $headers == *'sandbox-token-fixture'* ]] || exit 1
+    printf '%s\n' '{}'
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  bash_stub "$tools/jq" <<'SH'
+case " $* " in
+  *vikunja-secret-value*|*zammad-secret-value*|*sandbox-router-secret-value*)
+    echo "credential argument detected" >&2
+    exit 91
+    ;;
+esac
+exec "$REAL_JQ" "$@"
+SH
+  for tool in zcode opencode qwen-code; do
+    tool_cmd=$tool
+    [ "$tool" != qwen-code ] || tool_cmd=qwen
+    bash_stub "$tools/$tool_cmd" <<'SH'
+set -euo pipefail
+test -z "${SANDBOX_ROLE_ID:-}"
+test -z "${SANDBOX_WRAPPED_SECRET_ID:-}"
+test -z "${VIKUNJA_API_TOKEN:-}"
+test -z "${ZAMMAD_HTTP_TOKEN:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+case "$AGENT_TOOL" in
+  zcode) root=mcpServers env_key=env config="$HOME/.zcode/cli/config.json" ;;
+  opencode) root=mcp env_key=environment config="$HOME/.config/opencode/opencode.json" ;;
+  qwen-code) root=mcpServers env_key=env config="$HOME/.qwen/settings.json" ;;
+esac
+jq -e --arg root "$root" --arg env_key "$env_key" \
+  --arg vik "${AGENT_MCP_VIKUNJA_COMMAND}" --arg zam "${AGENT_MCP_ZAMMAD_COMMAND}" \
+  --slurpfile leaf "$BATS_TEST_DIRNAME/fixtures/sandbox-agent.json" \
+  '.[$root].vikunja as $v | .[$root].zammad as $z |
+   (($v.command == $vik) or ($v.command == [$vik])) and
+   (($z.command == $zam) or ($z.command == [$zam])) and
+   (($v.args == []) or ($v.args == null)) and
+   (($z.args == []) or ($z.args == null)) and
+   $v[$env_key].VIKUNJA_API_TOKEN == $leaf[0].data.data.vikunja_token and
+   $z[$env_key].ZAMMAD_HTTP_TOKEN == $leaf[0].data.data.zammad_token' \
+  "$config" >/dev/null
+ [ "$(ls -l "$config" | cut -c2-10)" = rw------- ]
+ case "$AGENT_TOOL" in
+   zcode)
+     jq -e --slurpfile leaf "$BATS_TEST_DIRNAME/fixtures/sandbox-agent.json" \
+       '.config.providerConfigRules.providerRules[0].config.access.apiKey == $leaf[0].data.data.router_key' \
+       "$HOME/.zcode/v2/provider_config.json" >/dev/null
+     [ "$(ls -l "$HOME/.zcode/v2/provider_config.json" | cut -c2-10)" = rw------- ]
+     ;;
+   opencode)
+     jq -e --slurpfile leaf "$BATS_TEST_DIRNAME/fixtures/sandbox-agent.json" \
+       '.provider["agent-router"].options.apiKey == $leaf[0].data.data.router_key' "$config" >/dev/null
+     ;;
+   qwen-code) test -n "${OPENAI_API_KEY:-}" ;;
+ esac
+SH
+    cat >"$home/.agent-env" <<'EOF'
+BAO_ADDR=https://bao.test
+SANDBOX_ROLE_ID=sandbox-agent-role-id-value
+SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value
+GIT_MIRROR_URL=https://mirror.test/public
+VIKUNJA_URL=https://vikunja.test/api/v1
+ZAMMAD_URL=https://zammad.test/api/v1
+AGENT_ROUTER_BASE_URL=https://router.test/v1
+EOF
+    chmod 600 "$home/.agent-env"
+    run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+      BATS_TEST_DIRNAME="$BATS_TEST_DIRNAME" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
+      AGENT_TOOL="$tool" AGENT_PROMPT='Use MCP tools' REAL_JQ="$real_jq" \
+      AGENT_MCP_VIKUNJA_COMMAND=/nix/store/vikunja-mcp/bin/vikunja-mcp \
+      AGENT_MCP_ZAMMAD_COMMAND=/nix/store/zammad-mcp/bin/sandbox-zammad-mcp \
+      AGENT_MCP_ZAMMAD_ARGS='[]' bash -euo pipefail "$ENTRYPOINT"
+    [ "$status" -eq 0 ]
+    [[ $output != *sandbox-token-fixture* && $output != *sandbox-secret-id-fixture* ]]
+    case "$tool" in
+      zcode) [ ! -e "$home/.zcode/cli/config.json" ] ;;
+      opencode) [ ! -e "$home/.config/opencode/opencode.json" ] ;;
+      qwen-code) [ ! -e "$home/.qwen/settings.json" ] ;;
+    esac
+  done
+}
