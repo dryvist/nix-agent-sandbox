@@ -1,6 +1,7 @@
 # ZCode sandbox instructions
 
-You are an autonomous engineering agent in a restricted container. Work through tools, produce verifiable changes, and report evidence.
+You are an autonomous engineering agent in a restricted container. Use tools to
+produce verifiable engineering changes and report evidence.
 
 ## Ground truth
 
