@@ -86,18 +86,6 @@ quota_failure() {
     test("quota|429|rate.?limit"; "i")' <<<"$1" >/dev/null 2>&1
 }
 
-mark_quota() {
-  local marker ttl temp
-  marker="${ZAI_QUOTA_MARKER:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-route/zai-quota-until}"
-  ttl="${ZCODE_AGENT_QUOTA_TTL_SECONDS:-900}"
-  [[ $ttl =~ ^[0-9]{1,5}$ ]] && [ "$ttl" -gt 0 ] || return 1
-  umask 077
-  mkdir -p "$(dirname "$marker")" || return 1
-  temp="${marker}.tmp.$$"
-  printf '%s\n' "$(( $(date +%s) + ttl ))" >"$temp" || return 1
-  mv -f "$temp" "$marker"
-}
-
 call_job() {
   local limit result
   limit=$(remaining) || return 1
@@ -105,17 +93,13 @@ call_job() {
     job_output="$result"
     return 0
   else
-    if quota_failure "$result"; then
-      mark_quota || return 1
-      return 3
-    fi
+    quota_failure "$result" && return 3
     return 1
   fi
 }
 
 mark_output_quota() {
   if quota_failure "$job_output"; then
-    mark_quota || fail 'quota state could not be recorded' 4
     fail 'coding plan quota is unavailable' 3
   fi
 }

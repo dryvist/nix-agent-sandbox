@@ -1,18 +1,19 @@
 #!/usr/bin/env bats
 bats_require_minimum_version 1.5.0
 
+# Stubs run under the interpreter running the tests; the build sandbox has no /usr/bin/env.
+write_stub() { { printf '#!%s\n' "$BASH"; cat; } >"$1"; }
+
 setup() {
   export STUB_DIR="$BATS_TEST_TMPDIR/stubs"
-  mkdir -p "$STUB_DIR/bin" "$BATS_TEST_TMPDIR/state"
+  mkdir -p "$STUB_DIR/bin"
   export ZCODE_AGENT_CURL_CMD="$STUB_DIR/bin/curl"
   export ZCODE_AGENT_ZCODE_JOB_CMD="$STUB_DIR/bin/zcode-job"
-  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
   export PROMPT_FILE="$BATS_TEST_TMPDIR/prompt.md"
   export OUT_FILE="$BATS_TEST_TMPDIR/result.json"
   printf '%s\n' 'Implement the requested change.' >"$PROMPT_FILE"
 
-  cat >"$ZCODE_AGENT_CURL_CMD" <<'EOF'
-#!/usr/bin/env bash
+  write_stub "$ZCODE_AGENT_CURL_CMD" <<'EOF'
 set -euo pipefail
 if [ "${STUB_REPO_PRIVATE:-}" = 1 ]; then
   printf '%s\n' '{"private":true,"visibility":"private","default_branch":"main"}'
@@ -20,8 +21,7 @@ else
   printf '%s\n' '{"private":false,"visibility":"public","default_branch":"develop"}'
 fi
 EOF
-  cat >"$ZCODE_AGENT_ZCODE_JOB_CMD" <<'EOF'
-#!/usr/bin/env bash
+  write_stub "$ZCODE_AGENT_ZCODE_JOB_CMD" <<'EOF'
 set -euo pipefail
 case "$1" in
   repos)
@@ -96,11 +96,10 @@ agent() { "$ZCODE_AGENT_BIN/zcode-agent" "$@"; }
   [ ! -e "$OUT_FILE" ]
 }
 
-@test "quota failures set an expiring marker and return exit code three" {
+@test "quota failures return exit code three" {
   export STUB_JOB_MODE=quota
   run agent code dryvist/example -p "$PROMPT_FILE" -o "$OUT_FILE"
   [ "$status" -eq 3 ]
-  [ -e "$XDG_STATE_HOME/agent-route/zai-quota-until" ]
   [ ! -e "$OUT_FILE" ]
 }
 
