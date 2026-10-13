@@ -120,9 +120,8 @@ image) and the uid is non-root. The autonomous configs are never rendered
 onto a host filesystem by any code path.
 
 Dispatched jobs authenticate through OpenBao Agent with a one-use,
-response-wrapped AppRole SecretID. Agent injects the selected KV credentials
-into the tool process, and transient identity and tool configuration files
-are removed when the job exits.
+response-wrapped AppRole SecretID. Agent injects selected credentials into the
+tool process or its mode-0600 MCP config; dispatched-job files are removed at exit.
 
 ## Host dispatcher
 
@@ -224,10 +223,10 @@ Before a container starts, the dispatcher copies one mode-0600 `.agent-env`
 file and the prompt into its home directory. It contains the GitHub token for
 start jobs, the OpenBao address, the selected sandbox AppRole id and wrapped
 SecretID, the public mirror URL, service URLs, and profile values. The
-entrypoint unwraps the one-use SecretID, reads `secret/apps/sandbox-agent`,
-exports the router key, and creates per-tool Vikunja and Zammad MCP config
-files from the leaf tokens. It revokes the container token and removes the
-runtime config files on exit. The host supplies the Z.ai plan key from the
+OpenBao Agent unwraps the one-use SecretID and reads
+`secret/data/apps/sandbox-agent`. It injects the router key and creates
+per-tool Vikunja and Zammad MCP configuration. The AppRole token has a
+server-side 15-minute TTL. The host supplies the Z.ai plan key from the
 external leaf only for profiles that request it. The container reads no other
 OpenBao path. Service credentials, host paths and the Docker socket are not
 passed as container arguments or mounts.
