@@ -27,7 +27,7 @@ elif [[ $event == pull_request ]]; then
   for path in "$@"; do
     case $path in
       flake.nix|flake.lock)
-        for target in agent-cli agent-dispatch agent-cli-spool ci-resolver zcode-job sandbox-contract agent-image; do
+        for target in agent-cli agent-dispatch agent-cli-spool ci-resolver zcode-job zcode-agent sandbox-contract agent-image; do
           add_target "$target"
         done
         image=true
@@ -42,8 +42,11 @@ elif [[ $event == pull_request ]]; then
       scripts/ci-resolver.py|tests/test_ci_resolver.py)
         add_target ci-resolver
         ;;
-      nix/zcode-job.nix|scripts/zcode-job.sh|scripts/zcode-web-task.mjs|scripts/zcode-web-supervisor.mjs|tests/zcode-job.bats|tests/ssh-stub.sh)
+      nix/zcode-job.nix|nix/zcode-job-module.nix|scripts/zcode-job.sh|scripts/zcode-web-task.mjs|scripts/zcode-web-supervisor.mjs|tests/zcode-job.bats|tests/ssh-stub.sh)
         add_target zcode-job
+        ;;
+      nix/zcode-agent.nix|scripts/zcode-agent.sh|tests/zcode-agent.bats)
+        add_target zcode-agent
         ;;
       nix/task-profiles.nix|nix/egress-domains.nix|nix/repo-groups.nix)
         add_target sandbox-contract

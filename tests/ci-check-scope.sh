@@ -23,6 +23,8 @@ expect $'full=false\nimage=false\ntargets=agent-cli,agent-cli-spool' pull_reques
 expect $'full=false\nimage=true\ntargets=agent-image' pull_request refs/pull/1/merge tests/agent-image-smoke.bats
 expect $'full=false\nimage=false\ntargets=sandbox-contract' pull_request refs/pull/1/merge nix/task-profiles.nix
 expect $'full=false\nimage=false\ntargets=ci-resolver' pull_request refs/pull/1/merge scripts/ci-resolver.py tests/test_ci_resolver.py
+expect $'full=false\nimage=false\ntargets=zcode-agent' pull_request refs/pull/1/merge nix/zcode-agent.nix scripts/zcode-agent.sh
+expect $'full=false\nimage=false\ntargets=zcode-job' pull_request refs/pull/1/merge nix/zcode-job-module.nix
 expect $'full=false\nimage=false\ntargets=' pull_request refs/pull/1/merge .github/workflows/build-image.yml scripts/ci-check-scope.sh tests/ci-check-scope.sh
 expect $'full=false\nimage=false\ntargets=' pull_request refs/pull/1/merge README.md
 
