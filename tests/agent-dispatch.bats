@@ -1692,7 +1692,7 @@ SH
 }
 
 @test "fix rejects new suppression forms and base files larger than the contents API limit" {
-  local prompt json
+  local prompt json job state status_json attempts
   prompt=$(fix_prompt "repair this failure")
   export STUB_CONTENTS_404=1
   for json in \
@@ -1704,7 +1704,16 @@ SH
     set_fix_outputs "$json"
     run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
     [ "$status" -eq 0 ]
-    [ "$(jq -r .reason <<<"$output")" = 'guard: suppression line' ]
+    job=$(jq -r .job <<<"$output")
+    state=running attempts=0
+    while [ "$state" = running ] && [ "$attempts" -lt 100 ]; do
+      sleep 0.02
+      status_json=$(dispatch status "$job")
+      state=$(jq -r .state <<<"$status_json")
+      attempts=$((attempts + 1))
+    done
+    [ "$state" = failed ]
+    [ "$(jq -r .reason <<<"$status_json")" = 'guard: suppression line' ]
     [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
     rm -rf "$STUB_DIR/fix"
   done
@@ -1714,7 +1723,16 @@ SH
   set_fix_outputs "$(fix_add_json src/fix.txt 'change')"
   run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
   [ "$status" -eq 0 ]
-  [ "$(jq -r .reason <<<"$output")" = 'guard: base file too large' ]
+  job=$(jq -r .job <<<"$output")
+  state=running attempts=0
+  while [ "$state" = running ] && [ "$attempts" -lt 100 ]; do
+    sleep 0.02
+    status_json=$(dispatch status "$job")
+    state=$(jq -r .state <<<"$status_json")
+    attempts=$((attempts + 1))
+  done
+  [ "$state" = failed ]
+  [ "$(jq -r .reason <<<"$status_json")" = 'guard: base file too large' ]
   [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
 }
 
