@@ -131,6 +131,10 @@ let
     builtins.toJSON (import ./task-profiles.nix)
   );
 
+  zcodeInstructions = writeTextDir "${lib.removePrefix "/" homeDir}/.zcode/AGENTS.md" (
+    builtins.readFile ../templates/zcode/AGENTS.md
+  );
+
   etcFiles = runCommand "agent-etc" { } ''
     mkdir -p $out/etc
     cat > $out/etc/passwd <<EOF
@@ -156,6 +160,7 @@ dockerTools.streamLayeredImage {
     ++ configFiles
     ++ [
       profilesFile
+      zcodeInstructions
       etcFiles
     ];
 
