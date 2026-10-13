@@ -59,6 +59,8 @@
         system:
         let
           pkgs = pkgsFor system;
+          zcodeJob = pkgs.callPackage ./nix/zcode-job.nix { };
+          zcodeAgent = pkgs.callPackage ./nix/zcode-agent.nix { inherit zcodeJob; };
         in
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
@@ -73,7 +75,8 @@
               exec python3 ${./scripts/ci-resolver.py} "$@"
             '';
           };
-          zcode-job = pkgs.callPackage ./nix/zcode-job.nix { };
+          zcode-job = zcodeJob;
+          zcode-agent = zcodeAgent;
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
@@ -183,6 +186,20 @@
               ''
                 ZCODE_JOB_BIN=${client}/bin ZCODE_JOB_SCRIPTS=${./scripts} \
                   bats ${./tests/zcode-job.bats}
+                touch $out
+              '';
+          zcode-agent =
+            pkgs.runCommand "zcode-agent-tests"
+              {
+                nativeBuildInputs = with pkgs; [
+                  bats
+                  coreutils
+                  jq
+                ];
+              }
+              ''
+                ZCODE_AGENT_BIN=${self.packages.${system}.zcode-agent}/bin \
+                  bats ${./tests/zcode-agent.bats}
                 touch $out
               '';
           sandbox-contract =
