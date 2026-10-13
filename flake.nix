@@ -146,15 +146,21 @@
                   git
                   gnutar
                   jq
+                  openbao
+                  python3
                 ];
+                # The OpenBao Agent test runs a loopback dev server.
+                __darwinAllowLocalNetworking = true;
               }
               ''
                 cp -r ${./tests} tests
-                chmod -R u+w tests
+                cp -r ${./templates} templates
+                chmod -R u+w tests templates
                 patchShebangs tests
                 AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
                   ENTRYPOINT=${./scripts/entrypoint.sh} \
-                  bats tests/agent-dispatch.bats
+                  BAO_BIN=${pkgs.openbao}/bin/bao \
+                  bats tests/agent-dispatch.bats tests/agent-bao-agent.bats
                 touch $out
               '';
           agent-cli-spool =

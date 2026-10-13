@@ -102,15 +102,15 @@ SH
   mkdir -p "$auth_dir"
   port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
   address="http://127.0.0.1:${port}"
-  BAO_ADDR="$address" "$BAO_BIN" server -dev \
+  BAO_ADDR="$address" "$BAO_BIN" server -dev -dev-no-store-token \
     -dev-root-token-id="$root_token" -dev-listen-address="127.0.0.1:${port}" \
-    >/dev/null 2>&1 &
+    >"$BATS_TEST_TMPDIR/server.log" 2>&1 &
   BAO_SERVER_PID=$!
-  for _ in {1..60}; do
+  for _ in {1..100}; do
     if "$BAO_BIN" status -address="$address" >/dev/null 2>&1; then break; fi
     sleep 0.1
   done
-  "$BAO_BIN" status -address="$address" >/dev/null
+  "$BAO_BIN" status -address="$address" >/dev/null || { tail -n 20 "$BATS_TEST_TMPDIR/server.log" >&2; false; }
 
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" auth enable approle >/dev/null
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" policy write sandbox-read - <<'HCL' >/dev/null
