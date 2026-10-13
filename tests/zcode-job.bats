@@ -102,6 +102,27 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
   no_ssh
 }
 
+@test "owner wildcard allows repositories only for its owner" {
+  jq '.allowedRepos = ["dryvist/*"]' "$ZCODE_JOB_CONFIG" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$ZCODE_JOB_CONFIG"
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = 'start zcode dryvist/example Review' ]
+  rm -f "$STUB_DIR/ssh-commands"
+  run client start JacobPEvans/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "Repository is not approved for ZCode"' <<<"$output"
+  no_ssh
+}
+
+@test "owner wildcard is accepted in the configured repository patterns" {
+  jq '.allowedRepos = ["dryvist/*"]' "$ZCODE_JOB_CONFIG" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$ZCODE_JOB_CONFIG"
+  run client repos
+  [ "$status" -eq 0 ]
+  jq -e '.repos == ["dryvist/*"]' <<<"$output"
+}
+
 @test "malformed inputs and control characters are refused before SSH" {
   for repo in dryvist/.. dryvist/. dryvist/example/extra 'dryvist/example;id'; do
     run client start "$repo" 'Review'

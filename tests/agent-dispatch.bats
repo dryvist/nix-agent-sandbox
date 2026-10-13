@@ -418,9 +418,54 @@ scope_refused() {
   [ "$(jq -r .reason <<<"$out")" = "github token is not scoped to exactly $3" ]
 }
 
+@test "owner allowlist and private denylist apply before terminal and batch jobs" {
+  local command
+  local -a args
+  export AGENT_REPO_DENYLIST=blocked-owner,another-blocked
+  for command in \
+    "start zcode unapproved/example Review" \
+    "start zcode blocked-owner/example Review" \
+    "start zcode another-blocked/example Review"; do
+    read -r -a args <<<"$command"
+    run --separate-stderr dispatch "${args[@]}"
+    [ "$status" -eq 64 ]
+    [[ $stderr == *"repository owner refused"* ]]
+  done
+  run --separate-stderr dispatch start --tty zcode blocked-owner/example
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner refused"* ]]
+  run --separate-stderr dispatch start --tty zcode another-blocked/example
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner refused"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "the other configured owners pass the server-side owner guard" {
+  local repo
+  for repo in JacobPEvans/example JacobPEvans-personal/example; do
+    STUB_SCOPE_REPO="$repo" run --separate-stderr dispatch start zcode "$repo" Review
+    [ "$status" -eq 0 ]
+    [ "$(jq -r .repo <<<"$output")" = "$repo" ]
+  done
+}
+
+@test "repository jobs fail closed when the denylist is absent or malformed" {
+  unset AGENT_REPO_DENYLIST
+  run --separate-stderr dispatch start zcode dryvist/nix-ai Review
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository denylist is missing or invalid"* ]]
+  export AGENT_REPO_DENYLIST=blocked-owner,,another-blocked
+  run --separate-stderr dispatch start --tty zcode dryvist/nix-ai
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository denylist is missing or invalid"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
 @test "a token that covers another repo, another owner or more repos fails closed" {
   scope_refused dryvist/other 1 dryvist/nix-ai
-  scope_refused dryvist/nix-ai 1 evil/nix-ai
+  scope_refused dryvist/nix-ai 1 JacobPEvans/nix-ai
   scope_refused dryvist/nix-ai 2 dryvist/nix-ai
   run ! grep -q '^docker' "$STUB_DIR/calls.log"
   [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 3 ]

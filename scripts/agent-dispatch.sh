@@ -80,6 +80,27 @@ valid_repo() {
     [ "${1#*/}" != . ] && [ "${1#*/}" != .. ]
 }
 
+repo_scope_guard() {
+  local owner_lc=${1%%/*} denied
+  local -a denied_owners
+  owner_lc=${owner_lc,,}
+  case "$owner_lc" in
+    dryvist | jacobpevans | jacobpevans-personal) ;;
+    *) echo "repository owner refused"; return ;;
+  esac
+  if [[ ! ${AGENT_REPO_DENYLIST:-} =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(,[A-Za-z0-9][A-Za-z0-9-]{0,38})*$ ]]; then
+    echo "repository denylist is missing or invalid"
+    return
+  fi
+  IFS=, read -r -a denied_owners <<<"$AGENT_REPO_DENYLIST"
+  for denied in "${denied_owners[@]}"; do
+    [ "$owner_lc" != "${denied,,}" ] || {
+      echo "repository owner refused"
+      return
+    }
+  done
+}
+
 valid_job() {
   [[ $1 =~ ^j-[0-9a-f]{16}$ ]]
 }
@@ -1286,7 +1307,7 @@ parse_fix_prompt() {
 }
 
 cmd_start() {
-  local tty=0 tool repo prompt id dir
+  local tty=0 tool repo prompt id dir reason
   if [ "${1:-}" = --tty ]; then
     tty=1
     shift
@@ -1299,6 +1320,8 @@ cmd_start() {
   tool=$1 repo=$2 prompt=${3:-}
   valid_tool "$tool" || refuse "unknown tool"
   valid_repo "$repo" || refuse "invalid owner/repo"
+  reason=$(repo_scope_guard "$repo")
+  [ -z "$reason" ] || refuse "$reason"
   if [ "$tty" = 0 ]; then
     valid_text "$prompt" || refuse "invalid prompt"
     [[ ${prompt%%$'\n'*} != CI-RESOLVER* ]] || refuse "CI-RESOLVER header requires fix"
@@ -1322,7 +1345,7 @@ cmd_start() {
 }
 
 cmd_fix() {
-  local tool repo branch sha raw_prompt prompt id dir cap running count=0 line tier
+  local tool repo branch sha raw_prompt prompt id dir cap running count=0 line tier reason
   [ $# -eq 5 ] || usage
   tool=$1 repo=$2 branch=$3 sha=$4 raw_prompt=$5
   [[ $tool != -* ]] || refuse "unknown tool"
@@ -1338,6 +1361,8 @@ cmd_fix() {
   fi
   prompt=$fix_task
   valid_text "$prompt" || refuse "invalid prompt"
+  reason=$(repo_scope_guard "$repo")
+  [ -z "$reason" ] || refuse "$reason"
   # shell runs the workbook's deterministic command and needs no model credential.
   [ "$tool" = shell ] || jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
     <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session"
@@ -1387,13 +1412,15 @@ end_session() {
 }
 
 cmd_continue() {
-  local id last next dir rdir manager_pid prompt tries=0
+  local id last next dir rdir manager_pid prompt tries=0 reason
   [ $# -eq 2 ] || usage
   id=$1
   valid_job "$id" || refuse "invalid job id"
   valid_text "$2" || refuse "invalid message"
   job_exists "$id"
   [ "$(job_get "$id" '(.mode // "start")')" != fix ] || refuse "fix jobs run once; start a new job"
+  reason=$(repo_scope_guard "$(job_get "$id" .repo)")
+  [ -z "$reason" ] || refuse "$reason"
   if [ "$(job_get "$id" .tty)" = true ]; then
     refuse "a terminal job ends with its session"
   fi
