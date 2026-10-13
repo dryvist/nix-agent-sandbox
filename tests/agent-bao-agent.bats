@@ -117,7 +117,7 @@ case "$AGENT_TOOL" in
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
     printf '%s' "$ZCODE_MCP_CONFIG" | jq -e '
-      .mcp.servers.vikunja.command == ["/bin/vikunja-mcp"] and
+      .mcp.servers.vikunja.command == "/bin/vikunja-mcp" and
       .mcp.servers.zammad.command == "/bin/sandbox-zammad-mcp" and
       .mcp.servers.vikunja.env.VIKUNJA_API_TOKEN == env.BAO_TEST_VIKUNJA_TOKEN and
       .mcp.servers.zammad.env.ZAMMAD_HTTP_TOKEN == env.BAO_TEST_ZAMMAD_TOKEN
