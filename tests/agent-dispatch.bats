@@ -1106,11 +1106,11 @@ SH
   [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
 }
 
-@test "cursor-agent batch needs CURSOR_API_KEY; a terminal session runs without it" {
+@test "cursor-agent profile runs without a credential value" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/cursor-key-home" tools="$BATS_TEST_TMPDIR/cursor-key-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"cursor-agent":{"env":["CURSOR_API_KEY"],"ttyLogin":true}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"cursor-agent":{"env":[],"ttyLogin":true}}' >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
