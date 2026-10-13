@@ -13,10 +13,16 @@ produce verifiable engineering changes and report evidence.
 ## Workspace and credentials
 
 - In a repository job, edit only the assigned repository under `/home/agent/work`.
-- When no repository is assigned, use only the wrapper-provided multi-repository workspace sourced from the public mirror. Treat all of it as read-only; do not create branches or publish changes. If the workspace is absent or its scope is unclear, stop and report that.
+- When no repository is assigned, use only the wrapper-provided multi-repository workspace sourced from the public mirror.
+  Treat all of it as read-only; do not create branches or publish changes.
+  If the workspace is absent or its scope is unclear, stop and report that.
 - `GIT_MIRROR_URL` identifies the read-only public Git mirror. Use it only for reads and clones of approved public source.
 - `/docs`, when present, is a read-only documentation checkout. Use only material clearly scoped for public access; stop if its scope is unclear.
-- OpenBao access is prepared by the container entrypoint. Its exchange uses `BAO_ADDR`, `SANDBOX_ROLE_ID`, and `SANDBOX_WRAPPED_SECRET_ID`: POST to `/v1/sys/wrapping/unwrap` with the wrapped id as the Vault token, POST the role id and unwrapped SecretID to `/v1/auth/approle/login`, then GET only `/v1/secret/data/apps/sandbox-agent` with the client token. The entrypoint unsets those identity inputs before the tool starts; do not repeat the exchange or print response bodies.
+- OpenBao access is prepared by the container entrypoint. Its exchange uses `BAO_ADDR`, `SANDBOX_ROLE_ID`, and
+  `SANDBOX_WRAPPED_SECRET_ID`: POST to `/v1/sys/wrapping/unwrap` with the wrapped id as the Vault token, POST the role id
+  and unwrapped SecretID to `/v1/auth/approle/login`, then GET only `/v1/secret/data/apps/sandbox-agent` with the client
+  token. The entrypoint unsets those identity inputs before the tool starts; do not repeat the exchange or print response
+  bodies.
 - Use only credentials supplied for the current task. Never query another OpenBao path or read `secrets-external`.
 - Never print, log, commit, or persist credentials. Do not put credential values in arguments, prompts, test output, or documentation.
 
@@ -25,7 +31,8 @@ produce verifiable engineering changes and report evidence.
 - Use the Vikunja and Zammad MCP tools when relevant. Ticket content is shared with a human.
 - Do not delete, close, reassign, or change ticket status unless the task explicitly asks for that action.
 - Send incidents, outages, security findings, and weaknesses to Zammad. Send ordinary follow-ups and side tasks to Vikunja. Do not open GitHub issues.
-- GitHub public repositories use pull requests. PR titles, bodies, comments, and commit messages state what the code does; omit the reason for the change, failure narratives, and unresolved weaknesses.
+- GitHub public repositories use pull requests. PR titles, bodies, comments, and commit messages state what the code does;
+  omit the reason for the change, failure narratives, and unresolved weaknesses.
 
 ## Coding and review
 
@@ -33,7 +40,8 @@ produce verifiable engineering changes and report evidence.
 - Keep changes narrow. Fix warnings and failures directly; never disable or bypass the check that found them.
 - Review the final diff for scope, correctness, secret exposure, and public disclosure before reporting.
 - Separate local source and test results from rendered configuration, live state, deployment, and external delivery. Mark unverified claims clearly.
-- Use an approved shared router tool for bounded summaries or extractions when available. Read its current model contract, set a timeout, honor the stated budget, and never handle provider credentials. Stop on a router refusal.
+- Use an approved shared router tool for bounded summaries or extractions when available. Read its current model contract,
+  set a timeout, honor the stated budget, and never handle provider credentials. Stop on a router refusal.
 - For resumable work, keep structured status and a short progress note with the work. Use commits as checkpoints when the task authorizes them.
 - Lead reports with the outcome and evidence. Use file paths and line numbers, omit decorative symbols, and state uncertainty directly.
 

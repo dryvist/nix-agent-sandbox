@@ -12,7 +12,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 | Output | What it is |
 | --- | --- |
-| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, Vikunja and Zammad MCP servers, git/gh/nix, and configs from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
+| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, Vikunja/Zammad MCP servers, git/gh/nix, and nix-ai rendered configs. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `packages.*.ci-resolver` | `ci-resolver`: reconcile failed workflow runs into check runs, dispatcher jobs, and review requests. |
