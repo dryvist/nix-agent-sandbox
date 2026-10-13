@@ -748,6 +748,23 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
 }
 
+@test "saved container logs redact bare injected credentials and preserve normal lines" {
+  local id log dispatcher credential
+  dispatcher=$(make_dispatcher '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}')
+  credential=$(jq -r '.data.data.ZAI_SUBSCRIPTION_KEY' "$BATS_TEST_DIRNAME/fixtures/zai-external.json")
+  printf '%s\n' "$credential" 'ordinary log line' >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log" STUB_EXIT=1
+
+  run --separate-stderr "$dispatcher" start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  grep -Fxq '[REDACTED]' "$log"
+  grep -Fxq 'ordinary log line' "$log"
+  ! grep -Fq "$credential" "$log"
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/redact-values" ]
+}
+
 @test "status omits log fields and host logs redact router and GitHub key assignments" {
   local id log
   printf '%s\n' 'AGENT_ROUTER_KEY=zcode-router-secret-value' 'GH_TOKEN=abc123' >"$STUB_DIR/container.log"

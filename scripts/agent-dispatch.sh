@@ -41,6 +41,7 @@ MAX_TEXT=16384
 JOB_MANAGER=0
 JOB_TOKEN_TTL=0
 JOB_ENDED=0
+JOB_REDACT_VALUES=()
 
 usage() {
   cat >&2 <<'EOF'
@@ -830,9 +831,24 @@ publish_fix() {
 
 # finalize <id> <run>: settle a run's terminal state once, remove its
 # container (the volume stays for `continue`), and post the result.
+redact_log_values() {
+  local line value
+  while IFS= read -r line || [ -n "$line" ]; do
+    for value in "${JOB_REDACT_VALUES[@]}"; do
+      # Skip short values to avoid masking normal text.
+      [ "${#value}" -ge 8 ] || continue
+      line=${line//"$value"/'[REDACTED]'}
+    done
+    printf '%s\n' "$line"
+  done
+}
+
 finalize() {
   local id=$1 run=$2 tok=${3:-} rdir="$STATE_DIR/$1/runs/$2" state cid code pr mode
   mkdir "$rdir/final" 2>/dev/null || return 0
+  if [ "${#JOB_REDACT_VALUES[@]}" -eq 0 ] && [ -f "$rdir/redact-values" ]; then
+    mapfile -t JOB_REDACT_VALUES <"$rdir/redact-values"
+  fi
   code=$(cat "$rdir/exit" 2>/dev/null || true)
   cid=$(cat "$rdir/cid" 2>/dev/null || true)
   mode=$(job_get "$id" .mode 2>/dev/null || echo start)
@@ -862,7 +878,7 @@ finalize() {
       pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
-    if docker logs --tail 200 "$cid" 2>/dev/null | jq -Rr \
+    if docker logs --tail 200 "$cid" 2>/dev/null | redact_log_values | jq -Rr \
       'gsub("(?i)(?<prefix>(?:authorization|x-vault-token):[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>\"[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*\"[[:space:]]*:[[:space:]]*)\"[^\"]*\""; "\(.prefix)\"[REDACTED]\"") |
@@ -875,6 +891,7 @@ finalize() {
     chmod 600 "$rdir/log"
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
+  rm -f "$rdir/redact-values"
   date +%s >"$rdir/ended"
   echo "$state" >"$rdir/state"
   if [ -n "$tok" ]; then
@@ -943,15 +960,21 @@ deliver() {
   local tmp name value rc=0
   tmp=$(mktemp -d)
   {
-    if [ "$3" != fix ]; then printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"; fi
+    JOB_REDACT_VALUES=()
+    if [ "$3" != fix ]; then
+      printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"
+      JOB_REDACT_VALUES+=("$gh")
+    fi
     printf 'BAO_ADDR=%s\nSANDBOX_ROLE_ID=%s\nSANDBOX_WRAPPED_SECRET_ID=%s\n' \
       "$BAO_ADDR" "$sandbox_role_id" "$sandbox_wrapped_secret_id"
+    JOB_REDACT_VALUES+=("$sandbox_role_id" "$sandbox_wrapped_secret_id")
     printf 'GIT_MIRROR_URL=%s\nVIKUNJA_URL=%s\nZAMMAD_URL=%s\n' \
       "$GIT_MIRROR_URL" "$VIKUNJA_URL" "$ZAMMAD_URL"
     for name in "${names[@]}"; do
       value=$(credential_value "$name")
       single_line "$value" || rc=1
       printf '%s=%s\n' "$name" "$value"
+      JOB_REDACT_VALUES+=("$value")
     done
     if [ -n "$router_key_field" ]; then
       printf 'AGENT_ROUTER_BASE_URL=%s\n' "$AGENT_ROUTER_BASE_URL"
@@ -974,6 +997,7 @@ run_job() {
   local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" iid mint gh="" budget cid name request
   local router_key_field="" sandbox_role_id="" sandbox_wrapped_secret_id="" sandbox_role="" role_response wrapped_response reason value
   local -a names args
+  JOB_REDACT_VALUES=()
   tool=$(job_get "$id" .tool)
   repo=$(job_get "$id" .repo)
   mode=$(job_get "$id" '(.mode // "start")')
@@ -1124,6 +1148,13 @@ run_job() {
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1
   }
+  # Refresh can finalize a stopped job after its in-memory manager is gone.
+  if ! (umask 077 && printf '%s\n' "${JOB_REDACT_VALUES[@]}" >"$rdir/redact-values") ||
+    ! chmod 600 "$rdir/redact-values"; then
+    rm -f "$rdir/redact-values"
+    abort "$id" "$run" "credential redaction handoff failed" "$tok"
+    return 1
+  fi
   docker start "$cid" >/dev/null || {
     bao_revoke_wrap "$sandbox_wrapped_secret_id"
     abort "$id" "$run" "container start failed" "$tok"
@@ -1143,7 +1174,7 @@ run_job() {
     abort "$id" "$run" "job manager already exists" "$tok"
     return 1
   }
-  if ! printf '%s' "$tok" | setsid -f "$0" __job "$id" "$run" \
+  if ! printf '%s\n' "$tok" "${JOB_REDACT_VALUES[@]}" | setsid -f "$0" __job "$id" "$run" \
     >>"$STATE_DIR/$id/dispatch.log" 2>&1; then
     rmdir "$STATE_DIR/$id/manager" 2>/dev/null || true
     abort "$id" "$run" "job manager start failed" "$tok"
@@ -1210,9 +1241,11 @@ wait_run() {
 # The manager owns the token for the job's lifetime. Continue requests are
 # non-secret prompt files in new run directories; the token never touches disk.
 job_loop() {
-  local id=$1 run=$2 tok="" rdir latest next prompt now idle_until manager_dir
+  local id=$1 run=$2 tok="" credential rdir latest next prompt now idle_until manager_dir
   manager_dir="$STATE_DIR/$id/manager"
   IFS= read -r tok || true
+  JOB_REDACT_VALUES=()
+  while IFS= read -r credential; do JOB_REDACT_VALUES+=("$credential"); done
   if [ -z "$tok" ]; then
     rmdir "$manager_dir" 2>/dev/null || true
     return 1
