@@ -29,9 +29,14 @@
   jq,
   nix,
   nodejs_24,
+  openbao,
   opencode,
   qwenCode,
   ripgrep,
+  uv,
+  vikunjaMcp,
+  zammadMcpVersion,
+  mcpSdkBound,
   renderAutonomous,
   zcodeWeb,
 }:
@@ -63,12 +68,28 @@ let
     '';
   };
 
+  zammadMcp = writeShellApplication {
+    name = "sandbox-zammad-mcp";
+    runtimeInputs = [
+      coreutils
+      uv
+    ];
+    text = ''
+      exec env -u PYTHONPATH -u PYTHONHOME uvx --from \
+        ${lib.escapeShellArg "git+https://github.com/basher83/zammad-mcp.git@v${zammadMcpVersion}"} \
+        --with ${lib.escapeShellArg mcpSdkBound} mcp-zammad "$@"
+    '';
+  };
+
   toolPackages = [
     claude-code
     codex
     zcodeWeb
     zcodeWebSupervisor
     zcodeWebTask
+    vikunjaMcp
+    uv
+    zammadMcp
     opencode
     cursorAgent
     qwenCode
@@ -85,6 +106,7 @@ let
     gnugrep
     jq
     nix
+    openbao
     ripgrep
   ];
 
@@ -111,6 +133,31 @@ let
     builtins.toJSON (import ./task-profiles.nix)
   );
 
+  baoAgentFiles = lib.mapAttrsToList (path: contents: writeTextDir path contents) {
+    "etc/openbao-agent/read.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read.hcl);
+    "etc/openbao-agent/write.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write.hcl);
+    "etc/openbao-agent/templates/router-key.ctmpl" =
+      builtins.readFile ../templates/bao-agent/router-key.ctmpl;
+    "etc/openbao-agent/templates/vikunja-token.ctmpl" =
+      builtins.readFile ../templates/bao-agent/vikunja-token.ctmpl;
+    "etc/openbao-agent/templates/zammad-token.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zammad-token.ctmpl;
+    "etc/openbao-agent/templates/opencode-config.ctmpl" =
+      builtins.readFile ../templates/bao-agent/opencode-config.ctmpl;
+    "etc/openbao-agent/templates/zcode-mcp.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zcode-mcp.ctmpl;
+    "etc/openbao-agent/templates/qwen-mcp.ctmpl" =
+      builtins.readFile ../templates/bao-agent/qwen-mcp.ctmpl;
+  };
+
+  zcodeInstructions = writeTextDir "${lib.removePrefix "/" homeDir}/.zcode/AGENTS.md" (
+    builtins.readFile ../templates/zcode/AGENTS.md
+  );
+
   etcFiles = runCommand "agent-etc" { } ''
     mkdir -p $out/etc
     cat > $out/etc/passwd <<EOF
@@ -134,8 +181,10 @@ dockerTools.streamLayeredImage {
     toolPackages
     ++ basePackages
     ++ configFiles
+    ++ baoAgentFiles
     ++ [
       profilesFile
+      zcodeInstructions
       etcFiles
     ];
 
@@ -161,6 +210,9 @@ dockerTools.streamLayeredImage {
       # This is the bundled provider catalog consumed alongside ZCode's
       # personal provider config (see nix-ai modules/zcode/web.nix).
       "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${zcodeWeb}/lib/zcode/apps/zcode-cli/packages/cli/dist/provider/zcode-builtin.json"
+      "AGENT_MCP_VIKUNJA_COMMAND=${vikunjaMcp}/bin/vikunja-mcp"
+      "AGENT_MCP_ZAMMAD_COMMAND=${zammadMcp}/bin/sandbox-zammad-mcp"
+      "AGENT_MCP_ZAMMAD_ARGS=[]"
       "PATH=/bin:/usr/bin"
     ];
   };

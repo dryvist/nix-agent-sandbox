@@ -12,7 +12,7 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 | Output | What it is |
 | --- | --- |
-| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, git/gh/nix, configs from nix-ai `lib.renderAutonomous.files`. Non-root, no sudo. |
+| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, Vikunja/Zammad MCP servers, git/gh/nix, and nix-ai rendered configs. |
 | `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `packages.*.ci-resolver` | `ci-resolver`: reconcile failed workflow runs into check runs, dispatcher jobs, and review requests. |
@@ -44,6 +44,7 @@ builder: `nix build .#agent-image`.
 contains the SSH alias, approved non-sensitive repository subset, and the SSO
 URL of the always-on native Web/Server session. The Home Manager module is
 disabled by default and requires an explicit repository list when enabled.
+An entry may be an exact `owner/repo` or an `owner/*` pattern.
 
 ```sh
 zcode-job repos
@@ -118,6 +119,10 @@ The entrypoint refuses to start unless `AGENT_SANDBOX=1` (set only by the
 image) and the uid is non-root. The autonomous configs are never rendered
 onto a host filesystem by any code path.
 
+Dispatched jobs authenticate through OpenBao Agent with a one-use,
+response-wrapped AppRole SecretID. Agent injects selected credentials into the
+tool process or its mode-0600 MCP config; dispatched-job files are removed at exit.
+
 ## Host dispatcher
 
 `agent-dispatch` runs on the sandbox Docker host. A job is one disposable
@@ -140,16 +145,18 @@ agent-dispatch check
   job needs a credential that works without a person:
   `opencode-local` uses `AGENT_ROUTER_BASE_URL` and the router key with the
   router capability `medium`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
-  `zai-coding-plan/glm-5.3`. `shell` is accepted only by `fix`: it runs the
-  task text as a `bash` command and needs no model credential.
-  `cursor-agent` batch runs take `CURSOR_API_KEY` from the job's secret
-  bucket. `qwen-code` batch runs use the router's `medium` capability with
-  `QWEN_CODE_ROUTER_KEY` from the same bucket, and have no terminal session.
-- **Repositories**: public only, and the default branch must have an active
-  ruleset that requires a pull request. After the mint, the dispatcher checks
-  both with the job's token. It refuses any other repository and revokes that
-  token. Classic branch protection is not readable with the job token and
-  does not count.
+  `zai-coding-plan/glm-5.3`. `cursor-agent` is terminal-only and signs in
+  interactively. `shell` is accepted only by `fix`: it runs the task text as a
+  `bash` command and needs no model credential. `qwen-code` batch runs use
+  the router's `medium` capability with `router_key` from the sandbox leaf,
+  and have no terminal session.
+- **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
+  `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
+  in `AGENT_REPO_DENYLIST`. The default branch must be public and have an
+  active ruleset that requires a pull request. After the mint, the dispatcher
+  checks both with the job's token. It refuses any other repository and
+  revokes that token. Classic branch protection is not readable with the job
+  token and does not count.
 - **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
   PR. Every branch requires signed commits, so the run's tree reaches GitHub as
   one commit created through the API (`createCommitOnBranch`), which GitHub
@@ -213,17 +220,23 @@ is pruned or its lease expires.
 The dispatcher sends one role-and-reason alert when a service login is refused.
 
 Before a container starts, the dispatcher copies one mode-0600 `.agent-env`
-file and the prompt into its home directory. The file contains the GitHub
-token, selected task-profile values, and router values for profiles that name
-a `routerKeyField`. The entrypoint exports only approved names and removes the
-file. Service credentials, host paths and the Docker socket are not passed to
-the container.
+file and the prompt into its home directory. It contains the GitHub token for
+start jobs, the OpenBao address, the selected sandbox AppRole id and wrapped
+SecretID, the public mirror URL, service URLs, and profile values. The
+OpenBao Agent unwraps the one-use SecretID and reads
+`secret/data/apps/sandbox-agent`. It injects the router key and creates
+per-tool Vikunja and Zammad MCP configuration. The AppRole token has a
+server-side 15-minute TTL. The host supplies the Z.ai plan key from the
+external leaf only for profiles that request it. The container reads no other
+OpenBao path. Service credentials, host paths and the Docker socket are not
+passed as container arguments or mounts.
 
 ### Environment
 
 | Name | Use |
 | --- | --- |
-| `BAO_ADDR` | Host service endpoint |
+| `BAO_ADDR` | OpenBao endpoint passed to the container |
+| `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist supplied to the dispatcher |
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
@@ -234,8 +247,9 @@ the container.
 | `AGENT_PUBLISH_MAX_BYTES` | encoded change size and copied fix output cap (default 8 MiB) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
-Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, each tool's configured
-task-profile fields, and the named router key field where configured. Result
+Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, external profile values
+requested by a tool, and the `sandbox-agent` leaf fields used by the entrypoint.
+Result
 delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 `NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.
 

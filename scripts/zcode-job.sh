@@ -30,9 +30,15 @@ valid_repo() {
     [ "${1#*/}" != . ] && [ "${1#*/}" != .. ]
 }
 
+valid_allowed_repo() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/\*$ ]] || valid_repo "$1"
+}
+
 allowed_repo() {
-  valid_repo "$1" && jq -e --arg repo "$1" \
-    '.allowedRepos | map(ascii_downcase) | index($repo | ascii_downcase) != null' \
+  local owner=${1%%/*}
+  valid_repo "$1" && jq -e --arg repo "${1,,}" --arg owner "${owner,,}" \
+    '.allowedRepos | any((ascii_downcase) as $allowed |
+      $allowed == $repo or $allowed == ($owner + "/*"))' \
     <<<"$config" >/dev/null
 }
 
@@ -48,7 +54,7 @@ config=$(jq -ces 'select(length == 1) | .[0] | select(type == "object" and
   (.liveUrl | type == "string" and test("^https://[^\\s]+$")))' \
   "$config_path" 2>/dev/null) || fail "Missing or invalid ZCode client configuration"
 while IFS= read -r repo; do
-  valid_repo "$repo" || fail "Invalid approved repository list"
+  valid_allowed_repo "$repo" || fail "Invalid approved repository list"
 done < <(jq -r '.allowedRepos[]' <<<"$config")
 
 host=$(jq -r '.sshHost' <<<"$config")

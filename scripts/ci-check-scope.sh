@@ -36,7 +36,7 @@ elif [[ $event == pull_request ]]; then
         add_target agent-cli
         add_target agent-cli-spool
         ;;
-      nix/agent-dispatch.nix|scripts/agent-dispatch.sh|scripts/dispatch-ssh.sh|scripts/entrypoint.sh|tests/agent-dispatch.bats|tests/fixtures/*|tests/stubs/*)
+      nix/agent-dispatch.nix|scripts/agent-dispatch.sh|scripts/dispatch-ssh.sh|scripts/entrypoint.sh|templates/bao-agent/*|tests/agent-dispatch.bats|tests/agent-bao-agent.bats|tests/fixtures/*|tests/stubs/*)
         add_target agent-dispatch
         ;;
       scripts/ci-resolver.py|tests/test_ci_resolver.py)

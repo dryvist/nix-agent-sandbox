@@ -1,0 +1,5 @@
+{{- if eq (env "AGENT_TOOL") "zcode" -}}
+{{- with secret "secret/data/apps/sandbox-agent" -}}
+{"mcp":{"servers":{"vikunja":{"command":{{ env "AGENT_MCP_VIKUNJA_COMMAND" | toJSON }},"args":[],"env":{"VIKUNJA_URL":{{ env "VIKUNJA_URL" | toJSON }},"VIKUNJA_API_TOKEN":{{ .Data.data.vikunja_token | toJSON }}}},"zammad":{"command":{{ env "AGENT_MCP_ZAMMAD_COMMAND" | toJSON }},"args":{{ env "AGENT_MCP_ZAMMAD_ARGS" }},"env":{"ZAMMAD_URL":{{ env "ZAMMAD_URL" | toJSON }},"ZAMMAD_HTTP_TOKEN":{{ .Data.data.zammad_token | toJSON }}}}}}}
+{{- end -}}
+{{- end -}}

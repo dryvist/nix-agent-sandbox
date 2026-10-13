@@ -1,0 +1,6 @@
+{{- $field := env "AGENT_SANDBOX_ROUTER_KEY_FIELD" -}}
+{{- if $field -}}
+{{- with secret "secret/data/apps/sandbox-agent" -}}
+{{- index .Data.data $field -}}
+{{- end -}}
+{{- end -}}

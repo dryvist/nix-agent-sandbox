@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Agent container entrypoint.
 #
 # Contract (all via environment):
@@ -21,6 +22,9 @@
 #
 # This configuration is only safe inside a disposable container: the tools
 # run with all approvals bypassed (see dryvist/nix-ai lib.renderAutonomous).
+
+set +x
+umask 077
 
 # --- Boundary guards -------------------------------------------------------
 if [ "${AGENT_SANDBOX:-}" != "1" ]; then
@@ -64,7 +68,8 @@ done
 agent_env_name_allowed() {
   local profile="${AGENT_PROFILE:-${AGENT_TOOL:-claude}}"
   case "$1" in
-    GH_TOKEN | GITHUB_TOKEN | AGENT_ROUTER_BASE_URL | AGENT_ROUTER_KEY) return 0 ;;
+    GH_TOKEN | GITHUB_TOKEN | AGENT_ROUTER_BASE_URL | AGENT_ROUTER_KEY | BAO_ADDR | \
+      SANDBOX_ROLE_ID | SANDBOX_WRAPPED_SECRET_ID | GIT_MIRROR_URL | VIKUNJA_URL | ZAMMAD_URL) return 0 ;;
   esac
   jq -e --arg profile "$profile" --arg name "$1" \
     '.[$profile].env | index($name) != null' \
@@ -72,6 +77,7 @@ agent_env_name_allowed() {
 }
 
 if [ -f "${HOME}/.agent-env" ]; then
+  chmod 600 "${HOME}/.agent-env"
   env_file_error=0
   while IFS= read -r line || [ -n "${line}" ]; do
     [ -n "${line}" ] || continue
@@ -168,6 +174,65 @@ case "${AGENT_TOOL}" in
     export ZAI_SUBSCRIPTION_KEY AGENT_WEB_TOKEN
     ;;
 esac
+
+openbao_child="${AGENT_OPENBAO_CHILD:-}"
+export -n openbao_child
+openbao_agent_dir="${AGENT_OPENBAO_AUTH_DIR:-/dev/shm/agent-openbao}"
+unset AGENT_OPENBAO_AUTH_DIR
+if [ "${openbao_child}" != 1 ] && \
+  { [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; }; then
+  mkdir -p "${openbao_agent_dir}" && chmod 700 "${openbao_agent_dir}"
+  printf '%s' "${SANDBOX_ROLE_ID:-}" >"${openbao_agent_dir}/role-id"
+  printf '%s' "${SANDBOX_WRAPPED_SECRET_ID:-}" >"${openbao_agent_dir}/wrapped-secret-id"
+  chmod 600 "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
+  unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_ROUTER_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
+
+  profile_key="$(jq -r --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" --arg tty "${AGENT_TTY:-}" \
+    'if $tty == "1" and .[$p].ttyLogin == true then "" else .[$p].sandboxRouterKeyField // "" end' \
+    "${HOME}/.agent-profiles.json")"
+  export AGENT_SANDBOX_ROUTER_KEY_FIELD="${profile_key}"
+  export AGENT_OPENBAO_CHILD=1
+
+  if [ "${AGENT_MODE:-start}" = fix ]; then
+    openbao_agent_config=/etc/openbao-agent/read.hcl
+  else
+    openbao_agent_config=/etc/openbao-agent/write.hcl
+  fi
+  agent_status=0
+  bao agent -config="${openbao_agent_config}" || agent_status=$?
+  rm -f "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
+  exit "${agent_status}"
+fi
+unset AGENT_OPENBAO_CHILD AGENT_SANDBOX_ROUTER_KEY_FIELD
+
+configure_sandbox_mcp() {
+  local config_path config_content
+  case "${AGENT_TOOL}" in
+    zcode) config_path="${HOME}/.zcode/cli/config.json"; config_content="${ZCODE_MCP_CONFIG}" ;;
+    qwen-code) config_path="${HOME}/.qwen/settings.json"; config_content="${QWEN_MCP_CONFIG}" ;;
+    *) return 0 ;;
+  esac
+  mkdir -p "${config_path%/*}"
+  chmod 700 "${config_path%/*}"
+  printf '%s\n' "${config_content}" >"${config_path}"
+  chmod 600 "${config_path}"
+}
+
+trap '
+  rm -f "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
+  if [ "${AGENT_DISPATCHED_JOB:-}" = 1 ]; then
+    case "${AGENT_TOOL:-}" in
+      zcode) rm -f "${HOME}/.zcode/cli/config.json" "${HOME}/.zcode/v2/provider_config.json" ;;
+      qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
+    esac
+  fi
+  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
+    SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_SANDBOX_ROUTER_KEY_FIELD
+' EXIT
+if [ "${openbao_child:-}" = 1 ]; then
+  configure_sandbox_mcp
+fi
+unset openbao_child
 
 if [ -z "${AGENT_PROMPT:-}" ] && [ "${AGENT_TOOL}" != zcode-web ] && [ "${AGENT_TTY:-}" != 1 ]; then
   echo "agent-entrypoint: AGENT_PROMPT is required (or AGENT_SHELL=1)." >&2
@@ -338,8 +403,11 @@ case "${AGENT_TOOL}" in
     codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
     ;;
   qwen | qwen-code)
-    OPENAI_API_KEY="${AGENT_ROUTER_KEY}" qwen --auth-type openai --model "${AGENT_MODEL}" \
+    qwen_router_key=${AGENT_ROUTER_KEY}
+    unset AGENT_ROUTER_KEY
+    OPENAI_API_KEY="${qwen_router_key}" qwen --auth-type openai --model "${AGENT_MODEL}" \
       --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
+    unset qwen_router_key
     ;;
   zcode)
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
@@ -348,15 +416,16 @@ case "${AGENT_TOOL}" in
       # ZCode v2 provider_config.json schema is defined in nix-ai's
       # packages/provider-node/src/provider-config-file-codec.ts and
       # packages/provider/src/config/{provider-data-schema,rule-data-schema}.ts.
-      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
+      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+        jq -n \
         '{schemaVersion: 1, config: {
           providerOrder: ["agent-router"],
           providerConfigRules: {providerRules: [{
             providerId: "agent-router", providerName: "Agent Router", enabled: true,
             config: {
               group: "standard-personal",
-              access: {type: "api-key", apiKey: $key},
-              api: {type: "openai-chat-completions", baseUrl: $url},
+              access: {type: "api-key", apiKey: env.AGENT_ROUTER_KEY},
+              api: {type: "openai-chat-completions", baseUrl: env.AGENT_ROUTER_BASE_URL},
               personalModelIds: ["medium"]
             }
           }]},
@@ -366,28 +435,21 @@ case "${AGENT_TOOL}" in
       chmod 600 "${personal_provider_config}"
       export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="${personal_provider_config}"
     fi
+    unset AGENT_ROUTER_KEY
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
-      mkdir -p "${HOME}/.config/opencode"
-      jq -n --arg url "${AGENT_ROUTER_BASE_URL:-}" --arg key "${AGENT_ROUTER_KEY:-}" \
-        '{"$schema": "https://opencode.ai/config.json", model: "agent-router/medium",
-          small_model: "agent-router/small", provider: {"agent-router": {
-          npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-          options: {baseURL: $url, apiKey: $key},
-          models: {"medium": {name: "Medium"}, "small": {name: "Small"}}}}}' \
-        >"${HOME}/.config/opencode/opencode.json"
-      chmod 600 "${HOME}/.config/opencode/opencode.json"
-    fi
     opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
     ;;
   shell)
     bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
     ;;
   opencode-zai)
-    ZHIPU_API_KEY="${ZAI_SUBSCRIPTION_KEY}" opencode run --auto \
+    zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
+    unset ZAI_SUBSCRIPTION_KEY
+    ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto \
       --model zai-coding-plan/glm-5.3 "${AGENT_PROMPT}" || status=$?
+    unset zai_subscription_key
     ;;
   cursor-agent)
     cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
@@ -416,6 +478,11 @@ fi
 if [ "${AGENT_MODE}" = fix ]; then
   make_fix_outputs || exit $?
   if [ "${FIX_NO_CHANGE:-}" = 1 ]; then exit 0; fi
+  exit "${status}"
+fi
+
+if [ "${status}" -ne 0 ]; then
+  echo "agent-entrypoint: ${AGENT_TOOL} exited with status ${status}; refusing to publish." >&2
   exit "${status}"
 fi
 

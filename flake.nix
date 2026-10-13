@@ -77,13 +77,21 @@
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
-          agent-image = pkgs.callPackage ./nix/agent-image.nix {
-            renderAutonomous = nix-ai.lib.renderAutonomous;
-            zcodeWeb = nix-ai.packages.${system}.zcode-web;
-            inherit (pkgs) opencode;
-            cursorAgent = llm-agents.packages.${system}.cursor-agent;
-            qwenCode = llm-agents.packages.${system}.qwen-code;
-          };
+          agent-image =
+            let
+              mcpVersions = import "${nix-ai.outPath}/lib/versions.nix";
+              npmMcpPackages = import "${nix-ai.outPath}/modules/mcp/packages-npm.nix" { inherit pkgs; };
+            in
+            pkgs.callPackage ./nix/agent-image.nix {
+              renderAutonomous = nix-ai.lib.renderAutonomous;
+              zcodeWeb = nix-ai.packages.${system}.zcode-web;
+              vikunjaMcp = npmMcpPackages.vikunja-mcp;
+              zammadMcpVersion = mcpVersions.zammadMcp;
+              inherit (mcpVersions) mcpSdkBound;
+              inherit (pkgs) opencode uv;
+              cursorAgent = llm-agents.packages.${system}.cursor-agent;
+              qwenCode = llm-agents.packages.${system}.qwen-code;
+            };
         }
       );
 
@@ -138,15 +146,21 @@
                   git
                   gnutar
                   jq
+                  openbao
+                  python3
                 ];
+                # The OpenBao Agent test runs a loopback dev server.
+                __darwinAllowLocalNetworking = true;
               }
               ''
                 cp -r ${./tests} tests
-                chmod -R u+w tests
+                cp -r ${./templates} templates
+                chmod -R u+w tests templates
                 patchShebangs tests
                 AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
                   ENTRYPOINT=${./scripts/entrypoint.sh} \
-                  bats tests/agent-dispatch.bats
+                  BAO_BIN=${pkgs.openbao}/bin/bao \
+                  bats tests/agent-dispatch.bats tests/agent-bao-agent.bats
                 touch $out
               '';
           agent-cli-spool =
@@ -200,12 +214,16 @@
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
+                  .zcode.sandboxRouterKeyField == "router_key" and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .opencode.sandboxRouterKeyField == "router_key" and
                   .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .["opencode-local"].sandboxRouterKeyField == "router_key" and
                   .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY"] and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
-                  .["cursor-agent"].env == ["CURSOR_API_KEY"] and
+                  .["cursor-agent"].env == [] and .["cursor-agent"].ttyLogin == true and
                   .["qwen-code"].env == [] and .["qwen-code"].routerKeyField == "QWEN_CODE_ROUTER_KEY" and
+                  .["qwen-code"].sandboxRouterKeyField == "router_key" and
                   (.["qwen-code"] | has("ttyLogin") | not) and
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
