@@ -1621,3 +1621,20 @@ SH
   [ "$(jq -r .reason <<<"$output")" = 'guard: base file too large' ]
   [ "$(grep -c 'POST https://api.github.com/graphql' "$STUB_DIR/calls.log" || true)" -eq 0 ]
 }
+
+@test "the entrypoint preserves a failed tool exit and skips publication" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/failed-tool-home" tools="$BATS_TEST_TMPDIR/failed-tool-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":[]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+exit 37
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 37 ]
+  [[ $output == *"exited with status 37; refusing to publish"* ]]
+}

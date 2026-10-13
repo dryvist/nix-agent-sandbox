@@ -419,6 +419,11 @@ if [ "${AGENT_MODE}" = fix ]; then
   exit "${status}"
 fi
 
+if [ "${status}" -ne 0 ]; then
+  echo "agent-entrypoint: ${AGENT_TOOL} exited with status ${status}; refusing to publish." >&2
+  exit "${status}"
+fi
+
 # --- Publish ---------------------------------------------------------------
 # The branch/PR is the only durable output; the container is destroyed.
 #
