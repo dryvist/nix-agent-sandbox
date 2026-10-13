@@ -195,14 +195,18 @@ revoke_sandbox_token() {
 
 merge_mcp_config() {
   local path=$1 key=$2 tmp
-  local filter='def servers:
+  local filter
+  filter=$(cat <<'JQ'
+def servers:
     if $tool == "opencode" or $tool == "opencode-local" or $tool == "opencode-zai" then
       {vikunja:{type:"local",command:[$v],environment:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
        zammad:{type:"local",command:([$z] + $zargs),environment:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
     else
       {vikunja:{command:$v,args:[],env:{VIKUNJA_URL:env.VIKUNJA_URL,VIKUNJA_API_TOKEN:env.VIKUNJA_API_TOKEN}},
        zammad:{command:$z,args:$zargs,env:{ZAMMAD_URL:env.ZAMMAD_URL,ZAMMAD_HTTP_TOKEN:env.ZAMMAD_HTTP_TOKEN}}}
-    end;'
+    end;
+JQ
+  )
   local -a jq_args=(--arg key "$key" --arg tool "$AGENT_TOOL" \
     --arg v "$AGENT_MCP_VIKUNJA_COMMAND" --arg z "$AGENT_MCP_ZAMMAD_COMMAND" \
     --argjson zargs "$AGENT_MCP_ZAMMAD_ARGS")
@@ -569,6 +573,7 @@ case "${AGENT_TOOL}" in
       chmod 600 "${personal_provider_config}"
       export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="${personal_provider_config}"
     fi
+    unset AGENT_ROUTER_KEY
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
