@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Agent container entrypoint.
 #
 # Contract (all via environment):
