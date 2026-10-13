@@ -99,20 +99,41 @@ HCL
   role_id=$(BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" \
     read -field=role_id auth/approle/role/sandbox-agent-read/role-id)
   wrapped_id=$(BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" \
-    write -wrap-ttl=2m -f -field=wrap_info.token \
-    auth/approle/role/sandbox-agent-read/secret-id)
+    write -wrap-ttl=2m -f -format=json \
+    auth/approle/role/sandbox-agent-read/secret-id | jq -er '.wrap_info.token')
   printf '%s' "$role_id" >"$auth_dir/role-id"
   printf '%s' "$wrapped_id" >"$auth_dir/wrapped-secret-id"
   chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
 
-  printf '%s\n' '#!/bin/sh' 'set -eu' \
-    'test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"' \
-    'test "$VIKUNJA_API_TOKEN" = "$BAO_TEST_VIKUNJA_TOKEN"' \
-    'test "$ZAMMAD_HTTP_TOKEN" = "$BAO_TEST_ZAMMAD_TOKEN"' \
-    'test -z "${SANDBOX_ROLE_ID:-}"' \
-    'test -z "${SANDBOX_WRAPPED_SECRET_ID:-}"' \
-    'printf "%s" "$ZCODE_MCP_CONFIG" | jq -e ".mcp.servers.vikunja.command and .mcp.servers.zammad.command" >/dev/null' \
-    >"$child"
+  cat >"$child" <<'SH'
+#!/bin/sh
+set -eu
+test -z "${SANDBOX_ROLE_ID:-}"
+test -z "${SANDBOX_WRAPPED_SECRET_ID:-}"
+case "$AGENT_TOOL" in
+  zcode)
+    test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"
+    test -z "${VIKUNJA_API_TOKEN:-}"
+    test -z "${ZAMMAD_HTTP_TOKEN:-}"
+    printf '%s' "$ZCODE_MCP_CONFIG" | jq -e '
+      .mcp.servers.vikunja.command == ["/bin/vikunja-mcp"] and
+      .mcp.servers.zammad.command == "/bin/sandbox-zammad-mcp" and
+      .mcp.servers.vikunja.env.VIKUNJA_API_TOKEN == env.BAO_TEST_VIKUNJA_TOKEN and
+      .mcp.servers.zammad.env.ZAMMAD_HTTP_TOKEN == env.BAO_TEST_ZAMMAD_TOKEN
+    ' >/dev/null
+    ;;
+  opencode)
+    test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"
+    test "$VIKUNJA_API_TOKEN" = "$BAO_TEST_VIKUNJA_TOKEN"
+    test "$ZAMMAD_HTTP_TOKEN" = "$BAO_TEST_ZAMMAD_TOKEN"
+    printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
+      .mcp.vikunja.environment.VIKUNJA_API_TOKEN == "{env:VIKUNJA_API_TOKEN}" and
+      .mcp.zammad.environment.ZAMMAD_HTTP_TOKEN == "{env:ZAMMAD_HTTP_TOKEN}" and
+      .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}"
+    ' >/dev/null
+    ;;
+esac
+SH
   chmod 700 "$child"
   sed \
     -e "s#@AGENT_ENTRYPOINT@#${child}#" \
@@ -129,4 +150,44 @@ HCL
     BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
     "$BAO_BIN" agent -config="$config" >/dev/null 2>&1
   [ ! -e "$auth_dir/wrapped-secret-id" ]
+
+  wrapped_id=$(BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" \
+    write -wrap-ttl=2m -f -format=json \
+    auth/approle/role/sandbox-agent-read/secret-id | jq -er '.wrap_info.token')
+  printf '%s' "$role_id" >"$auth_dir/role-id"
+  printf '%s' "$wrapped_id" >"$auth_dir/wrapped-secret-id"
+  chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
+  BAO_ADDR="$address" AGENT_TOOL=opencode \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key \
+    AGENT_ROUTER_BASE_URL=https://router.test/v1 \
+    AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
+    AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]' \
+    BAO_TEST_ROUTER_KEY=router-test-key \
+    BAO_TEST_VIKUNJA_TOKEN=vikunja-test-token \
+    BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
+    "$BAO_BIN" agent -config="$config" >/dev/null 2>&1
+  [ ! -e "$auth_dir/wrapped-secret-id" ]
+}
+
+@test "ZCode MCP configuration is private and removed after a dispatched job" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/zcode-home" tools="$BATS_TEST_TMPDIR/zcode-tools"
+  local config='{"mcp":{"servers":{"vikunja":{"env":{"VIKUNJA_API_TOKEN":"vikunja-test-token"}},"zammad":{"env":{"ZAMMAD_HTTP_TOKEN":"zammad-test-token"}}}}}'
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":[]}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+jq -e '.mcp.servers.vikunja.env.VIKUNJA_API_TOKEN == "vikunja-test-token" and
+  .mcp.servers.zammad.env.ZAMMAD_HTTP_TOKEN == "zammad-test-token"' \
+  "$HOME/.zcode/cli/config.json" >/dev/null
+test "$(ls -l "$HOME/.zcode/cli/config.json" | cut -c2-10)" = rw-------
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 \
+    AGENT_DISPATCHED_JOB=1 AGENT_OPENBAO_CHILD=1 AGENT_TOOL=zcode \
+    AGENT_PROMPT='Inspect the repository' ZCODE_MCP_CONFIG="$config" \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$home/.zcode/cli/config.json" ]
 }

@@ -346,7 +346,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   done
 }
 
-@test "OpenCode batch profiles configure the router and fix profiles configure their models" {
+@test "OpenCode batch profiles select models and profile credentials" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
   mkdir -p "$home" "$tools"
@@ -358,7 +358,6 @@ SH
   bash_stub "$tools/opencode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/opencode-fix-argv"
 printf '%s\n' "${ZHIPU_API_KEY:-unset}" >"$STUB_DIR/opencode-fix-zai-key"
-cp "$HOME/.config/opencode/opencode.json" "$STUB_DIR/opencode-fix-config" 2>/dev/null || true
 SH
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
@@ -366,15 +365,7 @@ SH
     AGENT_TOOL=opencode-local AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/medium\nrouter prompt' ]
-  jq -e '.provider | keys == ["agent-router"] and
-    .["agent-router"].npm == "@ai-sdk/openai-compatible" and
-    .["agent-router"].options.baseURL == "https://router.test/v1" and
-    .["agent-router"].options.apiKey == "router-test-key" and
-    (.["agent-router"].models | keys == ["medium", "small"])' \
-    "$home/.config/opencode/opencode.json"
-  jq -e '.model == "agent-router/medium" and
-    .small_model == "agent-router/small"' "$home/.config/opencode/opencode.json"
-  [ "$(ls -l "$home/.config/opencode/opencode.json" | cut -c2-10)" = rw------- ]
+  [ ! -e "$home/.config/opencode/opencode.json" ]
 
   printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' >"$home/.agent-env"
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
@@ -1076,7 +1067,6 @@ echo 1000
 SH
 bash_stub "$tools/opencode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
-cp "$HOME/.config/opencode/opencode.json" "$STUB_DIR/opencode-batch-config"
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = opencode-router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
@@ -1093,10 +1083,7 @@ SH
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/medium\nopencode prompt' ]
-  jq -e '.model == "agent-router/medium" and .small_model == "agent-router/small" and
-    .provider["agent-router"].options == {baseURL: "https://router.test/v1", apiKey: "opencode-router-test-key"} and
-    (.provider["agent-router"].models | keys == ["medium", "small"])' \
-    "$STUB_DIR/opencode-batch-config"
+  [ ! -e "$home/.config/opencode/opencode.json" ]
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"
