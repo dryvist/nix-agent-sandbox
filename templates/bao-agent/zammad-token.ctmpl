@@ -1,0 +1,5 @@
+{{- if or (eq (env "AGENT_TOOL") "zcode") (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") (eq (env "AGENT_TOOL") "qwen-code") -}}
+{{- with secret "secret/data/apps/sandbox-agent" -}}
+{{- .Data.data.zammad_token -}}
+{{- end -}}
+{{- end -}}

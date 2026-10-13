@@ -1,0 +1,3 @@
+{{- if eq (env "AGENT_TOOL") "zcode" -}}
+{"mcp":{"servers":{"vikunja":{"command":{{ env "AGENT_MCP_VIKUNJA_COMMAND" | toJSON }},"args":[]},"zammad":{"command":{{ env "AGENT_MCP_ZAMMAD_COMMAND" | toJSON }},"args":{{ env "AGENT_MCP_ZAMMAD_ARGS" }}}}}}
+{{- end -}}

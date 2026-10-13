@@ -29,6 +29,7 @@
   jq,
   nix,
   nodejs_24,
+  openbao,
   opencode,
   qwenCode,
   ripgrep,
@@ -105,6 +106,7 @@ let
     gnugrep
     jq
     nix
+    openbao
     ripgrep
   ];
 
@@ -130,6 +132,27 @@ let
   profilesFile = writeTextDir "${lib.removePrefix "/" homeDir}/.agent-profiles.json" (
     builtins.toJSON (import ./task-profiles.nix)
   );
+
+  baoAgentFiles = lib.mapAttrsToList (path: contents: writeTextDir path contents) {
+    "etc/openbao-agent/read.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read.hcl);
+    "etc/openbao-agent/write.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write.hcl);
+    "etc/openbao-agent/templates/router-key.ctmpl" =
+      builtins.readFile ../templates/bao-agent/router-key.ctmpl;
+    "etc/openbao-agent/templates/vikunja-token.ctmpl" =
+      builtins.readFile ../templates/bao-agent/vikunja-token.ctmpl;
+    "etc/openbao-agent/templates/zammad-token.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zammad-token.ctmpl;
+    "etc/openbao-agent/templates/opencode-config.ctmpl" =
+      builtins.readFile ../templates/bao-agent/opencode-config.ctmpl;
+    "etc/openbao-agent/templates/zcode-mcp.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zcode-mcp.ctmpl;
+    "etc/openbao-agent/templates/qwen-mcp.ctmpl" =
+      builtins.readFile ../templates/bao-agent/qwen-mcp.ctmpl;
+  };
 
   zcodeInstructions = writeTextDir "${lib.removePrefix "/" homeDir}/.zcode/AGENTS.md" (
     builtins.readFile ../templates/zcode/AGENTS.md
@@ -158,6 +181,7 @@ dockerTools.streamLayeredImage {
     toolPackages
     ++ basePackages
     ++ configFiles
+    ++ baoAgentFiles
     ++ [
       profilesFile
       zcodeInstructions
