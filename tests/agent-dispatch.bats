@@ -391,7 +391,8 @@ SH
   rec=$(http_rec "POST https://bao.test/v1/auth/approle/login")
   [ "$(jq -cS . "$rec.body")" = '{"role_id":"role-id-value","secret_id":"secret-id-value"}' ]
   rec=$(http_rec "POST https://bao.test/v1/github-agents/token")
-  [ "$(jq -cS . "$rec.body")" = '{"installation_id":"4242","permissions":{"contents":"write","pull_requests":"write"},"repositories":"nix-ai"}' ]
+  [ "$(jq -cS . "$rec.body")" = '{"org_name":"dryvist","permissions":{"contents":"write","pull_requests":"write"},"repositories":"nix-ai"}' ]
+  [ "$(jq -r 'has("installation_id") | not' "$rec.body")" = true ]
   grep -qx 'X-Vault-Token: s.tok1' "$rec.hdr"
   rec=$(http_rec "GET https://api.github.com/installation/repositories")
   grep -qx 'Authorization: Bearer ghs_minted_secret' "$rec.hdr"
@@ -1499,8 +1500,8 @@ SH
     fi
   done
   [ -n "$read_mint" ] && [ -n "$write_mint" ]
-  jq -e '.permissions == {contents: "read"} and .repositories == "nix-ai"' <<<"$read_mint"
-  jq -e '.permissions == {contents: "write", pull_requests: "write"}' <<<"$write_mint"
+  jq -e '.org_name == "dryvist" and .repositories == "nix-ai" and .permissions == {contents: "read"} and (has("installation_id") | not)' <<<"$read_mint"
+  jq -e '.org_name == "dryvist" and .repositories == "nix-ai" and .permissions == {contents: "write", pull_requests: "write"} and (has("installation_id") | not)' <<<"$write_mint"
   grep -qx 'docker rm -f cid0123' "$STUB_DIR/argv.log"
   no_secret_on_a_command_line
 }

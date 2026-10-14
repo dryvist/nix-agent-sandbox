@@ -247,8 +247,8 @@ passed as container arguments or mounts.
 | `AGENT_PUBLISH_MAX_BYTES` | encoded change size and copied fix output cap (default 8 MiB) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
-Profile fields read: `GITHUB_AGENTS_INSTALLATION_ID`, external profile values
-requested by a tool, and the `sandbox-agent` leaf fields used by the entrypoint.
+Profile fields read: external profile values requested by a tool, and the
+`sandbox-agent` leaf fields used by the entrypoint.
 Result
 delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 `NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.
