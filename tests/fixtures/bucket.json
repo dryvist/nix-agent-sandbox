@@ -1,7 +1,6 @@
 {
   "data": {
     "data": {
-      "GITHUB_AGENTS_INSTALLATION_ID": "4242",
       "ZCODE_ROUTER_KEY": "zcode-router-secret-value",
       "OPENCODE_ROUTER_KEY": "opencode-router-secret-value",
       "QWEN_CODE_ROUTER_KEY": "qwen-code-router-secret-value",

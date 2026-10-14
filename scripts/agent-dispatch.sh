@@ -214,8 +214,8 @@ credential_value() {
   if [ "$1" = ZAI_SUBSCRIPTION_KEY ]; then external_field "$1"; else field "$1"; fi
 }
 
-# The token must list exactly the job's repo: the mint request names only the
-# repo, so this is where the owner is checked.
+# The token must list exactly the job's repo; the mint request names its owner
+# and repository.
 scope_ok() {
   local resp
   resp=$(curl -sS --fail-with-body --max-time 30 \
@@ -778,7 +778,7 @@ publish_fix_token() {
 # publish_fix <id> <run> <container> <service-token>: mint the write token
 # only after the container has exited, then revoke it on every path.
 publish_fix() {
-  local id=$1 run=$2 cid=$3 tok=$4 repo iid bucket mint gh
+  local id=$1 run=$2 cid=$3 tok=$4 repo bucket mint gh
   local rdir="$STATE_DIR/$1/runs/$2"
   local tmp request max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" archive_size cp_rc rc=0
   repo=$(job_get "$id" .repo)
@@ -807,14 +807,8 @@ publish_fix() {
     return 1
   fi
   bucket=$(bao_req GET "$BUCKET" "$tok") || bucket=""
-  iid=$(field GITHUB_AGENTS_INSTALLATION_ID)
-  if [ -z "$iid" ]; then
-    echo "bucket has no GITHUB_AGENTS_INSTALLATION_ID" >"$rdir/reason"
-    rm -rf "$tmp"
-    return 1
-  fi
-  request=$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
-    '{installation_id: $i, repositories: $r, permissions: {contents: "write", pull_requests: "write"}}')
+  request=$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
+    '{org_name: $o, repositories: $r, permissions: {contents: "write", pull_requests: "write"}}')
   mint=$(bao_req POST github-agents/token "$tok" "$request") || mint=""
   gh=$(jq -r '.data.token // empty' <<<"$mint")
   if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
@@ -994,7 +988,7 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" iid mint gh="" budget cid name request
+  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" mint gh="" budget cid name request
   local router_key_field="" sandbox_role_id="" sandbox_wrapped_secret_id="" sandbox_role="" role_response wrapped_response reason value
   local -a names args
   JOB_REDACT_VALUES=()
@@ -1030,11 +1024,6 @@ run_job() {
   }
   bucket=$(bao_req GET "$BUCKET" "$tok") || {
     abort "$id" "$run" "bucket read failed" "$tok"
-    return 1
-  }
-  iid=$(field GITHUB_AGENTS_INSTALLATION_ID)
-  [ -n "$iid" ] || {
-    abort "$id" "$run" "bucket has no GITHUB_AGENTS_INSTALLATION_ID" "$tok"
     return 1
   }
   mapfile -t names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
@@ -1079,17 +1068,17 @@ run_job() {
   fi
 
   if [ "$mode" = fix ]; then
-    request=$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
-      '{installation_id: $i, repositories: $r, permissions: {contents: "read"}}')
+    request=$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
+      '{org_name: $o, repositories: $r, permissions: {contents: "read"}}')
     mint=$(bao_req POST github-agents/token "$tok" "$request") || {
       abort "$id" "$run" "github token mint refused for $repo" "$tok"
       return 1
     }
   else
   # One repo, contents + pull requests only (no workflow edits). The
-  # installation id and repo travel as strings, the form the policy matches.
-  mint=$(bao_req POST github-agents/token "$tok" "$(jq -cn --arg i "$iid" --arg r "${repo#*/}" \
-    '{installation_id: $i, repositories: $r,
+  # org name and repository travel as strings, the form the policy matches.
+  mint=$(bao_req POST github-agents/token "$tok" "$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
+    '{org_name: $o, repositories: $r,
       permissions: {contents: "write", pull_requests: "write"}}')") || {
     abort "$id" "$run" "github token mint refused for $repo" "$tok"
     return 1
