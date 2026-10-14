@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.1...v1.2.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **dispatch:** mint the agents token by repository owner name ([#105](https://github.com/dryvist/nix-agent-sandbox/issues/105)) ([4d21c4a](https://github.com/dryvist/nix-agent-sandbox/commit/4d21c4ac249abe08c6eabd21475a744ee72c922b))
+
 ## [1.2.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.0...v1.2.1) (2026-10-14)
 
 
