@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.0...v1.2.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **entrypoint:** define the agent-router provider for the OpenCode batch run ([#103](https://github.com/dryvist/nix-agent-sandbox/issues/103)) ([37e261e](https://github.com/dryvist/nix-agent-sandbox/commit/37e261eb3c457494e2e976e93bf75cb67d897c12))
+
 ## [1.2.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.1.1...v1.2.0) (2026-10-13)
 
 
