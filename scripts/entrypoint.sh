@@ -439,7 +439,22 @@ case "${AGENT_TOOL}" in
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
+    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
+      opencode_config="${HOME}/.config/opencode/opencode.json"
+      mkdir -p "${opencode_config%/*}"
+      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
+        jq -n \
+        '{provider: {"agent-router": {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Agent Router",
+          options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
+          models: {medium: {name: "medium"}}
+        }}}' >"${opencode_config}"
+      chmod 600 "${opencode_config}"
+      export OPENCODE_CONFIG="${opencode_config}"
+    fi
     opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
+    unset AGENT_ROUTER_KEY
     ;;
   shell)
     bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
