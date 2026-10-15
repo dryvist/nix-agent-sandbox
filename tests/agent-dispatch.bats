@@ -20,6 +20,7 @@ setup() {
   : "${AGENT_DISPATCH_BIN:?set AGENT_DISPATCH_BIN to the agent-dispatch bin dir}"
   export STUB_DIR="$BATS_TEST_TMPDIR/stub"
   mkdir -p "$STUB_DIR"
+  export BAO_BIN="$BATS_TEST_DIRNAME/stubs/bao"
   : >"$STUB_DIR/argv.log"
   : >"$STUB_DIR/calls.log"
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
@@ -285,7 +286,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 }
 
 @test "sandbox credentials and profile values arrive in a mode-0600 env file" {
-  local env_data rec
+  local env_data
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
@@ -298,8 +299,10 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   grep -qx 'GIT_MIRROR_URL=https://mirror.test/public' <<<"$env_data"
   [[ ! $env_data =~ AGENT_ROUTER_KEY|OPENBAO_APPROLE|s\.tok ]]
   grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-agent-write/role-id' "$STUB_DIR/calls.log"
-  rec=$(http_rec "POST https://bao.test/v1/auth/approle/role/sandbox-agent-write/secret-id")
-  grep -qx 'X-Vault-Wrap-TTL: 15m' "$rec.hdr"
+  grep -Fx 'bao write -address=https://bao.test -wrap-ttl=15m -format=json -f auth/approle/role/sandbox-agent-write/secret-id' \
+    "$STUB_DIR/argv.log"
+  grep -qx 'set' "$STUB_DIR/bao-token-present"
+  run ! grep -q '^curl .*secret-id' "$STUB_DIR/argv.log"
   [ "$(tar -tvf "$STUB_DIR/cp.1.tar" | grep -c -- '^-rw------- 1000/1000 ')" -eq 2 ]
   [ "$(line_of 'docker create')" -lt "$(line_of 'docker cp')" ]
   [ "$(line_of 'docker cp')" -lt "$(line_of 'docker start')" ]

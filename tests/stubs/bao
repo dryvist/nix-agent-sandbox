@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'bao'
+  printf ' %q' "$@"
+  printf '\n'
+} >>"$STUB_DIR/argv.log"
+
+[ "${BAO_TOKEN:+set}" = set ]
+[ "$#" -eq 6 ]
+[ "$1" = write ]
+[ "$2" = -address=https://bao.test ]
+[ "$3" = -wrap-ttl=15m ]
+[ "$4" = -format=json ]
+[ "$5" = -f ]
+case "$6" in
+  auth/approle/role/sandbox-agent-write/secret-id | auth/approle/role/sandbox-agent-read/secret-id) ;;
+  *) exit 1 ;;
+esac
+
+printf '%s\n' "${BAO_TOKEN:+set}" >"$STUB_DIR/bao-token-present"
+printf '%s\n' '{"wrap_info":{"token":"sandbox-agent-wrapped-id-value"}}'
