@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.3.0...v1.3.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **entrypoint:** quote the repo-less README without shellcheck findings ([28d871a](https://github.com/dryvist/nix-agent-sandbox/commit/28d871ab724f0d283eec601deaf9fd17c2e66e35))
+
 ## [1.3.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.3...v1.3.0) (2026-10-15)
 
 
