@@ -6,7 +6,7 @@
 #
 #   start <tool> <owner/repo> <prompt...>
 #   fix <tool> <owner/repo> <branch> <sha> <prompt...>
-#   tty <tool> <owner/repo>        (only with a terminal: ssh -t)
+#   tty <tool> [owner/repo]        (only with a terminal: ssh -t; repo-less zcode only)
 #   continue <job-id> <message...>
 #   status <job-id>
 #   cancel <job-id>
@@ -67,6 +67,11 @@ case "$verb" in
     [ -t 0 ] && [ -t 1 ] || refuse
     pop
     tool="$word"
+    trim
+    if [ -z "$line" ]; then
+      [ "$tool" = zcode ] || refuse
+      exec agent-dispatch start --tty "$tool"
+    fi
     pop
     repo="$word"
     trim

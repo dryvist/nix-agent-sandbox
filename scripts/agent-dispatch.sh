@@ -1,11 +1,12 @@
 # The `agent-dispatch` host dispatcher (wrapped by writeShellApplication).
 #
-# Runs on the sandbox Docker host. A job is one disposable container plus one
-# named Docker volume, `agent-job-<id>`, mounted at /home/agent/work as its
-# workspace. Every verb prints one JSON object on stdout.
+# Runs on the sandbox Docker host. A repo job is one disposable container plus
+# one named Docker volume, `agent-job-<id>`, mounted at /home/agent/work. A
+# repo-less zcode terminal gets a read-only public-mirror workspace. Every verb
+# prints one JSON object on stdout.
 #
 #   start <tool> <owner/repo> <prompt>
-#   start --tty <tool> <owner/repo>
+#   start --tty <tool> [owner/repo]
 #   fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
 #   continue <job-id> <message>
 #   status <job-id>
@@ -48,7 +49,7 @@ usage() {
 usage:
   agent-dispatch start <tool> <owner/repo> <prompt>
   agent-dispatch fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
-  agent-dispatch start --tty <tool> <owner/repo>
+  agent-dispatch start --tty <tool> [owner/repo]
   agent-dispatch continue <job-id> <message>
   agent-dispatch status <job-id>
   agent-dispatch cancel <job-id>
@@ -868,7 +869,7 @@ finalize() {
     echo "exit ${code:-unknown}" >"$rdir/reason"
   fi
   if [ -n "$cid" ]; then
-    if [ "$mode" != fix ]; then
+    if [ "$mode" != fix ] && [ -n "$(job_get "$id" .repo)" ]; then
       pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
@@ -914,7 +915,7 @@ abort_login() {
 # the `docker create` arguments, into $args. Only non-secret values appear
 # here.
 container_args() {
-  local proxy="${AGENT_PROXY_URL:-http://proxy:3128}"
+  local proxy="${AGENT_PROXY_URL:-http://proxy:3128}" workspace
   args=(
     --name "agent-$1-$2"
     --label "agent-dispatch.job=$1"
@@ -925,21 +926,28 @@ container_args() {
     -e "https_proxy=$proxy"
     -e "AGENT_TOOL=$3"
     -e "AGENT_PROFILE=$3"
-    -e AGENT_DISPATCHED_JOB=1
-    -e "AGENT_REPO=$4"
     -e "AGENT_RUN_ID=$1"
-    -v "agent-job-$1:/home/agent/work"
     --memory "${AGENT_MEMORY:-$AGENT_MEMORY_DEFAULT}"
     --cpus "${AGENT_CPUS:-$AGENT_CPUS_DEFAULT}"
     --pids-limit "${AGENT_PIDS_LIMIT:-$AGENT_PIDS_LIMIT_DEFAULT}"
     --security-opt no-new-privileges
     --cap-drop ALL
   )
+  if [ -n "$4" ]; then
+    args+=(-e AGENT_DISPATCHED_JOB=1 -e "AGENT_REPO=$4" -v "agent-job-$1:/home/agent/work")
+  else
+    workspace="$STATE_DIR/$1/runs/$2/work"
+    mkdir -p "$workspace"
+    printf '%s\n' "Public mirror repositories: \${GIT_MIRROR_URL}/<owner>/<repo>." >"$workspace/README.md"
+    chmod 755 "$workspace"
+    chmod 644 "$workspace/README.md"
+    args+=(-e AGENT_PUBLIC_MIRROR=1 -v "$workspace:/home/agent/work:ro")
+  fi
   if [ "$7" = fix ]; then
     args+=(--label agent-dispatch.mode=fix -e AGENT_MODE=fix
       -e "AGENT_BRANCH=$(job_get "$1" .branch)"
       -e "AGENT_EXPECTED_SHA=$(job_get "$1" .expected_sha)")
-  else
+  elif [ -n "$4" ]; then
     args+=(-e AGENT_PR_DRAFT=1)
   fi
   if [ "$5" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
@@ -951,19 +959,23 @@ container_args() {
 # files owned by the container's uid 1000, streamed in with `docker cp`.
 # Uses the caller's $names, $bucket, $gh and optional router key.
 deliver() {
-  local tmp name value rc=0
+  local tmp name value rc=0 repo=${4:-}
   tmp=$(mktemp -d)
   {
     JOB_REDACT_VALUES=()
-    if [ "$3" != fix ]; then
-      printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"
-      JOB_REDACT_VALUES+=("$gh")
+    if [ -n "$repo" ]; then
+      if [ "$3" != fix ]; then
+        printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "$gh" "$gh"
+        JOB_REDACT_VALUES+=("$gh")
+      fi
+      printf 'BAO_ADDR=%s\nSANDBOX_ROLE_ID=%s\nSANDBOX_WRAPPED_SECRET_ID=%s\n' \
+        "$BAO_ADDR" "$sandbox_role_id" "$sandbox_wrapped_secret_id"
+      JOB_REDACT_VALUES+=("$sandbox_role_id" "$sandbox_wrapped_secret_id")
+      printf 'GIT_MIRROR_URL=%s\nVIKUNJA_URL=%s\nZAMMAD_URL=%s\n' \
+        "$GIT_MIRROR_URL" "$VIKUNJA_URL" "$ZAMMAD_URL"
+    else
+      printf 'GIT_MIRROR_URL=%s\n' "$GIT_MIRROR_URL"
     fi
-    printf 'BAO_ADDR=%s\nSANDBOX_ROLE_ID=%s\nSANDBOX_WRAPPED_SECRET_ID=%s\n' \
-      "$BAO_ADDR" "$sandbox_role_id" "$sandbox_wrapped_secret_id"
-    JOB_REDACT_VALUES+=("$sandbox_role_id" "$sandbox_wrapped_secret_id")
-    printf 'GIT_MIRROR_URL=%s\nVIKUNJA_URL=%s\nZAMMAD_URL=%s\n' \
-      "$GIT_MIRROR_URL" "$VIKUNJA_URL" "$ZAMMAD_URL"
     for name in "${names[@]}"; do
       value=$(credential_value "$name")
       single_line "$value" || rc=1
@@ -1067,6 +1079,7 @@ run_job() {
     return 1
   fi
 
+  if [ -n "$repo" ]; then
   if [ "$mode" = fix ]; then
     request=$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
       '{org_name: $o, repositories: $r, permissions: {contents: "read"}}')
@@ -1121,19 +1134,20 @@ run_job() {
     abort "$id" "$run" "sandbox SecretID wrapping returned no token" "$tok"
     return 1
   fi
+  fi
 
   budget="${AGENT_TIMEOUT:-$AGENT_TIMEOUT_DEFAULT}"
   echo "$budget" >"$rdir/budget"
   echo "$lease" >"$rdir/ttl"
   container_args "$id" "$run" "$tool" "$repo" "$cont" "$tty" "$mode"
   cid=$(docker create "${args[@]}") || {
-    bao_revoke_wrap "$sandbox_wrapped_secret_id"
+    if [ -n "$sandbox_wrapped_secret_id" ]; then bao_revoke_wrap "$sandbox_wrapped_secret_id"; fi
     abort "$id" "$run" "container create failed" "$tok"
     return 1
   }
   echo "$cid" >"$rdir/cid"
-  deliver "$cid" "$prompt" "$mode" || {
-    bao_revoke_wrap "$sandbox_wrapped_secret_id"
+  deliver "$cid" "$prompt" "$mode" "$repo" || {
+    if [ -n "$sandbox_wrapped_secret_id" ]; then bao_revoke_wrap "$sandbox_wrapped_secret_id"; fi
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1
   }
@@ -1145,7 +1159,7 @@ run_job() {
     return 1
   fi
   docker start "$cid" >/dev/null || {
-    bao_revoke_wrap "$sandbox_wrapped_secret_id"
+    if [ -n "$sandbox_wrapped_secret_id" ]; then bao_revoke_wrap "$sandbox_wrapped_secret_id"; fi
     abort "$id" "$run" "container start failed" "$tok"
     return 1
   }
@@ -1330,21 +1344,29 @@ parse_fix_prompt() {
 }
 
 cmd_start() {
-  local tty=0 tool repo prompt id dir reason
+  local tty=0 tool repo="" prompt="" id dir reason
   if [ "${1:-}" = --tty ]; then
     tty=1
     shift
   fi
   if [ "$tty" = 1 ]; then
-    [ $# -eq 2 ] || usage
+    case $# in
+      1) tool=$1 ;;
+      2) tool=$1 repo=$2 ;;
+      *) usage ;;
+    esac
   else
     [ $# -eq 3 ] || usage
+    tool=$1 repo=$2 prompt=$3
   fi
-  tool=$1 repo=$2 prompt=${3:-}
   valid_tool "$tool" || refuse "unknown tool"
-  valid_repo "$repo" || refuse "invalid owner/repo"
-  reason=$(repo_scope_guard "$repo")
-  [ -z "$reason" ] || refuse "$reason"
+  if [ -n "$repo" ]; then
+    valid_repo "$repo" || refuse "invalid owner/repo"
+    reason=$(repo_scope_guard "$repo")
+    [ -z "$reason" ] || refuse "$reason"
+  else
+    [ "$tty" = 1 ] && [ "$tool" = zcode ] || refuse "repo-less terminal sessions are only available for zcode"
+  fi
   if [ "$tty" = 0 ]; then
     valid_text "$prompt" || refuse "invalid prompt"
     [[ ${prompt%%$'\n'*} != CI-RESOLVER* ]] || refuse "CI-RESOLVER header requires fix"
@@ -1548,7 +1570,9 @@ cmd_refresh() {
             sleep 0.1
           done
         fi
-        docker volume rm -f "agent-job-$id" >/dev/null 2>&1 || true
+        if [ -n "$(job_get "$id" .repo)" ]; then
+          docker volume rm -f "agent-job-$id" >/dev/null 2>&1 || true
+        fi
         rm -rf "$dir"
         pruned+=("$id")
       fi
