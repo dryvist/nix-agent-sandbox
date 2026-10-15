@@ -259,7 +259,7 @@ if [ "${AGENT_PUBLIC_MIRROR:-}" = 1 ] && [ -z "${AGENT_REPO:-}" ] && \
   case "$mirror_url" in
     *[[:space:]]*) echo "agent-entrypoint: invalid GIT_MIRROR_URL." >&2; exit 64 ;;
   esac
-  mirror_readme='Public mirror repositories: ${GIT_MIRROR_URL}/<owner>/<repo>.'
+  mirror_readme="Public mirror repositories: \${GIT_MIRROR_URL}/<owner>/<repo>."
   if [ ! -f README.md ]; then
     printf '%s\n' "$mirror_readme" >README.md || {
       echo "agent-entrypoint: repo-less workspace README is missing." >&2
