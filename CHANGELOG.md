@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.3...v1.3.0) (2026-10-15)
+
+
+### Features
+
+* **dispatch:** allow repo-less zcode mirror sessions ([e3ac62b](https://github.com/dryvist/nix-agent-sandbox/commit/e3ac62b7eedcee859c9d6bb51b37bd58349b76b6))
+
 ## [1.2.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.2...v1.2.3) (2026-10-15)
 
 
