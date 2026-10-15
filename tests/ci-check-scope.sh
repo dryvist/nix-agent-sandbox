@@ -21,6 +21,7 @@ expect $'full=false\nimage=false\ntargets=' push refs/heads/develop
 expect $'full=false\nimage=false\ntargets=agent-cli-spool' workflow_dispatch refs/heads/main
 expect $'full=false\nimage=false\ntargets=agent-cli,agent-cli-spool' pull_request refs/pull/1/merge scripts/agent-cli.sh
 expect $'full=false\nimage=true\ntargets=agent-image' pull_request refs/pull/1/merge tests/agent-image-smoke.bats
+expect $'full=false\nimage=true\ntargets=agent-image' pull_request refs/pull/1/merge nix/zammad-mcp.nix
 expect $'full=false\nimage=false\ntargets=agent-dispatch' pull_request refs/pull/1/merge tests/agent-bao-agent.bats templates/bao-agent/read.hcl
 expect $'full=false\nimage=false\ntargets=sandbox-contract' pull_request refs/pull/1/merge nix/task-profiles.nix
 expect $'full=false\nimage=false\ntargets=ci-resolver' pull_request refs/pull/1/merge scripts/ci-resolver.py tests/test_ci_resolver.py
