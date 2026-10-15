@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.3.1...v1.4.0) (2026-10-15)
+
+
+### Features
+
+* **image:** package Zammad MCP dependencies ([e026324](https://github.com/dryvist/nix-agent-sandbox/commit/e0263245b88cca444316ffd56496caf647c5aeaf))
+
 ## [1.3.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.3.0...v1.3.1) (2026-10-15)
 
 
