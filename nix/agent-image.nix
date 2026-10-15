@@ -33,10 +33,8 @@
   opencode,
   qwenCode,
   ripgrep,
-  uv,
   vikunjaMcp,
-  zammadMcpVersion,
-  mcpSdkBound,
+  zammadMcp,
   renderAutonomous,
   zcodeWeb,
 }:
@@ -68,17 +66,13 @@ let
     '';
   };
 
-  zammadMcp = writeShellApplication {
+  zammadMcpWrapper = writeShellApplication {
     name = "sandbox-zammad-mcp";
     runtimeInputs = [
       coreutils
-      uv
+      zammadMcp
     ];
-    text = ''
-      exec env -u PYTHONPATH -u PYTHONHOME uvx --from \
-        ${lib.escapeShellArg "git+https://github.com/basher83/zammad-mcp.git@v${zammadMcpVersion}"} \
-        --with ${lib.escapeShellArg mcpSdkBound} mcp-zammad "$@"
-    '';
+    text = builtins.readFile ../scripts/zammad-mcp.sh;
   };
 
   toolPackages = [
@@ -88,8 +82,7 @@ let
     zcodeWebSupervisor
     zcodeWebTask
     vikunjaMcp
-    uv
-    zammadMcp
+    zammadMcpWrapper
     opencode
     cursorAgent
     qwenCode

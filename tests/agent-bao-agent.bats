@@ -43,9 +43,9 @@ SH
 
   for mode in start fix; do
     if [ "$mode" = fix ]; then
-      expected_config=read
+      expected_config="read"
     else
-      expected_config=write
+      expected_config="write"
     fi
     run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$BATS_TEST_TMPDIR" \
       STUB_AUTH_DIR="$auth_dir" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
@@ -236,4 +236,10 @@ SH
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ ! -e "$home/.zcode/cli/config.json" ]
+}
+@test "Zammad MCP wrapper invokes the packaged command without uvx" {
+  local wrapper="${ZAMMAD_MCP_WRAPPER_SOURCE:?}"
+  run grep -Fq uvx "${wrapper}"
+  [ "$status" -eq 1 ]
+  grep -Fq 'exec env -u PYTHONPATH -u PYTHONHOME mcp-zammad "$@"' "${wrapper}"
 }

@@ -48,7 +48,7 @@ elif [[ $event == pull_request ]]; then
       nix/task-profiles.nix|nix/egress-domains.nix|nix/repo-groups.nix)
         add_target sandbox-contract
         ;;
-      nix/agent-image.nix|tests/agent-image-smoke.bats|nix/agent-image-*.nix)
+      nix/agent-image.nix|nix/zammad-mcp.nix|scripts/zammad-mcp.sh|tests/agent-image-smoke.bats|nix/agent-image-*.nix)
         add_target agent-image
         image=true
         ;;
