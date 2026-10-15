@@ -10,6 +10,7 @@
   coreutils,
   gnutar,
   jq,
+  openbao,
 }:
 
 let
@@ -21,6 +22,7 @@ let
       coreutils
       gnutar
       jq
+      openbao
     ];
     # The image and host dispatcher share one task-profile table.
     text = ''

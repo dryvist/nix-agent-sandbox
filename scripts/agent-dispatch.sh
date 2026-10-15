@@ -192,9 +192,8 @@ bao_revoke() {
 }
 
 bao_wrap_req() {
-  curl -sS --fail-with-body --max-time 60 -X POST \
-    -H @<(printf 'X-Vault-Token: %s\n' "$2") \
-    -H 'X-Vault-Wrap-TTL: 15m' "${BAO_ADDR:?}/v1/auth/approle/role/$1/secret-id"
+  BAO_TOKEN="$2" "${BAO_BIN:-bao}" write -address="${BAO_ADDR:?}" \
+    -wrap-ttl=15m -format=json -f "auth/approle/role/$1/secret-id"
 }
 
 bao_revoke_wrap() {
