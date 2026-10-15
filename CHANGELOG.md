@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.2...v1.2.3) (2026-10-15)
+
+
+### Bug Fixes
+
+* **dispatch:** mint wrapped SecretIDs with the bao CLI ([108acfc](https://github.com/dryvist/nix-agent-sandbox/commit/108acfc29eb233bf3efd22268fb3f4e84c63a965))
+
 ## [1.2.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.2.1...v1.2.2) (2026-10-14)
 
 
