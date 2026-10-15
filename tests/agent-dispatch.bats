@@ -68,6 +68,23 @@ bash_stub() {
   { printf '#!%s\n' "$BASH"; cat; } >"$1"
   chmod +x "$1"
 }
+run_tty_command() {
+  local command=$1
+  rm -f "$STUB_DIR/forced-argv"
+  bash_stub "$STUB_DIR/agent-dispatch" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/forced-argv"
+SH
+  bash_stub "$STUB_DIR/bash-env" <<'SH'
+function [() {
+  if [[ "$#" -eq 3 && "$1" == -t ]]; then return 0; fi
+  builtin [ "$@"
+}
+SH
+  sed '/^export PATH=/d' "$AGENT_DISPATCH_BIN/dispatch-ssh" >"$STUB_DIR/dispatch-ssh"
+  chmod +x "$STUB_DIR/dispatch-ssh"
+  run env SSH_ORIGINAL_COMMAND="$command" PATH="$STUB_DIR:$PATH" \
+    BASH_ENV="$STUB_DIR/bash-env" "$STUB_DIR/dispatch-ssh"
+}
 
 # create_args <n>: the n-th `docker create` argument list, into $a.
 create_args() { mapfile -t a <"$STUB_DIR/create.$1"; }
@@ -1772,4 +1789,98 @@ SH
     AGENT_TOOL=zcode AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 37 ]
   [[ $output == *"exited with status 37; refusing to publish"* ]]
+}
+
+@test "dispatch-ssh accepts a repo-less zcode terminal command" {
+  run_tty_command "tty zcode"
+  [ "$status" -eq 0 ]
+  [ -e "$STUB_DIR/forced-argv" ]
+  printf '%s\n' start --tty zcode >"$STUB_DIR/expected-argv"
+  cmp -s "$STUB_DIR/expected-argv" "$STUB_DIR/forced-argv"
+}
+
+@test "dispatch-ssh rejects repo-less other tools and extra terminal words" {
+  local command
+  for command in "tty opencode" "tty qwen-code" "tty zcode dryvist/nix-ai extra"; do
+    run_tty_command "$command"
+    [ "$status" -eq 64 ]
+    [ ! -e "$STUB_DIR/forced-argv" ]
+  done
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+  [ ! -s "$STUB_DIR/argv.log" ]
+}
+
+@test "repo-less zcode gets a read-only mirror workspace without GitHub or OpenBao write credentials" {
+  local dispatcher id env_data mount
+  dispatcher=$(make_dispatcher '{"zcode":{"env":[],"ttyLogin":true}}')
+  run --separate-stderr "$dispatcher" start --tty zcode
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -r .repo <<<"$output")" = "" ]
+  [ "$(jq -r .tty <<<"$output")" = true ]
+  [ "$(grep -c 'github-agents/token' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  [ "$(grep -c 'sandbox-agent-' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [ "$env_data" = 'GIT_MIRROR_URL=https://mirror.test/public' ]
+  mount="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/work:/home/agent/work:ro"
+  create_args 1
+  has_pair -v "$mount"
+  has_pair -e AGENT_PUBLIC_MIRROR=1
+  run ! grep -q 'AGENT_REPO=' "$STUB_DIR/create.1"
+  run ! grep -q 'AGENT_DISPATCHED_JOB=1\|AGENT_PR_DRAFT=1' "$STUB_DIR/create.1"
+  run ! grep -q 'agent-job-' "$STUB_DIR/create.1"
+  [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/work/README.md")" = \
+    'Public mirror repositories: ${GIT_MIRROR_URL}/<owner>/<repo>.' ]
+}
+
+@test "repo-less zcode entrypoint uses and documents only the public mirror URL" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/mirror-home" bad_home="$BATS_TEST_TMPDIR/mirror-bad-home"
+  local tools="$BATS_TEST_TMPDIR/mirror-tools" readme
+  readme='Public mirror repositories: ${GIT_MIRROR_URL}/<owner>/<repo>.'
+  mkdir -p "$home/work" "$tools"
+  printf '%s\n' '{"zcode":{"env":[],"ttyLogin":true}}' >"$home/.agent-profiles.json"
+  printf '%s\n' "$readme" >"$home/work/README.md"
+  printf '%s\n' 'GIT_MIRROR_URL=https://mirror.test/public' >"$home/.agent-env"
+  chmod 0555 "$home/work"
+  chmod 0444 "$home/work/README.md"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/zcode" <<'SH'
+test "$#" -eq 0
+test -z "${AGENT_REPO:-}"
+test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
+test -z "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}"
+printf '%s\n' "$PWD" >"$STUB_DIR/no-repo-zcode-cwd"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_PUBLIC_MIRROR=1 bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/no-repo-zcode-cwd")" = "$home/work" ]
+  [ "$(cat "$home/work/README.md")" = "$readme" ]
+  [ ! -e "$home/.agent-env" ]
+
+  mkdir -p "$home/mirror-check"
+  git -C "$home/mirror-check" init -q
+  git -C "$home/mirror-check" remote add origin https://github.com/dryvist/nix-ai
+  [ "$(HOME="$home" git -C "$home/mirror-check" remote get-url origin)" = \
+    https://mirror.test/public/dryvist/nix-ai ]
+  git -C "$home/mirror-check" remote set-url origin git@github.com:dryvist/nix-ai
+  [ "$(HOME="$home" git -C "$home/mirror-check" remote get-url origin)" = \
+    https://mirror.test/public/dryvist/nix-ai ]
+
+  mkdir -p "$bad_home"
+  printf '%s\n' '{"zcode":{"env":[],"ttyLogin":true}}' >"$bad_home/.agent-profiles.json"
+  rm -f "$STUB_DIR/no-repo-zcode-cwd"
+  run env -i PATH="$tools:$PATH" HOME="$bad_home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_PUBLIC_MIRROR=1 GIT_MIRROR_URL=https://mirror.test/all \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"only accepts the public mirror tree"* ]]
+  [ ! -e "$STUB_DIR/no-repo-zcode-cwd" ]
+  [ ! -e "$bad_home/.gitconfig" ]
+  chmod 0755 "$home/work"
+  chmod 0644 "$home/work/README.md"
 }

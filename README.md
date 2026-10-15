@@ -125,14 +125,16 @@ tool process or its mode-0600 MCP config; dispatched-job files are removed at ex
 
 ## Host dispatcher
 
-`agent-dispatch` runs on the sandbox Docker host. A job is one disposable
+`agent-dispatch` runs on the sandbox Docker host. A repo job is one disposable
 container plus one named Docker volume, `agent-job-<id>`, mounted at
-`/home/agent/work`. Each verb prints one JSON object.
+`/home/agent/work`. A repo-less ZCode terminal gets a read-only workspace with
+the public mirror URL placeholder and no repo volume. Each verb prints one JSON
+object.
 
 ```sh
 agent-dispatch start <tool> <owner/repo> <prompt>
 agent-dispatch fix <tool> <owner/repo> <branch> <expected-sha> <prompt>
-agent-dispatch start --tty <tool> <owner/repo>
+agent-dispatch start --tty <tool> [owner/repo]
 agent-dispatch continue <job-id> <message>
 agent-dispatch status <job-id>
 agent-dispatch cancel <job-id>
@@ -183,7 +185,9 @@ agent-dispatch check
   needs it. It is not reachable over SSH.
 - **`--tty`** runs the job on the caller's terminal (`ssh -t`, verb `tty`).
   The container gets a TTY and runs the tool's own interactive session with no
-  prompt. When the tool exits, the run publishes like a batch run. A tool whose
+  prompt. A repo-less terminal is available only for `zcode`; it has no GitHub
+  token, repo volume or publishing step, and clones use the public tree in
+  `GIT_MIRROR_URL`. Repo-bound sessions retain the existing publish flow. A tool whose
   profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
   inside the session and gets no router key or provider key. A hang-up or detach kills the
   container and the run settles as cancelled. A terminal job has no
@@ -201,8 +205,11 @@ the Web UI. A controller's own cancellation or timeout state takes precedence
 over a native task's terminal outcome.
 
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
-reads `SSH_ORIGINAL_COMMAND` and accepts only the seven verbs. `tty` is refused
-without a terminal, so the entry needs the `pty` option. It passes each
+reads `SSH_ORIGINAL_COMMAND` and accepts only the seven verbs. `tty <tool>` is
+accepted without a repository only for `zcode`; repo-bound `tty <tool>
+<owner/repo>` remains available to the supported tools. Extra words are
+refused. `tty` is refused without a terminal, so the entry needs the `pty`
+option. It passes each
 word to `agent-dispatch` as its own argument, and the prompt is the rest of
 the line. No shell evaluates the line, and `agent-dispatch` validates every
 value: the tool allowlist, the `owner/repo` pattern, the job-id pattern and

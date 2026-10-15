@@ -7,6 +7,7 @@
 #   AGENT_TOOL        claude | codex | qwen | qwen-code | zcode | opencode | cursor-agent |
 #                     zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
+#   GIT_MIRROR_URL    public mirror URL for a repo-less zcode terminal
 #   AGENT_RUN_ID      optional stable run id (default: timestamp)
 #   AGENT_SHELL=1     drop into bash instead of running an agent (debugging)
 #   GH_TOKEN          scoped token for clone/push/PR when AGENT_REPO is set
@@ -242,6 +243,36 @@ fi
 workdir="${HOME}/work"
 mkdir -p "${workdir}"
 cd "${workdir}" || exit
+
+if [ "${AGENT_PUBLIC_MIRROR:-}" = 1 ] && [ -z "${AGENT_REPO:-}" ] && \
+  [ "${AGENT_TOOL}" = zcode ] && [ "${AGENT_TTY:-}" = 1 ]; then
+  mirror_url="${GIT_MIRROR_URL:-}"
+  mirror_url="${mirror_url%/}"
+  case "$mirror_url" in
+    http://* | https://*) ;;
+    *) echo "agent-entrypoint: repo-less zcode requires a public GIT_MIRROR_URL." >&2; exit 64 ;;
+  esac
+  case "$mirror_url" in
+    */public) ;;
+    *) echo "agent-entrypoint: repo-less zcode only accepts the public mirror tree." >&2; exit 64 ;;
+  esac
+  case "$mirror_url" in
+    *[[:space:]]*) echo "agent-entrypoint: invalid GIT_MIRROR_URL." >&2; exit 64 ;;
+  esac
+  mirror_readme='Public mirror repositories: ${GIT_MIRROR_URL}/<owner>/<repo>.'
+  if [ ! -f README.md ]; then
+    printf '%s\n' "$mirror_readme" >README.md || {
+      echo "agent-entrypoint: repo-less workspace README is missing." >&2
+      exit 64
+    }
+  fi
+  [ "$(cat README.md)" = "$mirror_readme" ] || {
+    echo "agent-entrypoint: repo-less workspace README is invalid." >&2
+    exit 64
+  }
+  git config --global "url.${mirror_url}/.insteadOf" "https://github.com/"
+  git config --global --add "url.${mirror_url}/.insteadOf" "git@github.com:"
+fi
 
 # --- Task profile: required environment ------------------------------------
 # The profile names the variables this run needs; the launcher forwards them
