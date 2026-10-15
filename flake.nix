@@ -8,6 +8,25 @@
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    zammadMcpSrc = {
+      url = "github:basher83/Zammad-MCP/v1.1.0";
+      flake = false;
+    };
   };
 
   outputs =
@@ -16,6 +35,10 @@
       nixpkgs,
       nix-ai,
       llm-agents,
+      pyproject-nix,
+      pyproject-build-systems,
+      uv2nix,
+      zammadMcpSrc,
     }:
     let
       inherit (nixpkgs) lib;
@@ -59,6 +82,10 @@
         system:
         let
           pkgs = pkgsFor system;
+          zammadMcpPackage = pkgs.callPackage ./nix/zammad-mcp.nix {
+            inherit pyproject-nix pyproject-build-systems uv2nix;
+            src = zammadMcpSrc;
+          };
         in
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
@@ -73,22 +100,21 @@
               exec python3 ${./scripts/ci-resolver.py} "$@"
             '';
           };
+          zammad-mcp = zammadMcpPackage;
           zcode-job = pkgs.callPackage ./nix/zcode-job.nix { };
           default = self.packages.${system}.agent-cli;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           agent-image =
             let
-              mcpVersions = import "${nix-ai.outPath}/lib/versions.nix";
               npmMcpPackages = import "${nix-ai.outPath}/modules/mcp/packages-npm.nix" { inherit pkgs; };
             in
             pkgs.callPackage ./nix/agent-image.nix {
               renderAutonomous = nix-ai.lib.renderAutonomous;
               zcodeWeb = nix-ai.packages.${system}.zcode-web;
               vikunjaMcp = npmMcpPackages.vikunja-mcp;
-              zammadMcpVersion = mcpVersions.zammadMcp;
-              inherit (mcpVersions) mcpSdkBound;
-              inherit (pkgs) opencode uv;
+              zammadMcp = zammadMcpPackage;
+              inherit (pkgs) opencode;
               cursorAgent = llm-agents.packages.${system}.cursor-agent;
               qwenCode = llm-agents.packages.${system}.qwen-code;
             };
@@ -160,6 +186,7 @@
                 AGENT_DISPATCH_BIN=${self.packages.${system}.agent-dispatch}/bin \
                   ENTRYPOINT=${./scripts/entrypoint.sh} \
                   BAO_BIN=${pkgs.openbao}/bin/bao \
+                  ZAMMAD_MCP_WRAPPER_SOURCE=${./scripts/zammad-mcp.sh} \
                   bats tests/agent-dispatch.bats tests/agent-bao-agent.bats
                 touch $out
               '';
