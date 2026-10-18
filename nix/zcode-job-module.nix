@@ -6,7 +6,7 @@
 }:
 let
   cfg = config.programs.zcode-job;
-  repoPattern = "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}";
+  repoPattern = "[A-Za-z0-9][A-Za-z0-9-]{0,38}/([A-Za-z0-9._-]{1,100}|\\*)";
 in
 {
   options.programs.zcode-job = {

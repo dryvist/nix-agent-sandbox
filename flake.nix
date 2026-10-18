@@ -226,6 +226,23 @@
                   bats ${./tests/zcode-job.bats}
                 touch $out
               '';
+          zcode-job-module =
+            let
+              allowedRepos =
+                (pkgs.lib.evalModules {
+                  modules = [
+                    self.homeManagerModules.zcode-job
+                    {
+                      _module.args.pkgs = pkgs;
+                      _module.check = false;
+                    }
+                  ];
+                }).options.programs.zcode-job.allowedRepos.type.nestedTypes.elemType.check;
+            in
+            assert allowedRepos "owner/repo" && allowedRepos "Owner/*";
+            assert !(allowedRepos "owner/*x");
+            assert !(allowedRepos "*/repo");
+            pkgs.runCommand "zcode-job-module-tests" { } "touch $out";
           sandbox-contract =
             pkgs.runCommand "sandbox-contract-tests"
               {
