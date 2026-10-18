@@ -28,7 +28,7 @@ setup() {
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
     STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL STUB_CLOSE_FAIL \
-    STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT
+    STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT STUB_PR_VIEW_FAIL
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -1257,6 +1257,7 @@ case "$1 $2" in
     echo https://github.com/dryvist/nix-ai/pull/7
     ;;
   "pr view")
+    [ -z "${STUB_PR_VIEW_FAIL:-}" ] || exit 1
     if [ "${STUB_PR_LABEL_PRESENT:-}" = 1 ]; then labels='[{"name":"human:review"}]'; else labels='[]'; fi
     printf '{"url":"https://github.com/dryvist/nix-ai/pull/7","labels":%s}\n' "$labels"
     ;;
@@ -1302,7 +1303,8 @@ run_publish() {
   local id=$1
   shift
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
-    STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_LABEL_PRESENT="${STUB_PR_LABEL_PRESENT:-}" AGENT_SANDBOX=1 \
+    STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_LABEL_PRESENT="${STUB_PR_LABEL_PRESENT:-}" \
+    STUB_PR_VIEW_FAIL="${STUB_PR_VIEW_FAIL:-}" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_HUMAN_REVIEW=1 "$@" \
     bash -euo pipefail "$ENTRYPOINT"
 }
@@ -1438,6 +1440,24 @@ SH
   [ "$status" -ne 0 ]
   [[ $output == *"human:review"* ]]
   grep -Fq 'pr create --label human:review --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  grep -Fq 'pr view agent/zcode/j-1 --json url,labels' "$STUB_DIR/gh.log"
+  [ ! -e "$home/work/.agent-pr-url" ]
+  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
+}
+
+@test "the entrypoint propagates a labeled PR creation and lookup failure" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture label-lookup-fail 0
+  export STUB_PR_CREATE_FAIL=1 STUB_PR_VIEW_FAIL=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -ne 0 ]
+  [[ $output == *"PR creation failed"* ]]
   grep -Fq 'pr view agent/zcode/j-1 --json url,labels' "$STUB_DIR/gh.log"
   [ ! -e "$home/work/.agent-pr-url" ]
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"

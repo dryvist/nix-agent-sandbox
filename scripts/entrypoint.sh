@@ -669,6 +669,7 @@ ${AGENT_PROMPT:-}
     fi
   else
     echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+    [ "${status}" -ne 0 ] || status=1
   fi
 fi
 
