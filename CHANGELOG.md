@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.0...v1.5.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **dispatch:** validate created PR identity case-insensitively ([34f3c18](https://github.com/dryvist/nix-agent-sandbox/commit/34f3c18bb4c2f3d4e629071d1da80c7d3398a4c4))
+* **entrypoint:** fail when PR lookup returns no URL ([9bd0ed0](https://github.com/dryvist/nix-agent-sandbox/commit/9bd0ed0203f274ab5a747c9819e60cb20bd6b9a6))
+* **pr:** require human review label for agent PRs ([#124](https://github.com/dryvist/nix-agent-sandbox/issues/124)) ([b746028](https://github.com/dryvist/nix-agent-sandbox/commit/b74602821938ffc0fbe8315f49a7df7ba43ff6a2))
+
 ## [1.5.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.4.0...v1.5.0) (2026-10-18)
 
 
