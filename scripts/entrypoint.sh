@@ -665,7 +665,8 @@ ${AGENT_PROMPT:-}
     if [ -n "${url}" ]; then
       printf '%s\n' "${url}" | tee "${pr_file}"
     else
-      echo "agent-entrypoint: PR lookup returned no URL; branch ${branch} was published." >&2
+      echo "agent-entrypoint: PR lookup returned no URL; refusing to report success." >&2
+      status=1
     fi
   else
     echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
