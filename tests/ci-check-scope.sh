@@ -25,6 +25,7 @@ expect $'full=false\nimage=true\ntargets=agent-image' pull_request refs/pull/1/m
 expect $'full=false\nimage=true\ntargets=agent-image' pull_request refs/pull/1/merge scripts/zammad-mcp.sh
 expect $'full=false\nimage=false\ntargets=agent-dispatch' pull_request refs/pull/1/merge tests/agent-bao-agent.bats templates/bao-agent/read.hcl
 expect $'full=false\nimage=false\ntargets=sandbox-contract' pull_request refs/pull/1/merge nix/task-profiles.nix
+expect $'full=false\nimage=false\ntargets=zcode-job-module' pull_request refs/pull/1/merge nix/zcode-job-module.nix
 expect $'full=false\nimage=false\ntargets=ci-resolver' pull_request refs/pull/1/merge scripts/ci-resolver.py tests/test_ci_resolver.py
 expect $'full=false\nimage=false\ntargets=' pull_request refs/pull/1/merge .github/workflows/build-image.yml scripts/ci-check-scope.sh tests/ci-check-scope.sh
 expect $'full=false\nimage=false\ntargets=' pull_request refs/pull/1/merge README.md
