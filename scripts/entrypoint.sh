@@ -14,7 +14,7 @@
 #   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
 #                     every variable it names must be set (the launcher
 #                     forwards them from the caller's environment)
-#   AGENT_PR_DRAFT=1  open the PR as a draft
+#   AGENT_PR_HUMAN_REVIEW=1  label the PR human:review
 #   AGENT_TTY=1       run the tool's own interactive session on the attached
 #                     terminal; no prompt
 #   ~/.agent-env      optional NAME=value lines, exported (agent-dispatch)
@@ -646,8 +646,8 @@ signed_push() {
 # tool left at that path is removed first.
 pr_file="${workdir}/.agent-pr-url"
 rm -rf "${pr_file}"
-draft=()
-[ "${AGENT_PR_DRAFT:-}" != 1 ] || draft=(--draft)
+human_review=()
+[ "${AGENT_PR_HUMAN_REVIEW:-}" != 1 ] || human_review=(--label human:review)
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
   git commit -m "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}
@@ -668,9 +668,11 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     echo "agent-entrypoint: publishing ${branch} failed." >&2
     exit 1
   fi
-  if url="$(gh pr create "${draft[@]}" --head "${branch}" \
+  if url="$(gh pr create "${human_review[@]}" --head "${branch}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
+
+Human review is requested: an agent authored this change and a trusted reviewer decides the merge.
 
 - Tool: ${AGENT_TOOL}
 - Run id: ${AGENT_RUN_ID}
@@ -682,11 +684,23 @@ Prompt:
 ${AGENT_PROMPT:-}
 \`\`\`")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
-  elif url="$(gh pr view "${branch}" --json url --jq .url)"; then
+  elif pr_info="$(gh pr view "${branch}" --json url,labels)"; then
     # A continued run pushes to the branch of the PR it already opened.
-    printf '%s\n' "${url}" | tee "${pr_file}"
+    if [ "${AGENT_PR_HUMAN_REVIEW:-}" = 1 ] && \
+      ! jq -e '.labels | any(.name == "human:review")' <<<"${pr_info}" >/dev/null; then
+      echo "agent-entrypoint: existing PR is missing human:review; refusing to report success." >&2
+      exit 1
+    fi
+    url="$(jq -r '.url // empty' <<<"${pr_info}")"
+    if [ -n "${url}" ]; then
+      printf '%s\n' "${url}" | tee "${pr_file}"
+    else
+      echo "agent-entrypoint: PR lookup returned no URL; refusing to report success." >&2
+      status=1
+    fi
   else
     echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+    [ "${status}" -ne 0 ] || status=1
   fi
 fi
 
