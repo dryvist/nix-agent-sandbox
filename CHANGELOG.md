@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.2...v1.5.3) (2026-10-18)
+
+
+### Bug Fixes
+
+* **entrypoint:** export the prompt file contents to the OpenBao Agent child ([#134](https://github.com/dryvist/nix-agent-sandbox/issues/134)) ([4e29fbc](https://github.com/dryvist/nix-agent-sandbox/commit/4e29fbc20f7764ab626ab4c94dc32e2b1d719809))
+
 ## [1.5.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.1...v1.5.2) (2026-10-18)
 
 
