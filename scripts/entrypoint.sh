@@ -14,7 +14,7 @@
 #   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
 #                     every variable it names must be set (the launcher
 #                     forwards them from the caller's environment)
-#   AGENT_PR_DRAFT=1  open the PR as a draft
+#   AGENT_PR_HUMAN_REVIEW=1  label the PR human:review
 #   AGENT_TTY=1       run the tool's own interactive session on the attached
 #                     terminal; no prompt
 #   ~/.agent-env      optional NAME=value lines, exported (agent-dispatch)
@@ -616,8 +616,8 @@ signed_push() {
 # tool left at that path is removed first.
 pr_file="${workdir}/.agent-pr-url"
 rm -rf "${pr_file}"
-draft=()
-[ "${AGENT_PR_DRAFT:-}" != 1 ] || draft=(--draft)
+human_review=()
+[ "${AGENT_PR_HUMAN_REVIEW:-}" != 1 ] || human_review=(--label human:review)
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
   git commit -m "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}
@@ -638,7 +638,7 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     echo "agent-entrypoint: publishing ${branch} failed." >&2
     exit 1
   fi
-  if url="$(gh pr create "${draft[@]}" --head "${branch}" \
+  if url="$(gh pr create "${human_review[@]}" --head "${branch}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 

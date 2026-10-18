@@ -119,6 +119,17 @@ case "$url" in
   */repos/*/git/refs)
     resp='{"ref":"refs/heads/fix"}'
     ;;
+  */repos/*/issues/*/labels)
+    if [ -n "${STUB_LABEL_FAIL:-}" ]; then
+      http_code=403
+      resp='{"message":"label denied"}'
+    else
+      resp='[{"name":"human:review"}]'
+    fi
+    ;;
+  */repos/*/pulls/*)
+    resp='{"state":"closed"}'
+    ;;
   */repos/*/pulls)
     resp=$(jq -cn --arg u "${STUB_FIX_PR_URL:-https://github.com/${STUB_SCOPE_REPO:-dryvist/nix-ai}/pull/8}" '{html_url: $u}')
     ;;

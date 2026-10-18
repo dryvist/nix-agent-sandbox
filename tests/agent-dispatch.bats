@@ -27,7 +27,7 @@ setup() {
   export REAL_GIT="$(command -v git)"
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
-    STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO
+    STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -273,7 +273,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
       -e)
         case "${a[i + 1]%%=*}" in
           HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | AGENT_TOOL | AGENT_PROFILE | \
-            AGENT_DISPATCHED_JOB | AGENT_REPO | AGENT_RUN_ID | AGENT_PR_DRAFT | \
+            AGENT_DISPATCHED_JOB | AGENT_REPO | AGENT_RUN_ID | AGENT_PR_HUMAN_REVIEW | \
             AGENT_CONTINUE | AGENT_TTY) ;;
           *)
             echo "unexpected -e ${a[i + 1]%%=*}" >&2
@@ -297,7 +297,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   has_pair --security-opt no-new-privileges
   has_pair -e AGENT_PROFILE=zcode
   has_pair -e AGENT_DISPATCHED_JOB=1
-  has_pair -e AGENT_PR_DRAFT=1
+  has_pair -e AGENT_PR_HUMAN_REVIEW=1
   has_pair -e HTTPS_PROXY=http://proxy:3128
   no_secret_on_a_command_line
 }
@@ -1249,7 +1249,7 @@ case "$1 $2" in
   "repo clone") exec git clone -q "$(cat "$STUB_DIR/origin-path")" "$4" ;;
   "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
   "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
-  "pr create") echo https://github.com/dryvist/nix-ai/pull/7 ;;
+  "pr create") printf '%s\n' "$*" >"$STUB_DIR/pr-create.argv"; echo https://github.com/dryvist/nix-ai/pull/7 ;;
   *) exit 1 ;;
 esac
 SH
@@ -1292,7 +1292,7 @@ run_publish() {
   local id=$1
   shift
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_DRAFT=1 "$@" \
+    AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_HUMAN_REVIEW=1 "$@" \
     bash -euo pipefail "$ENTRYPOINT"
 }
 
@@ -1384,7 +1384,7 @@ SH
   [ ! -e "$home/work/.agent-fix" ]
 }
 
-@test "the run's commits publish as one API-created commit and a draft PR, never a push" {
+@test "the run's commits publish as one API-created commit and a ready PR labeled human:review, never a push" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin head
   publish_fixture signed 0
@@ -1396,6 +1396,7 @@ git commit -q -m "tool commit"
 SH
   run_publish j-1
   [ "$status" -eq 0 ]
+  grep -Fq 'pr create --label human:review --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
   grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
@@ -1499,7 +1500,7 @@ SH
   has_pair -e AGENT_MODE=fix
   has_pair -e "AGENT_BRANCH=feature/ci-fix"
   has_pair -e "AGENT_EXPECTED_SHA=$FIX_SHA"
-  run ! grep -q AGENT_PR_DRAFT "$STUB_DIR/create.1"
+  run ! grep -q AGENT_PR_HUMAN_REVIEW "$STUB_DIR/create.1"
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [[ ! $env_data =~ GH_TOKEN|GITHUB_TOKEN ]]
   grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
@@ -1559,8 +1560,8 @@ SH
   [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/pulls' "$STUB_DIR/calls.log" || true)" -eq 0 ]
 }
 
-@test "new branch fix creates ref at expected sha and a non-draft PR to the API default branch" {
-  local prompt graphql ref_request pr_request
+@test "new branch model fix creates a ready PR labeled human:review" {
+  local prompt graphql ref_request pr_request label_request
   set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
   export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk
   prompt=$(fix_prompt "repair this failure")
@@ -1574,6 +1575,46 @@ SH
   jq -e --arg sha "$FIX_SHA" '.variables.input.expectedHeadOid == $sha' "$graphql.body"
   pr_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')
   jq -e '.draft == false and .title == "fix: repair test" and .head == "feature/new-fix" and .base == "trunk"' "$pr_request.body"
+  label_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')
+  jq -e '.labels == ["human:review"]' "$label_request.body"
+  [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')" -lt \
+    "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" ]
+}
+
+@test "new branch shell fix creates a ready PR without human:review" {
+  local prompt pr_request
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk
+  prompt=$(fix_prompt_tier t1 'repair this failure')
+  run --separate-stderr dispatch fix shell dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = succeeded ]
+  [ "$(jq -r .pr <<<"$output")" = https://github.com/dryvist/nix-ai/pull/8 ]
+  pr_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')
+  jq -e '.draft == false and .head == "feature/new-fix" and .base == "trunk"' "$pr_request.body"
+  [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/issues/.*/labels' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "new branch model fix closes its PR and fails when human:review labeling fails" {
+  local prompt id label_request close_request
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_LABEL_FAIL=1
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = failed ]
+  [ "$(jq -r .reason <<<"$output")" = 'pull request labeling failed' ]
+  [ "$(jq -r .pr <<<"$output")" = "" ]
+  id=$(jq -r .job <<<"$output")
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/$id/pr_url" ]
+  label_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')
+  jq -e '.labels == ["human:review"]' "$label_request.body"
+  close_request=$(http_rec 'PATCH https://api.github.com/repos/dryvist/nix-ai/pulls/8')
+  jq -e '.state == "closed"' "$close_request.body"
+  [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')" -lt \
+    "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" ]
+  [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" -lt \
+    "$(line_of 'PATCH https://api.github.com/repos/dryvist/nix-ai/pulls/8')" ]
 }
 
 @test "head moved deletes a newly created branch and leaves no commit or PR" {
@@ -1828,7 +1869,7 @@ SH
   has_pair -v "$mount"
   has_pair -e AGENT_PUBLIC_MIRROR=1
   run ! grep -q 'AGENT_REPO=' "$STUB_DIR/create.1"
-  run ! grep -q 'AGENT_DISPATCHED_JOB=1\|AGENT_PR_DRAFT=1' "$STUB_DIR/create.1"
+  run ! grep -q 'AGENT_DISPATCHED_JOB=1\|AGENT_PR_HUMAN_REVIEW=1' "$STUB_DIR/create.1"
   run ! grep -q 'agent-job-' "$STUB_DIR/create.1"
   [ "$(cat "$AGENT_DISPATCH_STATE_DIR/$id/runs/1/work/README.md")" = \
     'Public mirror repositories: ${GIT_MIRROR_URL}/<owner>/<repo>.' ]

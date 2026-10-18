@@ -73,7 +73,8 @@ exit 1 indicates an invalid response or unavailable result; transport failures
 preserve the SSH or timeout exit code. Errors are JSON objects with `error`.
 
 The shared `ai-delegation` plugin's `delegate-to-ai` skill owns content
-eligibility and trusted verification of the returned draft PR.
+eligibility and trusted verification of the returned ready PR labeled
+`human:review`.
 
 ## Usage
 
@@ -159,13 +160,14 @@ agent-dispatch check
   checks both with the job's token. It refuses any other repository and
   revokes that token. Classic branch protection is not readable with the job
   token and does not count.
-- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
-  PR. Every branch requires signed commits, so the run's tree reaches GitHub as
-  one commit created through the API (`createCommitOnBranch`), which GitHub
-  signs. That carries file contents only: a change to a file mode or a symlink
-  is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES` encoded
-  (default 8 MiB) fails whole. The dispatcher records the PR URL only when it
-  points at the job's repo.
+- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a ready
+  PR labeled `human:review`; it is never auto-merged while that label is
+  present. Every branch requires signed commits, so the run's tree reaches
+  GitHub as one commit created through the API (`createCommitOnBranch`), which
+  GitHub signs. That carries file contents only: a change to a file mode or a
+  symlink is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES`
+  encoded (default 8 MiB) fails whole. The dispatcher records the PR URL only
+  when it points at the job's repo.
 - **`continue`** starts a new container on the same workspace and branch.
 - **`fix`** applies a change to the named branch at the expected 40-character
   commit. Its prompt starts with a
@@ -173,10 +175,12 @@ agent-dispatch check
   line; the remaining prompt is the task. The dispatcher publishes the
   validated change with an API-created commit. It refuses workflow edits, test
   deletions, added suppression lines, and changes over `AGENT_FIX_MAX_FILES`
-  (default 20). If the branch did not exist, it creates the branch at the
-  expected commit and opens a non-draft PR to the repository's default branch.
-  Fix jobs run once and report the created commit oid, or an empty `commit`
-  field when there is no change.
+  (default 20). If the branch did not exist, it creates it at the expected
+  commit and opens a ready PR to the repository's default branch. Tools other
+  than `shell` label that PR `human:review`; it is never auto-merged while that
+  label is present. `shell` results remain unlabeled for the CI resolver's
+  deterministic merge path. Fix jobs run once and report the created commit
+  oid, or an empty `commit` field when there is no change.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
 - **`check`** logs in once and revokes the token. When the login fails, or a
@@ -265,7 +269,7 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | Input | Meaning |
 | --- | --- |
 | `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
-| `AGENT_PR_DRAFT=1` | open the start job's PR as a draft |
+| `AGENT_PR_HUMAN_REVIEW=1` | label the start job's ready PR `human:review` |
 | `AGENT_MODE=fix`, `AGENT_BRANCH`, `AGENT_EXPECTED_SHA` | fix mode and the expected branch head |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
 | `AGENT_TTY=1` | run the tool's own interactive session on the attached terminal |
