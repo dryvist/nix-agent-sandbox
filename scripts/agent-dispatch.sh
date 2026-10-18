@@ -760,7 +760,7 @@ publish_fix_token() {
       return 1
     fi
     request=$(jq -cn --arg title "$headline" --arg head "$branch" --arg base "$default_branch" \
-      '{title: $title, head: $head, base: $base, draft: false, body: ""}')
+      '{title: $title, head: $head, base: $base, draft: false, body: "Human review is requested: an agent authored this change and a trusted reviewer decides the merge."}')
     resp=$(gh_write POST "$gh" "repos/$(job_get "$id" .repo)/pulls" "$request" 2>/dev/null) || resp=""
     pr_url=$(jq -r '.html_url // empty' <<<"$resp")
     pr_repo=""

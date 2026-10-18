@@ -1408,6 +1408,8 @@ SH
   run_publish j-1
   [ "$status" -eq 0 ]
   grep -Fq 'pr create --label human:review --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  grep -Fq 'Human review is requested: an agent authored this change and a trusted reviewer decides the merge.' \
+    "$STUB_DIR/pr-create.argv"
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
@@ -1605,7 +1607,9 @@ SH
   graphql=$(http_rec 'POST https://api.github.com/graphql')
   jq -e --arg sha "$FIX_SHA" '.variables.input.expectedHeadOid == $sha' "$graphql.body"
   pr_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')
-  jq -e '.draft == false and .title == "fix: repair test" and .head == "feature/new-fix" and .base == "trunk"' "$pr_request.body"
+  jq -e '.draft == false and .title == "fix: repair test" and .head == "feature/new-fix" and .base == "trunk" and
+    .body == "Human review is requested: an agent authored this change and a trusted reviewer decides the merge."' \
+    "$pr_request.body"
   label_request=$(http_rec 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')
   jq -e '.labels == ["human:review"]' "$label_request.body"
   [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')" -lt \

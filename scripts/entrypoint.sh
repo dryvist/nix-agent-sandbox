@@ -642,6 +642,8 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 
+Human review is requested: an agent authored this change and a trusted reviewer decides the merge.
+
 - Tool: ${AGENT_TOOL}
 - Run id: ${AGENT_RUN_ID}
 - Exit status: ${status}
