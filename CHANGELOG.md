@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.1...v1.5.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* **ci:** map the zcode job module to its flake check ([afcaf3e](https://github.com/dryvist/nix-agent-sandbox/commit/afcaf3e4770a6d3063daac8822a12b7aa0e27f6a))
+* **zcode-job:** accept owner wildcards in the allowedRepos option type ([598a26b](https://github.com/dryvist/nix-agent-sandbox/commit/598a26bdfefc668d0be788d1406a741f7b4cd312))
+* **zcode-job:** accept owner wildcards in the allowedRepos option type ([#132](https://github.com/dryvist/nix-agent-sandbox/issues/132)) ([38820ed](https://github.com/dryvist/nix-agent-sandbox/commit/38820ed7bc9435d8fe6ec41859a1bb8727982c09))
+
 ## [1.5.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.0...v1.5.1) (2026-10-18)
 
 
