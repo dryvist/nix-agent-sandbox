@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.4.0...v1.5.0) (2026-10-18)
+
+
+### Features
+
+* **zcode:** run the batch profile without tracker access ([#127](https://github.com/dryvist/nix-agent-sandbox/issues/127)) ([f117930](https://github.com/dryvist/nix-agent-sandbox/commit/f1179302023b8a0bcfe7cd37c4fa20b7e084de08))
+
 ## [1.4.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.3.1...v1.4.0) (2026-10-15)
 
 
