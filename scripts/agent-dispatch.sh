@@ -958,7 +958,7 @@ container_args() {
 # files owned by the container's uid 1000, streamed in with `docker cp`.
 # Uses the caller's $names, $bucket, $gh and optional router key.
 deliver() {
-  local tmp name value rc=0 repo=${4:-}
+  local tmp name value rc=0 repo=${4:-} tracker_access=${5:-true}
   tmp=$(mktemp -d)
   {
     JOB_REDACT_VALUES=()
@@ -970,8 +970,10 @@ deliver() {
       printf 'BAO_ADDR=%s\nSANDBOX_ROLE_ID=%s\nSANDBOX_WRAPPED_SECRET_ID=%s\n' \
         "$BAO_ADDR" "$sandbox_role_id" "$sandbox_wrapped_secret_id"
       JOB_REDACT_VALUES+=("$sandbox_role_id" "$sandbox_wrapped_secret_id")
-      printf 'GIT_MIRROR_URL=%s\nVIKUNJA_URL=%s\nZAMMAD_URL=%s\n' \
-        "$GIT_MIRROR_URL" "$VIKUNJA_URL" "$ZAMMAD_URL"
+      printf 'GIT_MIRROR_URL=%s\n' "$GIT_MIRROR_URL"
+      if [ "$tracker_access" = true ]; then
+        printf 'VIKUNJA_URL=%s\nZAMMAD_URL=%s\n' "$VIKUNJA_URL" "$ZAMMAD_URL"
+      fi
     else
       printf 'GIT_MIRROR_URL=%s\n' "$GIT_MIRROR_URL"
     fi
@@ -999,7 +1001,7 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" mint gh="" budget cid name request
+  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" mint gh="" budget cid name request tracker_access
   local router_key_field="" sandbox_role_id="" sandbox_wrapped_secret_id="" sandbox_role="" role_response wrapped_response reason value
   local -a names args
   JOB_REDACT_VALUES=()
@@ -1013,6 +1015,21 @@ run_job() {
   if [ "$tty" = 1 ] && jq -e --arg t "$tool" '.[$t].ttyLogin == true' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
     tty_login=1
   fi
+  if ! jq -e --arg t "$tool" 'has($t)' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
+    abort "$id" "$run" "no task profile for $tool"
+    return 1
+  fi
+  if ! jq -e --arg t "$tool" '
+    (.[$t] | type == "object") and
+    (if (.[$t] | has("trackerAccess")) then (.[$t].trackerAccess | type == "boolean") else true end)
+  ' <<<"$AGENT_TASK_PROFILES" >/dev/null; then
+    abort "$id" "$run" "task profile trackerAccess must be boolean"
+    return 1
+  fi
+  tracker_access=$(jq -r --arg t "$tool" \
+    'if (.[$t] | has("trackerAccess")) then .[$t].trackerAccess else true end' \
+    <<<"$AGENT_TASK_PROFILES")
+  if [ "$tty_login" = 1 ]; then tracker_access=true; fi
   if [ "$run" != 1 ]; then cont=1; fi
   date +%s >"$rdir/started"
   echo starting >"$rdir/state"
@@ -1048,10 +1065,6 @@ run_job() {
     fi
   done
   if [ "$tty_login" = 1 ]; then names=(); fi
-  jq -e --arg t "$tool" 'has($t)' <<<"$AGENT_TASK_PROFILES" >/dev/null || {
-    abort "$id" "$run" "no task profile for $tool" "$tok"
-    return 1
-  }
   for name in "${names[@]}"; do
     value=$(credential_value "$name")
     if [ -n "$value" ] && single_line "$value"; then :; else
@@ -1070,10 +1083,14 @@ run_job() {
   fi
 
   if [ -z "${BAO_ADDR:-}" ] || [ -z "${GIT_MIRROR_URL:-}" ] || \
-    [ -z "${VIKUNJA_URL:-}" ] || [ -z "${ZAMMAD_URL:-}" ] || \
     ! single_line "$BAO_ADDR" || ! single_line "$GIT_MIRROR_URL" || \
-    ! single_line "$VIKUNJA_URL" || ! single_line "$ZAMMAD_URL" || \
     [[ ! $BAO_ADDR =~ ^https?://[^[:space:]]+$ ]]; then
+    abort "$id" "$run" "sandbox service configuration is missing or invalid" "$tok"
+    return 1
+  fi
+  if [ "$tracker_access" = true ] && \
+    { [ -z "${VIKUNJA_URL:-}" ] || [ -z "${ZAMMAD_URL:-}" ] || \
+      ! single_line "$VIKUNJA_URL" || ! single_line "$ZAMMAD_URL"; }; then
     abort "$id" "$run" "sandbox service configuration is missing or invalid" "$tok"
     return 1
   fi
@@ -1145,7 +1162,7 @@ run_job() {
     return 1
   }
   echo "$cid" >"$rdir/cid"
-  deliver "$cid" "$prompt" "$mode" "$repo" || {
+  deliver "$cid" "$prompt" "$mode" "$repo" "$tracker_access" || {
     if [ -n "$sandbox_wrapped_secret_id" ]; then bao_revoke_wrap "$sandbox_wrapped_secret_id"; fi
     abort "$id" "$run" "credential delivery failed" "$tok"
     return 1

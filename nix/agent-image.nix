@@ -133,6 +133,12 @@ let
     "etc/openbao-agent/write.hcl" =
       lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
         (builtins.readFile ../templates/bao-agent/write.hcl);
+    "etc/openbao-agent/read-public.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read-public.hcl);
+    "etc/openbao-agent/write-public.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write-public.hcl);
     "etc/openbao-agent/templates/router-key.ctmpl" =
       builtins.readFile ../templates/bao-agent/router-key.ctmpl;
     "etc/openbao-agent/templates/vikunja-token.ctmpl" =
@@ -143,6 +149,8 @@ let
       builtins.readFile ../templates/bao-agent/opencode-config.ctmpl;
     "etc/openbao-agent/templates/zcode-mcp.ctmpl" =
       builtins.readFile ../templates/bao-agent/zcode-mcp.ctmpl;
+    "etc/openbao-agent/templates/zcode-mcp-public.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zcode-mcp-public.ctmpl;
     "etc/openbao-agent/templates/qwen-mcp.ctmpl" =
       builtins.readFile ../templates/bao-agent/qwen-mcp.ctmpl;
   };
