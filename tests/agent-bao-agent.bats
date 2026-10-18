@@ -346,6 +346,31 @@ SH
   [ ! -e "$home/.zcode/cli/config.json" ]
 }
 
+@test "dispatched job passes the prompt file to the OpenBao Agent child" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/prompt-home" tools="$BATS_TEST_TMPDIR/prompt-tools"
+  local auth_dir="$BATS_TEST_TMPDIR/prompt-auth"
+  mkdir -p "$home" "$tools" "$auth_dir"
+  printf '%s\n' '{"zcode":{"env":[],"trackerAccess":false}}' >"$home/.agent-profiles.json"
+  printf '%s' 'Inspect the repository' >"$home/.agent-prompt"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  # The real bao agent re-runs the entrypoint with the parent's exported environment.
+  bash_stub "$tools/bao" <<'SH'
+ZCODE_MCP_CONFIG='{"mcp":{"servers":{}}}' exec bash -euo pipefail "$ENTRYPOINT"
+SH
+  bash_stub "$tools/zcode" <<'SH'
+test "$2" = "Inspect the repository"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" ENTRYPOINT="$ENTRYPOINT" AGENT_SANDBOX=1 \
+    AGENT_DISPATCHED_JOB=1 AGENT_TOOL=zcode AGENT_PROFILE=zcode \
+    BAO_ADDR=https://bao.test SANDBOX_ROLE_ID=role-id-test \
+    SANDBOX_WRAPPED_SECRET_ID=wrapped-secret-id-test AGENT_OPENBAO_AUTH_DIR="$auth_dir" \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+}
+
 @test "Zammad MCP wrapper invokes the packaged command without uvx" {
   local wrapper="${ZAMMAD_MCP_WRAPPER_SOURCE:?}"
   run grep -Fq uvx "${wrapper}"

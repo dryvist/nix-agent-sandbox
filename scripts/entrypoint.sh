@@ -99,6 +99,7 @@ if [ -f "${HOME}/.agent-env" ]; then
 fi
 if [ -f "${HOME}/.agent-prompt" ]; then
   AGENT_PROMPT="$(cat "${HOME}/.agent-prompt")"
+  export AGENT_PROMPT
   rm -f "${HOME}/.agent-prompt"
 fi
 
