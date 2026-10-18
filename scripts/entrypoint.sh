@@ -180,8 +180,29 @@ openbao_child="${AGENT_OPENBAO_CHILD:-}"
 export -n openbao_child
 openbao_agent_dir="${AGENT_OPENBAO_AUTH_DIR:-/dev/shm/agent-openbao}"
 unset AGENT_OPENBAO_AUTH_DIR
+profile_tracker_access() {
+  local p profile_json
+  p="${AGENT_PROFILE:-$AGENT_TOOL}"
+  if ! profile_json=$(jq -ce --arg p "$p" '.[$p]' "${HOME}/.agent-profiles.json"); then
+    echo "agent-entrypoint: unknown AGENT_PROFILE '${p}'." >&2
+    return 64
+  fi
+  if ! jq -e 'type == "object" and
+    (if has("trackerAccess") then (.trackerAccess | type == "boolean") else true end)' \
+    <<<"${profile_json}" >/dev/null; then
+    echo "agent-entrypoint: AGENT_PROFILE '${p}' trackerAccess must be boolean." >&2
+    return 64
+  fi
+  jq -r 'if has("trackerAccess") then .trackerAccess else true end' <<<"${profile_json}"
+}
 if [ "${openbao_child}" != 1 ] && \
   { [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; }; then
+  tracker_access=$(profile_tracker_access) || exit $?
+  if [ "${AGENT_TTY:-}" = 1 ] && \
+    jq -e --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
+      '.[$p].ttyLogin == true' "${HOME}/.agent-profiles.json" >/dev/null 2>&1; then
+    tracker_access=true
+  fi
   mkdir -p "${openbao_agent_dir}" && chmod 700 "${openbao_agent_dir}"
   printf '%s' "${SANDBOX_ROLE_ID:-}" >"${openbao_agent_dir}/role-id"
   printf '%s' "${SANDBOX_WRAPPED_SECRET_ID:-}" >"${openbao_agent_dir}/wrapped-secret-id"
@@ -198,6 +219,9 @@ if [ "${openbao_child}" != 1 ] && \
     openbao_agent_config=/etc/openbao-agent/read.hcl
   else
     openbao_agent_config=/etc/openbao-agent/write.hcl
+  fi
+  if [ "${tracker_access}" = false ]; then
+    openbao_agent_config="${openbao_agent_config%.hcl}-public.hcl"
   fi
   agent_status=0
   bao agent -config="${openbao_agent_config}" || agent_status=$?
@@ -282,6 +306,12 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
     echo "agent-entrypoint: unknown AGENT_PROFILE '${AGENT_PROFILE}'." >&2
     exit 64
   }
+  if ! jq -e 'type == "object" and
+    (if has("trackerAccess") then (.trackerAccess | type == "boolean") else true end)' \
+    <<<"${profile}" >/dev/null; then
+    echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' trackerAccess must be boolean." >&2
+    exit 64
+  fi
   while IFS= read -r var; do
     [ -n "${!var:-}" ] || {
       echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2

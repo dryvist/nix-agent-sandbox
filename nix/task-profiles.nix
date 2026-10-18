@@ -13,6 +13,8 @@
 #   env  list of environment variable names the run requires.
 #   routerKeyField  host-side value used when scanning published changes.
 #   sandboxRouterKeyField  container leaf field exported as AGENT_ROUTER_KEY.
+#   trackerAccess  whether the job receives Vikunja and Zammad configuration
+#                  (defaults to true when omitted).
 #   ttyLogin  in a terminal session (agent-dispatch --tty) the user signs in
 #             to the tool by hand, so neither router key nor env is delivered.
 {
@@ -44,6 +46,7 @@
     env = [ ];
     routerKeyField = "ZCODE_ROUTER_KEY";
     sandboxRouterKeyField = "router_key";
+    trackerAccess = false;
     ttyLogin = true;
   };
   opencode = {

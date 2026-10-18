@@ -309,7 +309,8 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
     AGENT_ROUTER_BASE_URL BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID \
-    SANDBOX_WRAPPED_SECRET_ID VIKUNJA_URL ZAMMAD_URL | sort)" ]
+    SANDBOX_WRAPPED_SECRET_ID | sort)" ]
+  [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
   grep -qx 'BAO_ADDR=https://bao.test' <<<"$env_data"
   grep -qx 'SANDBOX_ROLE_ID=sandbox-agent-role-id-value' <<<"$env_data"
   grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
@@ -360,10 +361,45 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
     grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
     [[ ! $env_data =~ AGENT_ROUTER_KEY|ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
-    [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
-      AGENT_ROUTER_BASE_URL BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID \
-      SANDBOX_WRAPPED_SECRET_ID VIKUNJA_URL ZAMMAD_URL | sort)" ]
+    if [ "$tool" = zcode ]; then
+      [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
+      [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
+        AGENT_ROUTER_BASE_URL BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID \
+        SANDBOX_WRAPPED_SECRET_ID | sort)" ]
+    else
+      grep -qx 'VIKUNJA_URL=https://vikunja.test/api/v1' <<<"$env_data"
+      grep -qx 'ZAMMAD_URL=https://zammad.test/api/v1' <<<"$env_data"
+    fi
   done
+}
+
+@test "a missing trackerAccess field defaults to true and retains tracker URLs" {
+  local dispatcher env_data
+  dispatcher=$(make_dispatcher '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY"}}')
+  run --separate-stderr "$dispatcher" start qwen-code dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  grep -qx 'VIKUNJA_URL=https://vikunja.test/api/v1' <<<"$env_data"
+  grep -qx 'ZAMMAD_URL=https://zammad.test/api/v1' <<<"$env_data"
+}
+
+@test "zcode without trackers skips tracker-service preflight" {
+  unset VIKUNJA_URL ZAMMAD_URL
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  local env_data
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
+}
+
+@test "malformed trackerAccess refuses to create a job container" {
+  local dispatcher
+  dispatcher=$(make_dispatcher '{"zcode":{"env":[],"routerKeyField":"ZCODE_ROUTER_KEY","trackerAccess":"false"}}')
+  run --separate-stderr "$dispatcher" start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -ne 0 ]
+  [[ $output == *"task profile trackerAccess must be boolean"* ]]
+  ! grep -q '^docker create' "$STUB_DIR/argv.log"
+  ! grep -q '^docker cp' "$STUB_DIR/argv.log"
 }
 
 @test "OpenCode batch profiles select models and profile credentials" {
