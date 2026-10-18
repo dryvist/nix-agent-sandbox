@@ -1581,6 +1581,50 @@ SH
     "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" ]
 }
 
+@test "new branch fix rejects a PR identity outside the job repository" {
+  local prompt job state status_json attempts
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk
+  prompt=$(fix_prompt "repair this failure")
+  export STUB_FIX_PR_URL=https://github.com/other/repo/pull/8
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  job=$(jq -r .job <<<"$output")
+  state=running attempts=0
+  while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+    sleep 0.1
+    status_json=$(dispatch status "$job")
+    state=$(jq -r .state <<<"$status_json")
+    attempts=$((attempts + 1))
+  done
+  [ "$state" = failed ]
+  [ "$(jq -r .reason <<<"$status_json")" = 'pull request identity invalid' ]
+  [ "$(jq -r .pr <<<"$status_json")" = "" ]
+  [ "$(grep -c '/issues/.*/labels\|PATCH .*pulls/' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
+@test "new branch fix rejects a nonnumeric PR number" {
+  local prompt job state status_json attempts
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk
+  export STUB_FIX_PR_URL=https://github.com/dryvist/nix-ai/pull/eight
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  job=$(jq -r .job <<<"$output")
+  state=running attempts=0
+  while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+    sleep 0.1
+    status_json=$(dispatch status "$job")
+    state=$(jq -r .state <<<"$status_json")
+    attempts=$((attempts + 1))
+  done
+  [ "$state" = failed ]
+  [ "$(jq -r .reason <<<"$status_json")" = 'pull request identity invalid' ]
+  [ "$(jq -r .pr <<<"$status_json")" = "" ]
+  [ "$(grep -c '/issues/.*/labels\|PATCH .*pulls/' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+}
+
 @test "new branch shell fix creates a ready PR without human:review" {
   local prompt pr_request
   set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"

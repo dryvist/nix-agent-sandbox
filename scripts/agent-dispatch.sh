@@ -465,7 +465,7 @@ publish_fix_token() {
   local id=$1 run=$2 gh=$4 dir="$STATE_DIR/$1" rdir="$STATE_DIR/$1/runs/$2"
   local max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" max_files="${AGENT_FIX_MAX_FILES:-20}"
   local tmp listing member previous path base64_file base_json new_json api_path suppression_rc changes
-  local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url pr_number
+  local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url pr_number pr_repo
   local tool router_key_field name value external_bucket="" need_zai=0
   local -a credential_names=() credential_values=()
   local -a members=()
@@ -763,8 +763,13 @@ publish_fix_token() {
       '{title: $title, head: $head, base: $base, draft: false, body: ""}')
     resp=$(gh_write POST "$gh" "repos/$(job_get "$id" .repo)/pulls" "$request" 2>/dev/null) || resp=""
     pr_url=$(jq -r '.html_url // empty' <<<"$resp")
-    if [[ $pr_url =~ ^https://github\.com/[^/]+/[^/]+/pull/([0-9]+)$ ]]; then
-      pr_number=${BASH_REMATCH[1]}
+    pr_repo=""
+    pr_number=""
+    if [[ $pr_url =~ ^https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)$ ]]; then
+      pr_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+      pr_number=${BASH_REMATCH[3]}
+    fi
+    if [ "$pr_repo" = "$(job_get "$id" .repo)" ] && [ -n "$pr_number" ]; then
       if [ "$tool" != shell ]; then
         request='{"labels":["human:review"]}'
         if ! gh_write POST "$gh" "repos/$(job_get "$id" .repo)/issues/$pr_number/labels" "$request" \
@@ -778,7 +783,7 @@ publish_fix_token() {
       fi
       echo "$pr_url" >"$dir/pr_url"
     else
-      echo "pull request creation failed" >"$rdir/reason"
+      echo "pull request identity invalid" >"$rdir/reason"
       rm -rf "$tmp"
       return 1
     fi
