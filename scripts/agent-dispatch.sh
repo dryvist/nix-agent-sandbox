@@ -774,8 +774,10 @@ publish_fix_token() {
         request='{"labels":["human:review"]}'
         if ! gh_write POST "$gh" "repos/$(job_get "$id" .repo)/issues/$pr_number/labels" "$request" \
           >/dev/null 2>&1; then
-          gh_write PATCH "$gh" "repos/$(job_get "$id" .repo)/pulls/$pr_number" \
-            '{"state":"closed"}' >/dev/null 2>&1 || true
+          if ! gh_write PATCH "$gh" "repos/$(job_get "$id" .repo)/pulls/$pr_number" \
+            '{"state":"closed"}' >/dev/null 2>&1; then
+            echo "pull request close failed" >&2
+          fi
           echo "pull request labeling failed" >"$rdir/reason"
           rm -rf "$tmp"
           return 1

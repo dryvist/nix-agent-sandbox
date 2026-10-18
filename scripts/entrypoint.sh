@@ -652,9 +652,19 @@ Prompt:
 ${AGENT_PROMPT:-}
 \`\`\`")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
-  elif url="$(gh pr view "${branch}" --json url --jq .url)"; then
+  elif pr_info="$(gh pr view "${branch}" --json url,labels)"; then
     # A continued run pushes to the branch of the PR it already opened.
-    printf '%s\n' "${url}" | tee "${pr_file}"
+    if [ "${AGENT_PR_HUMAN_REVIEW:-}" = 1 ] && \
+      ! jq -e '.labels | any(.name == "human:review")' <<<"${pr_info}" >/dev/null; then
+      echo "agent-entrypoint: existing PR is missing human:review; refusing to report success." >&2
+      exit 1
+    fi
+    url="$(jq -r '.url // empty' <<<"${pr_info}")"
+    if [ -n "${url}" ]; then
+      printf '%s\n' "${url}" | tee "${pr_file}"
+    else
+      echo "agent-entrypoint: PR lookup returned no URL; branch ${branch} was published." >&2
+    fi
   else
     echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
   fi

@@ -128,7 +128,12 @@ case "$url" in
     fi
     ;;
   */repos/*/pulls/*)
-    resp='{"state":"closed"}'
+    if [ -n "${STUB_CLOSE_FAIL:-}" ]; then
+      http_code=500
+      resp='{"message":"close denied"}'
+    else
+      resp='{"state":"closed"}'
+    fi
     ;;
   */repos/*/pulls)
     resp=$(jq -cn --arg u "${STUB_FIX_PR_URL:-https://github.com/${STUB_SCOPE_REPO:-dryvist/nix-ai}/pull/8}" '{html_url: $u}')

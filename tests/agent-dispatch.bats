@@ -27,7 +27,8 @@ setup() {
   export REAL_GIT="$(command -v git)"
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
-    STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL
+    STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL STUB_CLOSE_FAIL \
+    STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -1245,11 +1246,20 @@ publish_fixture() {
 echo 1000
 SH
   bash_stub "$tools/gh" <<'SH'
+printf '%s\n' "$*" >>"$STUB_DIR/gh.log"
 case "$1 $2" in
   "repo clone") exec git clone -q "$(cat "$STUB_DIR/origin-path")" "$4" ;;
   "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
   "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
-  "pr create") printf '%s\n' "$*" >"$STUB_DIR/pr-create.argv"; echo https://github.com/dryvist/nix-ai/pull/7 ;;
+  "pr create")
+    printf '%s\n' "$*" >"$STUB_DIR/pr-create.argv"
+    [ -z "${STUB_PR_CREATE_FAIL:-}" ] || exit 1
+    echo https://github.com/dryvist/nix-ai/pull/7
+    ;;
+  "pr view")
+    if [ "${STUB_PR_LABEL_PRESENT:-}" = 1 ]; then labels='[{"name":"human:review"}]'; else labels='[]'; fi
+    printf '{"url":"https://github.com/dryvist/nix-ai/pull/7","labels":%s}\n' "$labels"
+    ;;
   *) exit 1 ;;
 esac
 SH
@@ -1291,7 +1301,8 @@ run_fix_entrypoint() {
 run_publish() {
   local id=$1
   shift
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_LABEL_PRESENT="${STUB_PR_LABEL_PRESENT:-}" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" AGENT_PR_HUMAN_REVIEW=1 "$@" \
     bash -euo pipefail "$ENTRYPOINT"
 }
@@ -1397,6 +1408,7 @@ SH
   run_publish j-1
   [ "$status" -eq 0 ]
   grep -Fq 'pr create --label human:review --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
   grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
@@ -1408,6 +1420,25 @@ SH
     .message.body == "- tool commit"' "$STUB_DIR/graphql.json"
   run ! git -C "$origin" rev-parse --verify -q refs/heads/agent/zcode/j-1
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "the entrypoint fails when a failed labeled PR create leaves the PR unlabeled" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture label-create-fail 0
+  export STUB_PR_CREATE_FAIL=1 STUB_PR_LABEL_PRESENT=0
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -ne 0 ]
+  [[ $output == *"human:review"* ]]
+  grep -Fq 'pr create --label human:review --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  grep -Fq 'pr view agent/zcode/j-1 --json url,labels' "$STUB_DIR/gh.log"
+  [ ! -e "$home/work/.agent-pr-url" ]
+  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
 }
 
 @test "a gitleaks finding in a tool-made commit stops the publish" {
@@ -1659,6 +1690,32 @@ SH
     "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" ]
   [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" -lt \
     "$(line_of 'PATCH https://api.github.com/repos/dryvist/nix-ai/pulls/8')" ]
+  run ! grep -Fq '/merge' "$STUB_DIR/calls.log"
+}
+
+@test "new branch model fix fails and logs when closing its unlabeled PR fails" {
+  local prompt id state status_json attempts close_request
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_LABEL_FAIL=1 STUB_CLOSE_FAIL=1
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  status_json=$output
+  state=$(jq -r .state <<<"$status_json")
+  attempts=0
+  while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+    sleep 0.1
+    status_json=$(dispatch status "$id")
+    state=$(jq -r .state <<<"$status_json")
+    attempts=$((attempts + 1))
+  done
+  [ "$state" = failed ]
+  [ "$(jq -r .reason <<<"$status_json")" = 'pull request labeling failed' ]
+  close_request=$(http_rec 'PATCH https://api.github.com/repos/dryvist/nix-ai/pulls/8')
+  jq -e '.state == "closed"' "$close_request.body"
+  grep -Fq 'pull request close failed' "$AGENT_DISPATCH_STATE_DIR/$id/dispatch.log"
+  run ! grep -Fq '/merge' "$STUB_DIR/calls.log"
 }
 
 @test "head moved deletes a newly created branch and leaves no commit or PR" {
