@@ -240,7 +240,9 @@
                 EOF
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  .zcode.env == [] and .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
+                  .zcode.env == [] and .zcode.trackerAccess == false and
+                  ([to_entries[] | select(.key != "zcode") | .value] | all(has("trackerAccess") | not)) and
+                  .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
                   .zcode.sandboxRouterKeyField == "router_key" and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .opencode.sandboxRouterKeyField == "router_key" and
