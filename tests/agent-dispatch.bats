@@ -1634,6 +1634,31 @@ SH
   jq -e '.labels == ["human:review"]' "$label_request.body"
   [ "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/pulls')" -lt \
     "$(line_of 'POST https://api.github.com/repos/dryvist/nix-ai/issues/8/labels')" ]
+  run ! grep -Eiq 'pulls/[0-9]+/(auto-)?merge|enablePullRequestAutoMerge' \
+    "$STUB_DIR/calls.log" "$STUB_DIR"/http.*.body
+}
+
+@test "new branch fix accepts a case-insensitive PR identity" {
+  local prompt job state status_json attempts
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk STUB_SCOPE_REPO=DryVist/NIX-AI
+  export STUB_FIX_PR_URL=https://github.com/dryvist/nix-ai/pull/8
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode DryVist/NIX-AI feature/new-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  job=$(jq -r .job <<<"$output")
+  status_json=$output
+  state=$(jq -r .state <<<"$status_json")
+  attempts=0
+  while [ "$state" = running ] && [ "$attempts" -lt 300 ]; do
+    sleep 0.1
+    status_json=$(dispatch status "$job")
+    state=$(jq -r .state <<<"$status_json")
+    attempts=$((attempts + 1))
+  done
+  [ "$state" = succeeded ]
+  [ "$(jq -r .pr <<<"$status_json")" = https://github.com/dryvist/nix-ai/pull/8 ]
+  [ "$(grep -c 'POST https://api.github.com/repos/DryVist/NIX-AI/issues/8/labels' "$STUB_DIR/calls.log")" -eq 1 ]
 }
 
 @test "new branch fix rejects a PR identity outside the job repository" {
