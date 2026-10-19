@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.3...v1.5.4) (2026-10-19)
+
+
+### Bug Fixes
+
+* **bao-agent:** read the router key from its own leaf ([#136](https://github.com/dryvist/nix-agent-sandbox/issues/136)) ([2447682](https://github.com/dryvist/nix-agent-sandbox/commit/2447682825bdaad805fcc8fe0ac5d94b7482dfb7))
+
 ## [1.5.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.2...v1.5.3) (2026-10-18)
 
 
