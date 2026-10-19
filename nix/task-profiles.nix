@@ -45,20 +45,20 @@
   zcode = {
     env = [ ];
     routerKeyField = "ZCODE_ROUTER_KEY";
-    sandboxRouterKeyField = "router_key";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
     trackerAccess = false;
     ttyLogin = true;
   };
   opencode = {
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
-    sandboxRouterKeyField = "router_key";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
     ttyLogin = true;
   };
   opencode-local = {
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
-    sandboxRouterKeyField = "router_key";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
   };
   opencode-zai = {
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
@@ -78,7 +78,7 @@
   qwen-code = {
     env = [ ];
     routerKeyField = "QWEN_CODE_ROUTER_KEY";
-    sandboxRouterKeyField = "router_key";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
   };
   zcode-web = {
     env = [
