@@ -151,8 +151,8 @@ agent-dispatch check
   `zai-coding-plan/glm-5.3`. `cursor-agent` is terminal-only and signs in
   interactively. `shell` is accepted only by `fix`: it runs the task text as a
   `bash` command and needs no model credential. `qwen-code` batch runs use
-  the router's `medium` capability with `router_key` from the sandbox leaf,
-  and have no terminal session.
+  the router's `medium` capability with `sandbox_agent_router_llm_router_key`
+  from `secret/data/apps/sandbox-agent-router`, and have no terminal session.
 - **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
   `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
   in `AGENT_REPO_DENYLIST`. The default branch must be public and have an
@@ -234,12 +234,14 @@ Before a container starts, the dispatcher copies one mode-0600 `.agent-env`
 file and the prompt into its home directory. It contains the GitHub token for
 start jobs, the OpenBao address, the selected sandbox AppRole id and wrapped
 SecretID, the public mirror URL, service URLs, and profile values. The
-OpenBao Agent unwraps the one-use SecretID and reads
-`secret/data/apps/sandbox-agent`. It injects the router key and creates
-per-tool Vikunja and Zammad MCP configuration. The AppRole token has a
+OpenBao Agent unwraps the one-use SecretID and reads the router key field
+`sandbox_agent_router_llm_router_key` from
+`secret/data/apps/sandbox-agent-router`. It reads Vikunja and Zammad tokens
+from `secret/data/apps/sandbox-agent` and creates per-tool MCP configuration.
+The AppRole policy grants read access to both leaves. Its token has a
 server-side 15-minute TTL. The host supplies the Z.ai plan key from the
 external leaf only for profiles that request it. The container reads no other
-OpenBao path. Service credentials, host paths and the Docker socket are not
+OpenBao paths. Service credentials, host paths and the Docker socket are not
 passed as container arguments or mounts.
 
 ### Environment
@@ -258,8 +260,8 @@ passed as container arguments or mounts.
 | `AGENT_PUBLISH_MAX_BYTES` | encoded change size and copied fix output cap (default 8 MiB) |
 | `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
 
-Profile fields read: external profile values requested by a tool, and the
-`sandbox-agent` leaf fields used by the entrypoint.
+Profile fields read: external profile values requested by a tool, and fields
+from the router-key and tracker-token leaves used by the entrypoint.
 Result
 delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 `NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.

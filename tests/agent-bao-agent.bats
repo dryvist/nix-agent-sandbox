@@ -22,7 +22,7 @@ bash_stub() {
   local home="$BATS_TEST_TMPDIR/home" tools="$BATS_TEST_TMPDIR/bin"
   local auth_dir="$BATS_TEST_TMPDIR/auth" mode expected_config
   mkdir -p "$home" "$tools" "$auth_dir"
-  printf '%s\n' '{"zcode":{"env":[],"sandboxRouterKeyField":"router_key"}}' \
+  printf '%s\n' '{"zcode":{"env":[],"sandboxRouterKeyField":"sandbox_agent_router_llm_router_key"}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -95,7 +95,7 @@ SH
   local home="$BATS_TEST_TMPDIR/public-home" tools="$BATS_TEST_TMPDIR/public-bin"
   local auth_dir="$BATS_TEST_TMPDIR/public-auth" mode expected_config
   mkdir -p "$home" "$tools" "$auth_dir"
-  printf '%s\n' '{"zcode":{"env":[],"sandboxRouterKeyField":"router_key","trackerAccess":false,"ttyLogin":true}}' \
+  printf '%s\n' '{"zcode":{"env":[],"sandboxRouterKeyField":"sandbox_agent_router_llm_router_key","trackerAccess":false,"ttyLogin":true}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -149,7 +149,7 @@ SH
   [ ! -e "$BATS_TEST_TMPDIR/bao-ran" ]
 }
 
-@test "OpenBao Agent consumes a wrapped SecretID and injects KV templates" {
+@test "OpenBao Agent reads the router key leaf and injects tracker KV templates" {
   if [ -z "${BAO_BIN:-}" ]; then
     skip "BAO_BIN is not included in the current Bats test environment"
   fi
@@ -177,10 +177,15 @@ SH
 path "secret/data/apps/sandbox-agent" {
   capabilities = ["read"]
 }
+path "secret/data/apps/sandbox-agent-router" {
+  capabilities = ["read"]
+}
 HCL
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" kv put \
-    secret/apps/sandbox-agent router_key=router-test-key \
+    secret/apps/sandbox-agent router_key=stale-router-key \
     vikunja_token=vikunja-test-token zammad_token=zammad-test-token >/dev/null
+  BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" kv put \
+    secret/apps/sandbox-agent-router sandbox_agent_router_llm_router_key=router-test-key >/dev/null
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" write \
     auth/approle/role/sandbox-agent-read token_policies=sandbox-read \
     token_ttl=15m token_max_ttl=15m secret_id_num_uses=1 >/dev/null
@@ -240,7 +245,7 @@ SH
 
   agent_status=0
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=zcode \
-    AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
     AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
     AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]' \
     BAO_TEST_ROUTER_KEY=router-test-key \
@@ -248,7 +253,7 @@ SH
     BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
     "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
   if [ "$agent_status" -ne 0 ]; then
-    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key \
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key \
       vikunja-test-token zammad-test-token; do
       agent_output=${agent_output//"$value"/[REDACTED]}
     done
@@ -265,7 +270,7 @@ SH
   chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
   agent_status=0
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=opencode \
-    AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
     AGENT_ROUTER_BASE_URL=https://router.test/v1 \
     AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
     AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]' \
@@ -274,7 +279,7 @@ SH
     BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
     "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
   if [ "$agent_status" -ne 0 ]; then
-    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key \
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key \
       vikunja-test-token zammad-test-token; do
       agent_output=${agent_output//"$value"/[REDACTED]}
     done
@@ -291,10 +296,10 @@ SH
   chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
   agent_status=0
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=zcode EXPECT_PUBLIC=1 \
-    AGENT_SANDBOX_ROUTER_KEY_FIELD=router_key BAO_TEST_ROUTER_KEY=router-test-key \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key BAO_TEST_ROUTER_KEY=router-test-key \
     "$BAO_BIN" agent -config="$public_config" 2>&1) || agent_status=$?
   if [ "$agent_status" -ne 0 ]; then
-    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key; do
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key; do
       agent_output=${agent_output//"$value"/[REDACTED]}
     done
     printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g'

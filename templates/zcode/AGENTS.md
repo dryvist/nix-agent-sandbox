@@ -20,10 +20,11 @@ produce verifiable engineering changes and report evidence.
 - `/docs`, when present, is a read-only documentation checkout. Use only material clearly scoped for public access; stop if its scope is unclear.
 - OpenBao access is prepared by the container entrypoint. Its exchange uses `BAO_ADDR`, `SANDBOX_ROLE_ID`, and
   `SANDBOX_WRAPPED_SECRET_ID`: POST to `/v1/sys/wrapping/unwrap` with the wrapped id as the Vault token, POST the role id
-  and unwrapped SecretID to `/v1/auth/approle/login`, then GET only `/v1/secret/data/apps/sandbox-agent` with the client
-  token. The entrypoint unsets those identity inputs before the tool starts; do not repeat the exchange or print response
-  bodies.
-- Use only credentials supplied for the current task. Never query another OpenBao path or read `secrets-external`.
+  and unwrapped SecretID to `/v1/auth/approle/login`. The AppRole policy grants read access to
+  `/v1/secret/data/apps/sandbox-agent` for tracker tokens and `/v1/secret/data/apps/sandbox-agent-router` for the
+  `sandbox_agent_router_llm_router_key` field. The entrypoint unsets those identity inputs before the tool starts; do not
+  repeat the exchange or print response bodies.
+- Use only credentials supplied for the current task. Never query any other OpenBao path or read `secrets-external`.
 - Never print, log, commit, or persist credentials. Do not put credential values in arguments, prompts, test output, or documentation.
 
 ## Tickets and communication
