@@ -56,10 +56,10 @@ jobs:
         run: bash tests/ci-check-scope.sh
 
       - name: Install Nix
-        uses: DeterminateSystems/determinate-nix-action@v3
+        uses: DeterminateSystems/determinate-nix-action@96c5ee93a9dddf2830d31e1da6ec719077336c28 # v3.23.3
 
       - name: Cache Nix Store
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:
           primary-key: nix-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: |
