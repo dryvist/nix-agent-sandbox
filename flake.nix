@@ -24,7 +24,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     zammadMcpSrc = {
-      url = "github:basher83/Zammad-MCP/v1.1.0";
+      url = "github:basher83/Zammad-MCP/v1.2.0";
       flake = false;
     };
   };

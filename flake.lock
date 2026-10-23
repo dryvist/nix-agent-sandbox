@@ -1505,16 +1505,16 @@
     "zammadMcpSrc": {
       "flake": false,
       "locked": {
-        "lastModified": 1765260446,
-        "narHash": "sha256-6Ya8z1IRiTVnOGYrqHPWk8zUryYdUpLarKwk3Q7slxo=",
+        "lastModified": 1790779332,
+        "narHash": "sha256-f02QrC+CALTUsYbmOaVuYRQz7iMO6gB9ICvfKZrwXng=",
         "owner": "basher83",
         "repo": "Zammad-MCP",
-        "rev": "7de2bfaf66dcd202d27ee9a8fb9b2ac54577aaf7",
+        "rev": "4769698b837b2febd05596909fb90ba5d133d877",
         "type": "github"
       },
       "original": {
         "owner": "basher83",
-        "ref": "v1.1.0",
+        "ref": "v1.2.0",
         "repo": "Zammad-MCP",
         "type": "github"
       }
