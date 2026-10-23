@@ -3,7 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-ai.url = "github:dryvist/nix-ai?ref=v7";
+    nix-ai = {
+      url = "github:dryvist/nix-ai?ref=v7";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs-unstable.follows = "nixpkgs";
+    };
     llm-agents = {
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
