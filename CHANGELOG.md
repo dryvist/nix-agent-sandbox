@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.4...v1.5.5) (2026-10-24)
+
+
+### Bug Fixes
+
+* **entrypoint:** close Codex stdin and fail on an empty final message ([#143](https://github.com/dryvist/nix-agent-sandbox/issues/143)) ([439de00](https://github.com/dryvist/nix-agent-sandbox/commit/439de0032014300c0d9e04f5f842372ee7deb3b1))
+
 ## [1.5.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.3...v1.5.4) (2026-10-19)
 
 
