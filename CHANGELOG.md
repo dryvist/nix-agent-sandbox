@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.5...v1.6.0) (2026-10-24)
+
+
+### Features
+
+* **sandbox:** ship git-town and ghq and branch from a fresh origin/HEAD ([#145](https://github.com/dryvist/nix-agent-sandbox/issues/145)) ([a880e8b](https://github.com/dryvist/nix-agent-sandbox/commit/a880e8bb0cc50755e90bcb64e16db73b44fdce25))
+
 ## [1.5.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.4...v1.5.5) (2026-10-24)
 
 
