@@ -1466,6 +1466,31 @@ SH
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
 }
 
+@test "the entrypoint fetches origin and creates an untracked run branch from origin/HEAD" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin fetch_line head_line branch_line branch=agent/zcode/j-fresh-base
+  publish_fixture fresh-base 0
+  bash_stub "$tools/git" <<SH
+printf '%s\\n' "\$*" >>"\$STUB_DIR/git.log"
+exec "$REAL_GIT" "\$@"
+SH
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m 'tool commit'
+SH
+
+  run_publish j-fresh-base
+  [ "$status" -eq 0 ]
+  fetch_line=$(grep -nFx 'fetch origin' "$STUB_DIR/git.log" | cut -d: -f1)
+  head_line=$(grep -nFx 'remote set-head origin --auto' "$STUB_DIR/git.log" | cut -d: -f1)
+  branch_line=$(grep -nFx "checkout --no-track -b $branch origin/HEAD" "$STUB_DIR/git.log" | cut -d: -f1)
+  [ "$fetch_line" -lt "$head_line" ]
+  [ "$head_line" -lt "$branch_line" ]
+  [ "$(git -C "$home/work/repo" rev-parse "$branch~1")" = "$(git -C "$home/work/repo" rev-parse origin/HEAD)" ]
+  [ -z "$(git -C "$home/work/repo" for-each-ref --format='%(upstream:short)' "refs/heads/$branch")" ]
+}
+
 @test "the entrypoint fails when a failed labeled PR create leaves the PR unlabeled" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin

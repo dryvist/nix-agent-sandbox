@@ -369,7 +369,15 @@ if [ -n "${AGENT_REPO:-}" ]; then
     branch="agent/${AGENT_TOOL}/${AGENT_RUN_ID}"
     gh repo clone "${AGENT_REPO}" repo -- --depth 50
     cd repo || exit
-    git checkout -b "${branch}"
+    if ! git fetch origin; then
+      echo "agent-entrypoint: failed to fetch origin before creating run branch." >&2
+      exit 1
+    fi
+    if ! git remote set-head origin --auto; then
+      echo "agent-entrypoint: failed to set origin/HEAD before creating run branch." >&2
+      exit 1
+    fi
+    git checkout --no-track -b "${branch}" origin/HEAD
     git config user.name "${AGENT_GIT_NAME:-nix-agent-sandbox}"
     git config user.email "${AGENT_GIT_EMAIL:-agent@users.noreply.github.com}"
   fi
