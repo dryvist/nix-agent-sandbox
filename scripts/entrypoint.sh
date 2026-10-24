@@ -462,7 +462,25 @@ case "${AGENT_TOOL}" in
     # baked config.toml; the container is the sandbox. --skip-git-repo-check
     # is required for a --repo-less run (cwd is $HOME/work, not a git repo);
     # harmless with AGENT_REPO set too, since that cwd is a real clone.
-    codex exec --skip-git-repo-check "${AGENT_PROMPT}" || status=$?
+    codex_output_dir="${HOME}/.codex/sessions"
+    mkdir -p "${codex_output_dir}" || {
+      echo "agent-entrypoint: could not create the Codex output directory." >&2
+      exit 1
+    }
+    codex_output_file="$(mktemp "${codex_output_dir}/last-message.XXXXXX")" || {
+      echo "agent-entrypoint: could not create the Codex output file." >&2
+      exit 1
+    }
+    codex exec --skip-git-repo-check -o "${codex_output_file}" "${AGENT_PROMPT}" </dev/null || {
+      status=$?
+      echo "agent-entrypoint: codex exited with status ${status}; refusing to publish." >&2
+      exit "${status}"
+    }
+    if [ ! -s "${codex_output_file}" ]; then
+      echo "agent-entrypoint: codex returned an empty final message; refusing to publish." >&2
+      exit 1
+    fi
+    cat "${codex_output_file}"
     ;;
   qwen | qwen-code)
     qwen_router_key=${AGENT_ROUTER_KEY}

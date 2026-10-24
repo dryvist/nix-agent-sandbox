@@ -2041,6 +2041,53 @@ SH
   [[ $output == *"exited with status 37; refusing to publish"* ]]
 }
 
+@test "Codex entrypoint closes stdin and requires a nonempty final message" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/codex-output-home" tools="$BATS_TEST_TMPDIR/codex-output-tools" output_file
+  mkdir -p "$home" "$tools"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/codex" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/codex-argv"
+output_file=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    output_file="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+[ -n "$output_file" ] || exit 98
+printf '%s\n' "$output_file" >"$STUB_DIR/codex-output-file"
+if IFS= read -r inherited_stdin; then printf '%s\n' "$inherited_stdin" >"$STUB_DIR/codex-stdin"; fi
+if [ "${STUB_CODEX_EMPTY:-}" = 1 ]; then : >"$output_file"; else printf '%s\n' 'Codex final result' >"$output_file"; fi
+exit "${STUB_CODEX_EXIT:-0}"
+SH
+
+  run bash -c 'printf "%s\n" should-not-reach-codex | env -i PATH="$1" HOME="$2" STUB_DIR="$3" AGENT_SANDBOX=1 AGENT_TOOL=codex AGENT_PROMPT="Review this change" bash -euo pipefail "$4"' \
+    _ "$tools:$PATH" "$home" "$STUB_DIR" "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ ! -s "$STUB_DIR/codex-stdin" ]
+  grep -qx -- -o "$STUB_DIR/codex-argv"
+  grep -qx -- 'Review this change' "$STUB_DIR/codex-argv"
+  output_file=$(cat "$STUB_DIR/codex-output-file")
+  case "$output_file" in "$home"/.codex/sessions/last-message.*) ;; *) false ;; esac
+  [ "$(cat "$output_file")" = 'Codex final result' ]
+  [[ $output == *'Codex final result'* ]]
+
+  run bash -c 'printf "%s\n" should-not-reach-codex | env -i PATH="$1" HOME="$2" STUB_DIR="$3" AGENT_SANDBOX=1 AGENT_TOOL=codex AGENT_PROMPT="Review this change" STUB_CODEX_EXIT=37 bash -euo pipefail "$4"' \
+    _ "$tools:$PATH" "$home" "$STUB_DIR" "$ENTRYPOINT"
+  [ "$status" -eq 37 ]
+  [[ $output == *'codex exited with status 37; refusing to publish.'* ]]
+
+  run bash -c 'printf "%s\n" should-not-reach-codex | env -i PATH="$1" HOME="$2" STUB_DIR="$3" AGENT_SANDBOX=1 AGENT_TOOL=codex AGENT_PROMPT="Review this change" STUB_CODEX_EMPTY=1 bash -euo pipefail "$4"' \
+    _ "$tools:$PATH" "$home" "$STUB_DIR" "$ENTRYPOINT"
+  [ "$status" -eq 1 ]
+  [[ $output == *'codex returned an empty final message; refusing to publish.'* ]]
+}
+
 @test "dispatch-ssh accepts a repo-less zcode terminal command" {
   run_tty_command "tty zcode"
   [ "$status" -eq 0 ]
