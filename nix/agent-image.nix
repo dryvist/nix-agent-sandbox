@@ -23,7 +23,9 @@
   curl,
   cursorAgent,
   gh,
+  ghq,
   git,
+  git-town,
   gitleaks,
   gnugrep,
   jq,
@@ -94,7 +96,9 @@ let
     coreutils
     curl
     gh
+    ghq
     git
+    git-town
     gitleaks # pre-push staged-diff secret scan in the entrypoint
     gnugrep
     jq
@@ -172,6 +176,20 @@ let
     nobody:x:65534:
     EOF
     echo "hosts: files dns" > $out/etc/nsswitch.conf
+    cat > $out/etc/gitconfig <<'EOF'
+    [pull]
+      rebase = true
+    [rebase]
+      updateRefs = true
+      autoStash = true
+    [push]
+      autoSetupRemote = true
+    [git-town]
+      sync-feature-strategy = rebase
+      sync-perennial-strategy = rebase
+      perennial-regex = ^(main|develop)$
+      ship-strategy = api
+    EOF
   '';
 in
 dockerTools.streamLayeredImage {
