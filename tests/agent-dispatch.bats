@@ -1487,7 +1487,7 @@ SH
   branch_line=$(grep -nFx "checkout --no-track -b $branch origin/HEAD" "$STUB_DIR/git.log" | cut -d: -f1)
   [ "$fetch_line" -lt "$head_line" ]
   [ "$head_line" -lt "$branch_line" ]
-  [ "$(git -C "$home/work/repo" rev-parse "$branch")" = "$(git -C "$home/work/repo" rev-parse origin/HEAD)" ]
+  [ "$(git -C "$home/work/repo" rev-parse "$branch~1")" = "$(git -C "$home/work/repo" rev-parse origin/HEAD)" ]
   [ -z "$(git -C "$home/work/repo" for-each-ref --format='%(upstream:short)' "refs/heads/$branch")" ]
 }
 
