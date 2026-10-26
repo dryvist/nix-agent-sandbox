@@ -258,6 +258,50 @@ gh_revoke() {
     "$GITHUB_API/installation/token" >/dev/null 2>&1 || true
 }
 
+repo_property_guard() {
+  local token=$1 repo=$2 properties
+  properties=$(gh_get "$token" "repos/$repo/properties/values") || {
+    echo "repository property ai-untrusted-ok lookup failed"
+    return 1
+  }
+  if ! jq -e 'type == "array"' <<<"$properties" >/dev/null 2>&1; then
+    echo "repository property lookup returned an invalid response"
+    return 1
+  fi
+  if ! jq -e --arg name ai-untrusted-ok '
+    ([.[] | objects | select(.property_name == $name)] as $matches |
+      ($matches | length) == 1 and $matches[0].value == "true")
+  ' <<<"$properties" >/dev/null 2>&1; then
+    echo "repository property ai-untrusted-ok must be exactly true"
+    return 1
+  fi
+}
+
+# repo_write_guard <repo> <service-token>: refuses unless the repository's
+# ai-untrusted-ok property is exactly "true". The lookup uses a read-only
+# token of its own, revoked before any write token is minted.
+repo_write_guard() {
+  local repo=$1 service_token=$2 request mint read_token reason
+  request=$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
+    '{org_name: $o, repositories: $r, permissions: {contents: "read"}}')
+  mint=$(bao_req POST github-agents/token "$service_token" "$request") || {
+    echo "github token mint refused for $repo"
+    return 1
+  }
+  read_token=$(jq -r '.data.token // empty' <<<"$mint")
+  if [ -z "$read_token" ] || ! single_line "$read_token"; then
+    if [ -n "$read_token" ]; then gh_revoke "$read_token"; fi
+    echo "github read token is invalid for $repo"
+    return 1
+  fi
+  reason=$(repo_property_guard "$read_token" "$repo") || true
+  gh_revoke "$read_token"
+  if [ -n "$reason" ]; then
+    echo "$reason"
+    return 1
+  fi
+}
+
 # --- Job state: $STATE_DIR/<id>/{job.json,pr_url,runs/<n>/...} ---
 latest_run() {
   local r n=0
@@ -798,7 +842,7 @@ publish_fix_token() {
 # publish_fix <id> <run> <container> <service-token>: mint the write token
 # only after the container has exited, then revoke it on every path.
 publish_fix() {
-  local id=$1 run=$2 cid=$3 tok=$4 repo bucket mint gh
+  local id=$1 run=$2 cid=$3 tok=$4 repo bucket mint gh reason
   local rdir="$STATE_DIR/$1/runs/$2"
   local tmp request max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" archive_size cp_rc rc=0
   repo=$(job_get "$id" .repo)
@@ -829,6 +873,11 @@ publish_fix() {
   bucket=$(bao_req GET "$BUCKET" "$tok") || bucket=""
   request=$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
     '{org_name: $o, repositories: $r, permissions: {contents: "write", pull_requests: "write"}}')
+  reason=$(repo_write_guard "$repo" "$tok") || {
+    echo "$reason" >"$rdir/reason"
+    rm -rf "$tmp"
+    return 1
+  }
   mint=$(bao_req POST github-agents/token "$tok" "$request") || mint=""
   gh=$(jq -r '.data.token // empty' <<<"$mint")
   if [ -z "$gh" ] || ! scope_ok "$gh" "$repo"; then
@@ -1124,6 +1173,10 @@ run_job() {
       return 1
     }
   else
+  reason=$(repo_write_guard "$repo" "$tok") || {
+    abort "$id" "$run" "$reason" "$tok"
+    return 1
+  }
   # One repo, contents + pull requests only (no workflow edits). The
   # org name and repository travel as strings, the form the policy matches.
   mint=$(bao_req POST github-agents/token "$tok" "$(jq -cn --arg o "${repo%%/*}" --arg r "${repo#*/}" \
