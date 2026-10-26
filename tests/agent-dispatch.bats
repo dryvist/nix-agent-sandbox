@@ -28,7 +28,9 @@ setup() {
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
     STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL STUB_CLOSE_FAIL \
-    STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL
+    STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL \
+    STUB_PROPERTY_VALUE STUB_PROPERTY_MISSING \
+    STUB_PROPERTY_HTTP_ERROR STUB_PROPERTY_INVALID_JSON
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -442,17 +444,101 @@ SH
 }
 
 @test "the GitHub token is minted for one repo with contents and pull_requests only" {
-  local rec
+  local rec read_rec prop_rec f
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   rec=$(http_rec "POST https://bao.test/v1/auth/approle/login")
   [ "$(jq -cS . "$rec.body")" = '{"role_id":"role-id-value","secret_id":"secret-id-value"}' ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 2 ]
   rec=$(http_rec "POST https://bao.test/v1/github-agents/token")
   [ "$(jq -cS . "$rec.body")" = '{"org_name":"dryvist","permissions":{"contents":"write","pull_requests":"write"},"repositories":"nix-ai"}' ]
   [ "$(jq -r 'has("installation_id") | not' "$rec.body")" = true ]
   grep -qx 'X-Vault-Token: s.tok1' "$rec.hdr"
+  for f in "$STUB_DIR"/http.*.req; do
+    [ "$(cat "$f")" = 'POST https://bao.test/v1/github-agents/token' ] || continue
+    if jq -e '.permissions == {contents: "read"}' "${f%.req}.body" >/dev/null; then read_rec=${f%.req}; fi
+  done
+  jq -e '.org_name == "dryvist" and .repositories == "nix-ai" and (has("installation_id") | not)' \
+    "$read_rec.body"
+  [ "$(line_of 'POST https://bao.test/v1/github-agents/token')" -lt \
+    "$(line_of 'GET https://api.github.com/repos/dryvist/nix-ai/properties/values')" ]
+  [ "$(line_of 'GET https://api.github.com/repos/dryvist/nix-ai/properties/values')" -lt \
+    "$(line_of 'DELETE https://api.github.com/installation/token')" ]
+  [ "$(line_of 'DELETE https://api.github.com/installation/token')" -lt \
+    "$(last_line_of 'POST https://bao.test/v1/github-agents/token')" ]
+  prop_rec=$(http_rec 'GET https://api.github.com/repos/dryvist/nix-ai/properties/values')
+  grep -qx 'Authorization: Bearer ghs_minted_secret' "$prop_rec.hdr"
   rec=$(http_rec "GET https://api.github.com/installation/repositories")
   grep -qx 'Authorization: Bearer ghs_minted_secret' "$rec.hdr"
+}
+
+no_write_mint_requested() {
+  local req count=0 body
+  for req in "$STUB_DIR"/http.*.req; do
+    [ "$(cat "$req")" = 'POST https://bao.test/v1/github-agents/token' ] || continue
+    count=$((count + 1))
+    body=${req%.req}.body
+    if jq -e '.permissions.contents == "write" or .permissions.pull_requests == "write"' \
+      "$body" >/dev/null; then
+      echo "a write token was requested" >&2
+      return 1
+    fi
+  done
+  [ "$count" -gt 0 ]
+}
+
+@test "a false ai-untrusted-ok property refuses before the write mint" {
+  export STUB_PROPERTY_VALUE=false
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "repository property ai-untrusted-ok must be exactly true" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 1 ]
+  no_write_mint_requested
+  ! grep -q '^docker create' "$STUB_DIR/calls.log"
+}
+
+@test "a missing ai-untrusted-ok property refuses before the write mint" {
+  export STUB_PROPERTY_MISSING=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "repository property ai-untrusted-ok must be exactly true" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 1 ]
+  no_write_mint_requested
+  ! grep -q '^docker create' "$STUB_DIR/calls.log"
+}
+
+@test "a property lookup HTTP error refuses before the write mint" {
+  export STUB_PROPERTY_HTTP_ERROR=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "repository property ai-untrusted-ok lookup failed" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 1 ]
+  no_write_mint_requested
+  ! grep -q '^docker create' "$STUB_DIR/calls.log"
+}
+
+@test "an unparsable property response refuses before the write mint" {
+  export STUB_PROPERTY_INVALID_JSON=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "repository property lookup returned an invalid response" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 1 ]
+  no_write_mint_requested
+  ! grep -q '^docker create' "$STUB_DIR/calls.log"
+}
+
+@test "fix publishing refuses before the write mint when the property is not exactly true" {
+  local prompt
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  export STUB_CONTENTS_404=1 STUB_FIX_BRANCH_EXISTS=1 STUB_PROPERTY_VALUE=false
+  prompt=$(fix_prompt "repair this failure")
+  run --separate-stderr dispatch fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = failed ]
+  [ "$(jq -r .reason <<<"$output")" = "repository property ai-untrusted-ok must be exactly true" ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 2 ]
+  no_write_mint_requested
+  [ "$(grep -c 'GET https://api.github.com/repos/dryvist/nix-ai/properties/values' "$STUB_DIR/calls.log")" -eq 1 ]
 }
 
 @test "a refused mint fails closed without another login: no container and result posted" {
@@ -910,7 +996,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   has_pair --name "agent-$id-2"
   has_pair -v "agent-job-$id:/home/agent/work"
   [ "$(tar -xOf "$STUB_DIR/cp.2.tar" .agent-prompt)" = "now add tests" ]
-  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 2 ]
+  [ "$(grep -c 'POST https://bao.test/v1/github-agents/token' "$STUB_DIR/calls.log")" -eq 4 ]
   [ "$(grep -c 'POST https://bao.test/v1/auth/approle/login' "$STUB_DIR/calls.log")" -eq 1 ]
   for ((i = 0; i < 500; i++)); do
     [ -d "$AGENT_DISPATCH_STATE_DIR/$id/runs/2/final" ] && break

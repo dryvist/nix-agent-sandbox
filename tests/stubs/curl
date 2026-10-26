@@ -88,6 +88,19 @@ case "$url" in
       resp='{"data":{"token":"ghs_minted_secret"}}'
     fi
     ;;
+  */repos/*/properties/values)
+    if [ -n "${STUB_PROPERTY_HTTP_ERROR:-}" ]; then
+      http_code=403
+      resp='{"message":"property denied"}'
+    elif [ -n "${STUB_PROPERTY_INVALID_JSON:-}" ]; then
+      resp='not-json'
+    elif [ -n "${STUB_PROPERTY_MISSING:-}" ]; then
+      resp='[{"property_name":"other-property","value":"true"}]'
+    else
+      resp=$(jq -cn --arg value "${STUB_PROPERTY_VALUE:-true}" \
+        '[{property_name:"ai-untrusted-ok",value:$value}]')
+    fi
+    ;;
   */installation/repositories)
     resp="{\"total_count\":${STUB_SCOPE_COUNT:-1},\"repositories\":[{\"full_name\":\"${STUB_SCOPE_REPO:-dryvist/nix-ai}\"}]}"
     ;;
