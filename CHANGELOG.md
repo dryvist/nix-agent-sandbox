@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.6.0...v1.7.0) (2026-10-26)
+
+
+### Features
+
+* **dispatch:** refuse the write mint unless ai-untrusted-ok is true ([#147](https://github.com/dryvist/nix-agent-sandbox/issues/147)) ([6141ba4](https://github.com/dryvist/nix-agent-sandbox/commit/6141ba43ca8d91f193d40e58d7eb9b398fe6ad35))
+
 ## [1.6.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.5.5...v1.6.0) (2026-10-24)
 
 
