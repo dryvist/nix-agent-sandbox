@@ -311,16 +311,16 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
-    AGENT_ROUTER_BASE_URL BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID \
-    SANDBOX_WRAPPED_SECRET_ID | sort)" ]
-  [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
+    BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID \
+    | sort)" ]
+  [[ ! $env_data =~ VIKUNJA_|ZAMMAD_|ZAI_|AGENT_ROUTER ]]
   grep -qx 'BAO_ADDR=https://bao.test' <<<"$env_data"
   grep -qx 'SANDBOX_ROLE_ID=sandbox-agent-role-id-value' <<<"$env_data"
   grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
   grep -qx 'GIT_MIRROR_URL=https://mirror.test/public' <<<"$env_data"
   [[ ! $env_data =~ AGENT_ROUTER_KEY|OPENBAO_APPROLE|s\.tok ]]
-  grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-agent-write/role-id' "$STUB_DIR/calls.log"
-  grep -Fx 'bao write -address=https://bao.test -wrap-ttl=15m -format=json -f auth/approle/role/sandbox-agent-write/secret-id' \
+  grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-zcode-write/role-id' "$STUB_DIR/calls.log"
+  grep -Fx 'bao write -address=https://bao.test -wrap-ttl=15m -format=json -f auth/approle/role/sandbox-zcode-write/secret-id' \
     "$STUB_DIR/argv.log"
   grep -qx 'set' "$STUB_DIR/bao-token-present"
   run ! grep -q '^curl .*secret-id' "$STUB_DIR/argv.log"
@@ -336,8 +336,9 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   run --separate-stderr dispatch start opencode-zai dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
-  grep -q '^ZAI_SUBSCRIPTION_KEY=' <<<"$env_data"
-  grep -q 'GET https://bao.test/v1/secret/data/secrets-external/zai-coding' "$STUB_DIR/calls.log"
+  grep -qx 'ZAI_SUBSCRIPTION_KEY=zai-secret-value' <<<"$env_data"
+  grep -q 'GET https://bao.test/v1/secrets-external/data/ai/saas/zai' "$STUB_DIR/calls.log"
+  [ "$(grep -c 'secret/data/secrets-external' "$STUB_DIR/calls.log" || true)" -eq 0 ]
   [[ $output != *zai-secret-value* ]]
   no_secret_on_a_command_line
 }
@@ -356,7 +357,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 
 @test "each routed profile receives the router endpoint and wrapped sandbox identity" {
   local tool n=0 env_data
-  for tool in zcode opencode opencode-local qwen-code; do
+  for tool in opencode opencode-local qwen-code; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -364,21 +365,91 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
     grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
     [[ ! $env_data =~ AGENT_ROUTER_KEY|ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
-    if [ "$tool" = zcode ]; then
-      [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
-      [ "$(printf '%s\n' "$env_data" | cut -d= -f1 | sort)" = "$(printf '%s\n' \
-        AGENT_ROUTER_BASE_URL BAO_ADDR GIT_MIRROR_URL GH_TOKEN GITHUB_TOKEN SANDBOX_ROLE_ID \
-        SANDBOX_WRAPPED_SECRET_ID | sort)" ]
-    else
+    if [ "$tool" = qwen-code ]; then
       grep -qx 'VIKUNJA_URL=https://vikunja.test/api/v1' <<<"$env_data"
       grep -qx 'ZAMMAD_URL=https://zammad.test/api/v1' <<<"$env_data"
+    else
+      [[ ! $env_data =~ VIKUNJA_|ZAMMAD_ ]]
     fi
   done
 }
 
+@test "zcode and opencode read no Z.ai path from the dispatcher and receive only their own router endpoint" {
+  local env_data
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'secrets-external' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  [[ ! $env_data =~ AGENT_ROUTER|ZAI_|VIKUNJA_|ZAMMAD_ ]]
+
+  run --separate-stderr dispatch start opencode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'secrets-external' "$STUB_DIR/calls.log" || true)" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.2.tar" .agent-env)
+  grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
+  [[ ! $env_data =~ AGENT_ROUTER_KEY|ZAI_|VIKUNJA_|ZAMMAD_ ]]
+}
+
+@test "each tool and mode selects its own sandbox role; env overrides win" {
+  local row tool mode role
+  local -a rows=(
+    "zcode start sandbox-zcode-write"
+    "zcode fix sandbox-zcode-read"
+    "opencode start sandbox-opencode-write"
+    "opencode fix sandbox-opencode-read"
+    "opencode-local start sandbox-opencode-write"
+    "opencode-local fix sandbox-opencode-read"
+    "opencode-zai start sandbox-agent-write"
+    "opencode-zai fix sandbox-agent-read"
+    "qwen-code start sandbox-agent-write"
+  )
+  export STUB_CONTENTS_404=1 STUB_FIX_BRANCH_EXISTS=1
+  for row in "${rows[@]}"; do
+    read -r tool mode role <<<"$row"
+    : >"$STUB_DIR/calls.log"
+    : >"$STUB_DIR/argv.log"
+    if [ "$mode" = fix ]; then
+      set_fix_outputs "$(fix_add_json src/role.txt 'role content')"
+      run --separate-stderr dispatch fix "$tool" dryvist/nix-ai feature/ci-fix "$FIX_SHA" \
+        "$(fix_prompt "role check")"
+    else
+      run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
+    fi
+    [ "$status" -eq 0 ]
+    grep -q "GET https://bao.test/v1/auth/approle/role/$role/role-id" "$STUB_DIR/calls.log"
+    grep -Fx "bao write -address=https://bao.test -wrap-ttl=15m -format=json -f auth/approle/role/$role/secret-id" \
+      "$STUB_DIR/argv.log"
+    [ "$(grep -c 'role-id' "$STUB_DIR/calls.log")" -eq 1 ]
+    rm -rf "$STUB_DIR/fix"
+  done
+
+  : >"$STUB_DIR/calls.log"
+  set_fix_outputs "$(fix_add_json src/role.txt 'role content')"
+  run --separate-stderr env AGENT_SANDBOX_ZCODE_READ_ROLE=custom-zcode-read \
+    "$AGENT_DISPATCH_BIN/agent-dispatch" fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" \
+    "$(fix_prompt "role check")"
+  [ "$status" -eq 0 ]
+  grep -q 'GET https://bao.test/v1/auth/approle/role/custom-zcode-read/role-id' "$STUB_DIR/calls.log"
+  run ! grep -q 'sandbox-zcode-read' "$STUB_DIR/calls.log"
+
+  : >"$STUB_DIR/calls.log"
+  run --separate-stderr env AGENT_SANDBOX_OPENCODE_WRITE_ROLE=custom-opencode-write \
+    "$AGENT_DISPATCH_BIN/agent-dispatch" start opencode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  grep -q 'GET https://bao.test/v1/auth/approle/role/custom-opencode-write/role-id' "$STUB_DIR/calls.log"
+
+  : >"$STUB_DIR/calls.log"
+  set_fix_outputs "$(fix_add_json src/role.txt 'role content')"
+  run --separate-stderr env AGENT_SANDBOX_READ_ROLE=custom-shared-read \
+    "$AGENT_DISPATCH_BIN/agent-dispatch" fix opencode-zai dryvist/nix-ai feature/ci-fix "$FIX_SHA" \
+    "$(fix_prompt "role check")"
+  [ "$status" -eq 0 ]
+  grep -q 'GET https://bao.test/v1/auth/approle/role/custom-shared-read/role-id' "$STUB_DIR/calls.log"
+}
+
 @test "a missing trackerAccess field defaults to true and retains tracker URLs" {
   local dispatcher env_data
-  dispatcher=$(make_dispatcher '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY"}}')
+  dispatcher=$(make_dispatcher '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY","batchCapable":true}}')
   run --separate-stderr "$dispatcher" start qwen-code dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
@@ -397,7 +468,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 
 @test "malformed trackerAccess refuses to create a job container" {
   local dispatcher
-  dispatcher=$(make_dispatcher '{"zcode":{"env":[],"routerKeyField":"ZCODE_ROUTER_KEY","trackerAccess":"false"}}')
+  dispatcher=$(make_dispatcher '{"zcode":{"env":[],"routerKeyField":"ZCODE_ROUTER_KEY","trackerAccess":"false","batchCapable":true}}')
   run --separate-stderr "$dispatcher" start zcode dryvist/nix-ai "do the thing"
   [ "$status" -ne 0 ]
   [[ $output == *"task profile trackerAccess must be boolean"* ]]
@@ -904,8 +975,8 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 
 @test "saved container logs redact bare injected credentials and preserve normal lines" {
   local id log dispatcher credential
-  dispatcher=$(make_dispatcher '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"]}}')
-  credential=$(jq -r '.data.data.ZAI_SUBSCRIPTION_KEY' "$BATS_TEST_DIRNAME/fixtures/zai-external.json")
+  dispatcher=$(make_dispatcher '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"],"batchCapable":true}}')
+  credential=$(jq -r '.data.data.ZAI_API_KEY' "$BATS_TEST_DIRNAME/fixtures/zai-external.json")
   printf '%s\n' "$credential" 'ordinary log line' >"$STUB_DIR/container.log"
   export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log" STUB_EXIT=1
 
@@ -1067,19 +1138,19 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/router-home" tools="$BATS_TEST_TMPDIR/router-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"opencode_router_key"}}' >"$home/.agent-profiles.json"
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
-  bash_stub "$tools/zcode" <<'SH'
+  bash_stub "$tools/opencode" <<'SH'
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=zcode AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=opencode-local AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ ! -e "$home/.agent-env" ]
 }
@@ -1104,71 +1175,71 @@ SH
   [[ $output == *"requires its matching task profile"* ]]
 }
 
-@test "ZCode batch runs with router values and no provider key" {
+@test "ZCode batch configures its Z.ai key from the container environment and removes it" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/zcode-home" tools="$BATS_TEST_TMPDIR/zcode-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key"}}' >"$home/.agent-profiles.json"
-  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
-    'AGENT_ROUTER_KEY=zcode-router-test-key' >"$home/.agent-env"
+  printf '%s\n' '{"zcode":{"env":[],"trackerAccess":false,"ttyLogin":true}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+printf '%s %s\n' "$ZAI_API_KEY" "$ZAI_MODEL" >"$STUB_DIR/zcode-configured"
+SH
   bash_stub "$tools/zcode" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/zcode-argv"
-test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
-test "$AGENT_ROUTER_KEY" = zcode-router-test-key
-test -r "$ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"
-test -f "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"
-printf '%s\n' "$ZCODE_BUILTIN_PROVIDER_CONFIG_FILE" "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" \
-  >"$STUB_DIR/zcode-provider-config-paths"
-test -z "${ZAI_SUBSCRIPTION_KEY:-}"
+test -z "${ZAI_API_KEY:-}"
+test -z "${ZAI_MODEL:-}"
+test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${AGENT_ROUTER_BASE_URL:-}"
 SH
-  printf '%s\n' '{}' >"$home/zcode-builtin.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE="$home/zcode-builtin.json" \
-    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_API_KEY=zai-batch-value \
+    bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
-  [ "$(cat "$STUB_DIR/zcode-provider-config-paths")" = \
-    "$home/zcode-builtin.json"$'\n'"$home/.zcode/v2/provider_config.json" ]
-  jq -e '.schemaVersion == 1 and .config.providerOrder == ["agent-router"] and
-    .config.providerConfigRules.providerRules == [{providerId: "agent-router",
-      providerName: "Agent Router", enabled: true, config: {
-        group: "standard-personal", access: {type: "api-key", apiKey: "zcode-router-test-key"},
-        api: {type: "openai-chat-completions", baseUrl: "https://router.test/v1"},
-        personalModelIds: ["medium"]}}] and
-    .config.modelConfigRules == {providerModelRules: [], manualProviderModelRules: []} and
-    .config.defaultModelSelection == {providerId: "agent-router", modelId: "medium"}' \
-    "$home/.zcode/v2/provider_config.json"
-  [ "$(ls -l "$home/.zcode/v2/provider_config.json" | cut -c2-10)" = rw------- ]
+  [ "$(cat "$STUB_DIR/zcode-configured")" = 'zai-batch-value glm-5.3-flash' ]
+  [ -d "$home/.zcode" ]
+
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_API_KEY=zai-batch-value ZAI_MODEL=override-model-value \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/zcode-configured")" = 'zai-batch-value override-model-value' ]
 }
 
-@test "ZCode and OpenCode preserve existing configs without router values" {
+@test "ZCode batch exits 64 without ZAI_API_KEY before the tool runs" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home="$BATS_TEST_TMPDIR/no-router-home" tools="$BATS_TEST_TMPDIR/no-router-tools"
-  mkdir -p "$home/.zcode/v2" "$home/.config/opencode" "$tools"
-  printf '%s\n' '{"zcode":{"env":[]},"opencode":{"env":[]}}' >"$home/.agent-profiles.json"
-  printf '%s\n' '{"existing":"zcode"}' >"$home/.zcode/v2/provider_config.json"
-  printf '%s\n' '{"existing":"opencode"}' >"$home/.config/opencode/opencode.json"
+  local home="$BATS_TEST_TMPDIR/zcode-nokey-home" tools="$BATS_TEST_TMPDIR/zcode-nokey-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"zcode":{"env":[],"trackerAccess":false,"ttyLogin":true}}' >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   bash_stub "$tools/zcode" <<'SH'
-test -z "${AGENT_ROUTER_BASE_URL:-}"
-test -z "${AGENT_ROUTER_KEY:-}"
-test -z "${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}"
-test "$(cat "$HOME/.zcode/v2/provider_config.json")" = '{"existing":"zcode"}'
+touch "$STUB_DIR/zcode-ran"
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode AGENT_PROMPT='no key' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"agent-entrypoint: zcode needs ZAI_API_KEY."* ]]
+  [ ! -e "$STUB_DIR/zcode-ran" ]
+}
+
+@test "OpenCode preserves an existing config without router values" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/no-router-home" tools="$BATS_TEST_TMPDIR/no-router-tools"
+  mkdir -p "$home/.config/opencode" "$tools"
+  printf '%s\n' '{"opencode":{"env":[]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"existing":"opencode"}' >"$home/.config/opencode/opencode.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
 SH
   bash_stub "$tools/opencode" <<'SH'
 test -z "${AGENT_ROUTER_BASE_URL:-}"
 test -z "${AGENT_ROUTER_KEY:-}"
 test "$(cat "$HOME/.config/opencode/opencode.json")" = '{"existing":"opencode"}'
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=zcode \
-    AGENT_PROMPT='run zcode' bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-
   run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
     AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
@@ -1329,13 +1400,14 @@ SH
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/tty-home" tools="$BATS_TEST_TMPDIR/tty-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key","ttyLogin":true}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"zcode":{"env":[],"trackerAccess":false,"ttyLogin":true}}' >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   bash_stub "$tools/zcode" <<'SH'
 printf '%s\n' "$#" >"$STUB_DIR/zcode-argc"
 test -z "${AGENT_ROUTER_KEY:-}"
+test -z "${ZAI_API_KEY:-}"
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
@@ -1343,11 +1415,11 @@ SH
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argc")" = 0 ]
 
-  # Without the terminal flag the same profile still needs its router key.
+  # Without the terminal flag the same tool still needs its Z.ai key.
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_PROMPT=x bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 64 ]
-  [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
+  [[ $output == *"zcode needs ZAI_API_KEY"* ]]
 }
 
 # publish_fixture <name> <gitleaks exit>: an origin holding old-file, and gh
@@ -1364,7 +1436,10 @@ publish_fixture() {
   git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m base
   git -C "$seed" push -q origin HEAD
   printf '%s\n' "$origin" >"$STUB_DIR/origin-path"
-  printf '%s\n' '{"zcode":{"env":[],"routerKeyField":"zcode_router_key","ttyLogin":true}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"zcode":{"env":[],"trackerAccess":false,"ttyLogin":true}}' >"$home/.agent-profiles.json"
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+exit 0
+SH
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
@@ -1421,6 +1496,7 @@ SH
 run_fix_entrypoint() {
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" REAL_GIT="$REAL_GIT" \
     AGENT_SANDBOX=1 AGENT_MODE=fix AGENT_TOOL="${ENTRY_TOOL:-zcode}" AGENT_REPO=dryvist/nix-ai \
+    ZAI_API_KEY=zai-test-value \
     AGENT_BRANCH="$ENTRY_BRANCH" AGENT_EXPECTED_SHA="$ENTRY_EXPECTED_SHA" \
     AGENT_PROMPT="${ENTRY_PROMPT:-repair the failure}" bash -euo pipefail "$ENTRYPOINT"
 }
@@ -1727,10 +1803,9 @@ SH
   run ! grep -q AGENT_PR_HUMAN_REVIEW "$STUB_DIR/create.1"
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   [[ ! $env_data =~ GH_TOKEN|GITHUB_TOKEN ]]
-  grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
-  [[ ! $env_data =~ AGENT_ROUTER_KEY ]]
-  grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-agent-read/role-id' "$STUB_DIR/calls.log"
-  run ! grep -q 'sandbox-agent-write' "$STUB_DIR/calls.log"
+  [[ ! $env_data =~ AGENT_ROUTER|ZAI_|VIKUNJA_|ZAMMAD_ ]]
+  grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-zcode-read/role-id' "$STUB_DIR/calls.log"
+  run ! grep -q 'sandbox-agent-' "$STUB_DIR/calls.log"
   [ "$(line_of 'DELETE https://api.github.com/installation/token')" -lt "$(line_of 'docker create')" ]
   [ "$(last_line_of 'POST https://bao.test/v1/github-agents/token')" -gt "$(line_of 'docker wait')" ]
   read_mint=""
@@ -2007,15 +2082,15 @@ SH
 
 @test "fix refuses delivered profile and router credential values in additions" {
   local prompt dispatcher json job state attempts
-  dispatcher=$(make_dispatcher '{"zcode":{"env":["ZAI_SUBSCRIPTION_KEY"],"routerKeyField":"ZCODE_ROUTER_KEY"}}')
+  dispatcher=$(make_dispatcher '{"opencode":{"env":["ZAI_SUBSCRIPTION_KEY"],"routerKeyField":"OPENCODE_ROUTER_KEY","trackerAccess":false,"batchCapable":true}}')
   prompt=$(fix_prompt "repair this failure")
   export STUB_CONTENTS_404=1
   for json in \
     "$(fix_add_json src/credential.txt 'prefix zai-secret-value suffix')" \
-    "$(fix_add_json src/credential.txt 'prefix zcode-router-secret-value suffix')" \
+    "$(fix_add_json src/credential.txt 'prefix opencode-router-secret-value suffix')" \
     "$(fix_add_json docs/endpoint.md 'base: https://router.test/v1')"; do
     set_fix_outputs "$json"
-    run --separate-stderr "$dispatcher" fix zcode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
+    run --separate-stderr "$dispatcher" fix opencode dryvist/nix-ai feature/ci-fix "$FIX_SHA" "$prompt"
     [ "$status" -eq 0 ]
     job=$(jq -r .job <<<"$output")
     state=running attempts=0
@@ -2032,6 +2107,22 @@ SH
     [ "$(grep -c 'POST https://api.github.com/repos/dryvist/nix-ai/git/refs' "$STUB_DIR/calls.log" || true)" -eq 0 ]
     rm -rf "$STUB_DIR/fix"
   done
+}
+
+@test "fix log redacts the router key that the publish scan reads" {
+  local log
+  set_fix_outputs "$(fix_add_json src/fix.txt 'fixed content')"
+  printf '%s\n' 'ordinary log line' 'opencode-router-secret-value' >"$STUB_DIR/container.log"
+  export STUB_CONTENTS_404=1 STUB_DEFAULT_BRANCH=trunk STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
+  run --separate-stderr dispatch fix opencode dryvist/nix-ai feature/new-fix "$FIX_SHA" "$(fix_prompt "repair this failure")"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = succeeded ]
+  set -- "$AGENT_DISPATCH_STATE_DIR"/j-*/runs/1/log
+  [ "$#" -eq 1 ] && [ -f "$1" ]
+  log=$1
+  grep -Fxq '[REDACTED]' "$log"
+  grep -Fxq 'ordinary log line' "$log"
+  ! grep -Fq 'opencode-router-secret-value' "$log"
 }
 
 @test "fix scans the decoded additions with host gitleaks before publishing" {
@@ -2144,10 +2235,13 @@ SH
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
+  bash_stub "$tools/zcode-configure-key" <<'SH'
+exit 0
+SH
   bash_stub "$tools/zcode" <<'SH'
 exit 37
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 \
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 ZAI_API_KEY=zai-test-value \
     AGENT_TOOL=zcode AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 37 ]
   [[ $output == *"exited with status 37; refusing to publish"* ]]

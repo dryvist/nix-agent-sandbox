@@ -1,7 +1,7 @@
 {
   "data": {
     "data": {
-      "ZAI_SUBSCRIPTION_KEY": "zai-secret-value"
+      "ZAI_API_KEY": "zai-secret-value"
     }
   }
 }

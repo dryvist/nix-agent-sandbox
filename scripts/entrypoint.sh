@@ -199,6 +199,7 @@ profile_tracker_access() {
 if [ "${openbao_child}" != 1 ] && \
   { [ "${AGENT_DISPATCHED_JOB:-}" = 1 ] || [ -n "${SANDBOX_ROLE_ID:-}${SANDBOX_WRAPPED_SECRET_ID:-}" ]; }; then
   tracker_access=$(profile_tracker_access) || exit $?
+  profile_tracker="${tracker_access}"
   if [ "${AGENT_TTY:-}" = 1 ] && \
     jq -e --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" \
       '.[$p].ttyLogin == true' "${HOME}/.agent-profiles.json" >/dev/null 2>&1; then
@@ -221,11 +222,17 @@ if [ "${openbao_child}" != 1 ] && \
   else
     openbao_agent_config=/etc/openbao-agent/write.hcl
   fi
-  if [ "${tracker_access}" = false ]; then
-    openbao_agent_config="${openbao_agent_config%.hcl}-public.hcl"
-  fi
+  case "${AGENT_TOOL}" in
+    zcode) openbao_agent_config="${openbao_agent_config%.hcl}-zcode.hcl" ;;
+    opencode | opencode-local) openbao_agent_config="${openbao_agent_config%.hcl}-opencode.hcl" ;;
+    *)
+      if [ "${tracker_access}" = false ]; then
+        openbao_agent_config="${openbao_agent_config%.hcl}-public.hcl"
+      fi
+      ;;
+  esac
   agent_status=0
-  bao agent -config="${openbao_agent_config}" || agent_status=$?
+  AGENT_TRACKER_ACCESS="${profile_tracker}" bao agent -config="${openbao_agent_config}" || agent_status=$?
   rm -f "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
   exit "${agent_status}"
 fi
@@ -252,7 +259,7 @@ trap '
       qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
     esac
   fi
-  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
+  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY ZAI_API_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
     SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_SANDBOX_ROUTER_KEY_FIELD
 ' EXIT
 if [ "${openbao_child:-}" = 1 ]; then
@@ -498,32 +505,14 @@ case "${AGENT_TOOL}" in
     unset qwen_router_key
     ;;
   zcode)
-    if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
-      personal_provider_config="${ZCODE_DATA_BASE_DIR:-${HOME}}/.zcode/v2/provider_config.json"
-      mkdir -p "${personal_provider_config%/*}"
-      # ZCode v2 provider_config.json schema is defined in nix-ai's
-      # packages/provider-node/src/provider-config-file-codec.ts and
-      # packages/provider/src/config/{provider-data-schema,rule-data-schema}.ts.
-      AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-        jq -n \
-        '{schemaVersion: 1, config: {
-          providerOrder: ["agent-router"],
-          providerConfigRules: {providerRules: [{
-            providerId: "agent-router", providerName: "Agent Router", enabled: true,
-            config: {
-              group: "standard-personal",
-              access: {type: "api-key", apiKey: env.AGENT_ROUTER_KEY},
-              api: {type: "openai-chat-completions", baseUrl: env.AGENT_ROUTER_BASE_URL},
-              personalModelIds: ["medium"]
-            }
-          }]},
-          modelConfigRules: {providerModelRules: [], manualProviderModelRules: []},
-          defaultModelSelection: {providerId: "agent-router", modelId: "medium"}
-        }}' >"${personal_provider_config}"
-      chmod 600 "${personal_provider_config}"
-      export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="${personal_provider_config}"
-    fi
-    unset AGENT_ROUTER_KEY
+    [ -n "${ZAI_API_KEY:-}" ] || {
+      echo "agent-entrypoint: zcode needs ZAI_API_KEY." >&2
+      exit 64
+    }
+    export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
+    mkdir -p "${ZCODE_DATA_BASE_DIR}"
+    ZAI_MODEL="${ZAI_MODEL:-glm-5.3-flash}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
+    unset ZAI_API_KEY ZAI_MODEL
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)

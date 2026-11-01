@@ -11,6 +11,7 @@
 #
 # Shape per profile:
 #   env  list of environment variable names the run requires.
+#   batchCapable  the dispatcher may run the profile as a batch job (no terminal).
 #   routerKeyField  host-side value used when scanning published changes.
 #   sandboxRouterKeyField  container leaf field exported as AGENT_ROUTER_KEY.
 #   trackerAccess  whether the job receives Vikunja and Zammad configuration
@@ -26,6 +27,7 @@
 
   # Standard autonomous dev run: requires a model API key.
   dev = {
+    batchCapable = true;
     env = [ "ANTHROPIC_API_KEY" ];
   };
 
@@ -33,34 +35,42 @@
   # The dispatcher resolves each named value from its configured store and
   # copies it into the container. Routed CLIs receive only their router URL/key.
   zai = {
+    batchCapable = true;
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
   };
   qwen = {
+    batchCapable = true;
     env = [
       "AGENT_ROUTER_BASE_URL"
       "AGENT_ROUTER_KEY"
       "AGENT_MODEL"
     ];
   };
+  # zcode and opencode run under their own OpenBao roles, which cannot read
+  # tracker tokens, so neither profile grants tracker access.
   zcode = {
+    batchCapable = true;
     env = [ ];
-    routerKeyField = "ZCODE_ROUTER_KEY";
-    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
     trackerAccess = false;
     ttyLogin = true;
   };
   opencode = {
+    batchCapable = true;
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
     sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+    trackerAccess = false;
     ttyLogin = true;
   };
   opencode-local = {
+    batchCapable = true;
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
     sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+    trackerAccess = false;
   };
   opencode-zai = {
+    batchCapable = true;
     env = [ "ZAI_SUBSCRIPTION_KEY" ];
   };
   # Runs the prompt as a bash command; fix jobs only, no model credential.
@@ -76,11 +86,13 @@
   # Qwen Code: batch only. The entrypoint runs it on the router's `medium`
   # capability; the caller does not choose the model.
   qwen-code = {
+    batchCapable = true;
     env = [ ];
     routerKeyField = "QWEN_CODE_ROUTER_KEY";
     sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
   };
   zcode-web = {
+    batchCapable = true;
     env = [
       "ZAI_SUBSCRIPTION_KEY"
       "AGENT_WEB_TOKEN"
