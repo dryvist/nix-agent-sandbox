@@ -143,6 +143,22 @@ let
     "etc/openbao-agent/write-public.hcl" =
       lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
         (builtins.readFile ../templates/bao-agent/write-public.hcl);
+    "etc/openbao-agent/read-zcode.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read-zcode.hcl);
+    "etc/openbao-agent/write-zcode.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write-zcode.hcl);
+    "etc/openbao-agent/read-opencode.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read-opencode.hcl);
+    "etc/openbao-agent/write-opencode.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write-opencode.hcl);
+    "etc/openbao-agent/templates/zai-key.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zai-key.ctmpl;
+    "etc/openbao-agent/templates/zai-model.ctmpl" =
+      builtins.readFile ../templates/bao-agent/zai-model.ctmpl;
     "etc/openbao-agent/templates/router-key.ctmpl" =
       builtins.readFile ../templates/bao-agent/router-key.ctmpl;
     "etc/openbao-agent/templates/vikunja-token.ctmpl" =

@@ -36,7 +36,7 @@ IMAGE="${AGENT_IMAGE:-ghcr.io/dryvist/nix-agent-sandbox/agent:latest}"
 STATE_DIR="${AGENT_DISPATCH_STATE_DIR:-/var/lib/agent-dispatch}"
 APPROLE_DIR="${AGENT_DISPATCH_APPROLE_DIR:-/etc/agent-dispatch/approle}"
 BUCKET=secret/data/apps/open-llm
-ZAI_BUCKET=secret/data/secrets-external/zai-coding
+ZAI_BUCKET=secrets-external/data/ai/saas/zai
 GITHUB_API=https://api.github.com
 MAX_TEXT=16384
 JOB_MANAGER=0
@@ -211,7 +211,7 @@ external_field() {
 }
 
 credential_value() {
-  if [ "$1" = ZAI_SUBSCRIPTION_KEY ]; then external_field "$1"; else field "$1"; fi
+  if [ "$1" = ZAI_SUBSCRIPTION_KEY ]; then external_field ZAI_API_KEY; else field "$1"; fi
 }
 
 # The token must list exactly the job's repo; the mint request names its owner
@@ -597,6 +597,7 @@ publish_fix_token() {
       return 1
     fi
     credential_values+=("$value")
+    JOB_REDACT_VALUES+=("$value")
     value=${AGENT_ROUTER_BASE_URL#*://}
     value=${value%%/*}
     [ -z "$value" ] || credential_values+=("$value")
@@ -1205,8 +1206,19 @@ run_job() {
     gh=""
   fi
 
-  sandbox_role=sandbox-agent-write
-  if [ "$mode" = fix ]; then sandbox_role=sandbox-agent-read; fi
+  case "$tool:$mode" in
+    zcode:fix) sandbox_role=${AGENT_SANDBOX_ZCODE_READ_ROLE:-sandbox-zcode-read} ;;
+    zcode:*) sandbox_role=${AGENT_SANDBOX_ZCODE_WRITE_ROLE:-sandbox-zcode-write} ;;
+    opencode:fix | opencode-local:fix) sandbox_role=${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read} ;;
+    opencode:* | opencode-local:*) sandbox_role=${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write} ;;
+    *)
+      if [ "$mode" = fix ]; then
+        sandbox_role=${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}
+      else
+        sandbox_role=${AGENT_SANDBOX_WRITE_ROLE:-sandbox-agent-write}
+      fi
+      ;;
+  esac
   role_response=$(bao_req GET "auth/approle/role/$sandbox_role/role-id" "$tok") || {
     abort "$id" "$run" "sandbox role lookup failed" "$tok"
     return 1
@@ -1461,8 +1473,8 @@ cmd_start() {
   if [ "$tty" = 0 ]; then
     valid_text "$prompt" || refuse "invalid prompt"
     [[ ${prompt%%$'\n'*} != CI-RESOLVER* ]] || refuse "CI-RESOLVER header requires fix"
-    # A batch job needs a credential it can use without a person.
-    jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
+    # A batch job needs a profile the operator marks batchCapable.
+    jq -e --arg t "$tool" '.[$t].batchCapable == true' \
       <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session (--tty)"
   else
     jq -e --arg t "$tool" '.[$t].ttyLogin == true' \
@@ -1500,7 +1512,7 @@ cmd_fix() {
   reason=$(repo_scope_guard "$repo")
   [ -z "$reason" ] || refuse "$reason"
   # shell runs the workbook's deterministic command and needs no model credential.
-  [ "$tool" = shell ] || jq -e --arg t "$tool" '.[$t] | has("routerKeyField") or (.env | length > 0)' \
+  [ "$tool" = shell ] || jq -e --arg t "$tool" '.[$t].batchCapable == true' \
     <<<"$AGENT_TASK_PROFILES" >/dev/null || refuse "$tool runs only as a terminal session"
   cap=${AGENT_FIX_MAX_CONCURRENT:-3}
   [[ $cap =~ ^[0-9]+$ ]] || refuse "invalid AGENT_FIX_MAX_CONCURRENT"

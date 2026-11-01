@@ -1,0 +1,5 @@
+{{- if ne (env "AGENT_TTY") "1" -}}
+{{- with secret "secrets-external/data/ai/saas/zai" -}}
+{{- .Data.data.ZAI_API_KEY -}}
+{{- end -}}
+{{- end -}}

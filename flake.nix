@@ -261,10 +261,11 @@
                 EOF
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["dev", "opencode", "opencode-local", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
                   .zcode.env == [] and .zcode.trackerAccess == false and
-                  ([to_entries[] | select(.key != "zcode") | .value] | all(has("trackerAccess") | not)) and
-                  .zcode.routerKeyField == "ZCODE_ROUTER_KEY" and
-                  .zcode.sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
+                  (.zcode | has("routerKeyField") or has("sandboxRouterKeyField") | not) and
+                  ([to_entries[] | select((.key == "zcode" or .key == "opencode" or .key == "opencode-local") | not) | .value] | all(has("trackerAccess") | not)) and
+                  .opencode.trackerAccess == false and .["opencode-local"].trackerAccess == false and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .opencode.sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
                   .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and

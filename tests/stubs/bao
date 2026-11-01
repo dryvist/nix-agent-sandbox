@@ -15,7 +15,7 @@ set -euo pipefail
 [ "$4" = -format=json ]
 [ "$5" = -f ]
 case "$6" in
-  auth/approle/role/sandbox-agent-write/secret-id | auth/approle/role/sandbox-agent-read/secret-id) ;;
+  auth/approle/role/*/secret-id) ;;
   *) exit 1 ;;
 esac
 

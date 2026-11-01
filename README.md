@@ -152,12 +152,19 @@ agent-dispatch check
   `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
   job needs a credential that works without a person:
   `opencode-local` uses `AGENT_ROUTER_BASE_URL` and the router key with the
-  router capability `medium`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
+  router capability `public-cheap`; `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
   `zai-coding-plan/glm-5.3`. `cursor-agent` is terminal-only and signs in
   interactively. `shell` is accepted only by `fix`: it runs the task text as a
   `bash` command and needs no model credential. `qwen-code` batch runs use
   the router's `medium` capability with `sandbox_agent_router_llm_router_key`
   from `secret/data/apps/sandbox-agent-router`, and have no terminal session.
+  Each tool runs under its own OpenBao AppRole, and `fix` runs use the read
+  role. `zcode` reads only the Z.ai key at `secrets-external/data/ai/saas/zai`,
+  and its container renders that key itself, so the dispatcher never delivers
+  it. ZCode sends no `dryvist-sandbox` User-Agent header. `opencode` and `opencode-local` read only the router key at
+  `secret/data/apps/sandbox-agent-router` and have no tracker access. Other
+  tools keep the shared `sandbox-agent-read` and `sandbox-agent-write` roles,
+  which also read the Vikunja and Zammad tokens.
 - **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
   `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
   in `AGENT_REPO_DENYLIST`. The default branch must be public and have an
