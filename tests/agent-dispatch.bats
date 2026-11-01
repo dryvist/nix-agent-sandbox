@@ -275,7 +275,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     case "${a[i]}" in
       -e)
         case "${a[i + 1]%%=*}" in
-          HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | AGENT_TOOL | AGENT_PROFILE | \
+          HTTP_PROXY | HTTPS_PROXY | http_proxy | https_proxy | NO_PROXY | no_proxy | AGENT_TOOL | AGENT_PROFILE | \
             AGENT_DISPATCHED_JOB | AGENT_REPO | AGENT_RUN_ID | AGENT_PR_HUMAN_REVIEW | \
             AGENT_CONTINUE | AGENT_TTY) ;;
           *)
@@ -422,17 +422,18 @@ SH
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=opencode-local AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
+    AGENT_TOOL=opencode-local AGENT_RUN_ID=j-test AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/medium\nrouter prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/public-cheap\nrouter prompt' ]
   local provider_config="$home/.config/opencode/opencode.json"
   [ -f "$provider_config" ]
   [ "$(ls -l "$provider_config" | cut -c2-10)" = rw------- ]
   [ "$(cat "$STUB_DIR/opencode-fix-config")" = "$provider_config" ]
   jq -e '.provider == {"agent-router": {
     npm: "@ai-sdk/openai-compatible", name: "Agent Router",
-    options: {baseURL: "https://router.test/v1", apiKey: "router-test-key"},
-    models: {medium: {name: "medium"}}
+    options: {baseURL: "https://router.test/v1", apiKey: "router-test-key",
+      headers: {"User-Agent": "dryvist-sandbox", "x-opencode-session": "j-test"}},
+    models: {"public-cheap": {name: "public-cheap"}}
   }}' "$provider_config" >/dev/null
 
   printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' >"$home/.agent-env"
@@ -1256,7 +1257,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/medium\nopencode prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/public-cheap\nopencode prompt' ]
   [ -f "$home/.config/opencode/opencode.json" ]
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \

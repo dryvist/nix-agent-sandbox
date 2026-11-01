@@ -992,6 +992,8 @@ container_args() {
     -e "HTTPS_PROXY=$proxy"
     -e "http_proxy=$proxy"
     -e "https_proxy=$proxy"
+    -e "NO_PROXY=127.0.0.1,localhost,::1"
+    -e "no_proxy=127.0.0.1,localhost,::1"
     -e "AGENT_TOOL=$3"
     -e "AGENT_PROFILE=$3"
     -e "AGENT_RUN_ID=$1"

@@ -531,17 +531,18 @@ case "${AGENT_TOOL}" in
       opencode_config="${HOME}/.config/opencode/opencode.json"
       mkdir -p "${opencode_config%/*}"
       AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-        jq -n \
+        AGENT_RUN_ID="$AGENT_RUN_ID" jq -n \
         '{provider: {"agent-router": {
           npm: "@ai-sdk/openai-compatible",
           name: "Agent Router",
-          options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY},
-          models: {medium: {name: "medium"}}
+          options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY,
+            headers: {"User-Agent": "dryvist-sandbox", "x-opencode-session": env.AGENT_RUN_ID}},
+          models: {"public-cheap": {name: "public-cheap"}}
         }}}' >"${opencode_config}"
       chmod 600 "${opencode_config}"
       export OPENCODE_CONFIG="${opencode_config}"
     fi
-    opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --model agent-router/public-cheap "${AGENT_PROMPT}" || status=$?
     unset AGENT_ROUTER_KEY
     ;;
   shell)
