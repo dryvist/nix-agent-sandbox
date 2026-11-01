@@ -6,11 +6,17 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
     '       zcode-job continue <job-id> <message>' \
     '       zcode-job status|result|cancel <job-id>' \
     '       zcode-job live|repos' \
+    'start and continue wait up to ZCODE_JOB_WAIT seconds (default 240, range 1..290).' \
+    'Set ZCODE_JOB_JSON=1 for the original immediate JSON response.' \
     'tools: zcode (default), opencode, opencode-local, opencode-zai, cursor-agent, qwen-code'
   exit 0
 fi
 
 fail() {
+  if [ "${submitted:-0}" = 1 ] && [ "${ZCODE_JOB_JSON:-0}" != 1 ] && [ -n "${id:-}" ]; then
+    printf 'FAIL|%s|%s\n' "$id" "$(printf '%s' "$1" | tr -d '\r\n')"
+    exit 1
+  fi
   jq -cn --arg error "$1" '{error: $error}'
   exit "${2:-64}"
 }
@@ -64,13 +70,14 @@ id=""
 
 request() {
   local rc returned_tool
-  if response=$(timeout 300 "$ZCODE_JOB_SSH" -T -n -o BatchMode=yes -o ConnectTimeout=10 \
+  if response=$(timeout "${request_timeout:-300}" "$ZCODE_JOB_SSH" -T -n -o BatchMode=yes -o ConnectTimeout=10 \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
       -o ForwardAgent=no -o ClearAllForwardings=yes -o PermitLocalCommand=no \
       -o RemoteCommand=none -o 'SendEnv=-*' -- "$host" "$1"); then
     rc=0
   else
     rc=$?
+    if [ "$rc" -eq 124 ] && [ "${submitted:-0}" = 1 ]; then fail timeout 1; fi
     [ -n "$response" ] || fail "Dispatcher SSH request failed" "$rc"
   fi
   response=$(jq -ces 'select(length == 1 and (.[0] | type == "object")) | .[0]' \
@@ -99,6 +106,11 @@ request() {
   fi
   response=$(jq -c '{job, tool, repo, state, pr, duration, runs, reason}' <<<"$response")
   if [ "$rc" -ne 0 ]; then
+    if [ "${ZCODE_JOB_JSON:-0}" != 1 ] && { [ "$verb" = start ] || [ "$verb" = continue ]; }; then
+      id=$(jq -r '.job' <<<"$response")
+      submitted=1
+      fail "$(jq -r '.reason // "request failed"' <<<"$response")" 1
+    fi
     printf '%s\n' "$response"
     exit "$rc"
   fi
@@ -153,4 +165,34 @@ case "$verb" in
     ;;
   *) fail "usage: zcode-job start|continue|status|result|cancel|live|repos" ;;
 esac
+if { [ "$verb" = start ] || [ "$verb" = continue ]; } && [ "${ZCODE_JOB_JSON:-0}" != 1 ]; then
+  id=$(jq -r '.job' <<<"$response")
+  submitted=1
+  wait_seconds=${ZCODE_JOB_WAIT:-240}
+  [[ $wait_seconds =~ ^[0-9]{1,6}$ ]] || wait_seconds=240
+  wait_seconds=$((10#$wait_seconds))
+  # Each SSH call stays under the dispatcher's 300-second limit.
+  ((wait_seconds <= 290)) || wait_seconds=290
+  ((wait_seconds >= 1)) || wait_seconds=1
+  deadline=$((SECONDS + wait_seconds))
+  while :; do
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || fail timeout 1
+    request_timeout=$remaining
+    request "status $id"
+    state=$(jq -r '.state' <<<"$response")
+    case "$state" in
+      succeeded)
+        pr=$(jq -r '.pr' <<<"$response")
+        printf 'DONE|%s|%s\n' "$id" "${pr:-no-pr}"
+        exit 0 ;;
+      failed | cancelled | timeout)
+        reason=$(jq -r '.reason // empty' <<<"$response")
+        fail "${reason:-$state}" 1 ;;
+    esac
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || fail timeout 1
+    if [ "$remaining" -lt 5 ]; then sleep "$remaining"; else sleep 5; fi
+  done
+fi
 printf '%s\n' "$response"

@@ -7,6 +7,7 @@ setup() {
   export ZCODE_JOB_CONFIG="$BATS_TEST_TMPDIR/config.json"
   jq -n '{sshHost: "zcode-dispatch", allowedRepos: ["dryvist/example"],
     liveUrl: "https://zcode.example.test"}' >"$ZCODE_JOB_CONFIG"
+  export ZCODE_JOB_JSON=1
   export JOB=j-0123456789abcdef
   jq -n --arg job "$JOB" '{job: $job, tool: "zcode", repo: "dryvist/example",
     state: "succeeded", duration: 23, pr: "https://github.com/dryvist/example/pull/4"}' \
@@ -250,4 +251,44 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
   [ "$status" -eq 0 ]
   jq -e '.repos == ["dryvist/example"]' <<<"$output"
   no_ssh
+}
+
+@test "start waits and prints DONE with a PR or no-pr" {
+  unset ZCODE_JOB_JSON
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$output" = "DONE|$JOB|https://github.com/dryvist/example/pull/4" ]
+  grep -Fx "status $JOB" "$STUB_DIR/ssh-commands"
+  jq '.pr = ""' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client continue "$JOB" Review
+  [ "$status" -eq 0 ]
+  [ "$output" = "DONE|$JOB|no-pr" ]
+}
+
+@test "terminal failure prints a single stripped reason" {
+  unset ZCODE_JOB_JSON
+  jq '.state = "failed" | .reason = "first\nsecond"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAIL|$JOB|firstsecond" ]
+}
+
+@test "wait timeout leaves the job running" {
+  unset ZCODE_JOB_JSON
+  export ZCODE_JOB_WAIT=1
+  jq '.state = "running"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAIL|$JOB|timeout" ]
+  ! grep -q '^cancel ' "$STUB_DIR/ssh-commands"
+}
+
+@test "JSON opt-out returns the submission without polling" {
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  jq -e --arg job "$JOB" '.job == $job' <<<"$output"
+  ! grep -q '^status ' "$STUB_DIR/ssh-commands"
 }
