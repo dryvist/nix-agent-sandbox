@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.8.0...v1.9.0) (2026-11-01)
+
+
+### Features
+
+* run zcode and opencode jobs under per-tool OpenBao roles ([#153](https://github.com/dryvist/nix-agent-sandbox/issues/153)) ([31edec2](https://github.com/dryvist/nix-agent-sandbox/commit/31edec2113ecc0323cc1962f9b1f1723968d7756))
+
 ## [1.8.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.7.1...v1.8.0) (2026-11-01)
 
 
