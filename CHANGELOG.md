@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.7.1...v1.8.0) (2026-11-01)
+
+
+### Features
+
+* **zcode-job:** wait for a one-line DONE or FAIL result ([#151](https://github.com/dryvist/nix-agent-sandbox/issues/151)) ([ffa4f99](https://github.com/dryvist/nix-agent-sandbox/commit/ffa4f99e8d9eea383a07a37363bcfd0c18cfd343))
+
 ## [1.7.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.7.0...v1.7.1) (2026-11-01)
 
 
