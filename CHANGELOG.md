@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.7.0...v1.7.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **dispatch:** bypass the egress proxy for loopback and route OpenCode to public-cheap ([#149](https://github.com/dryvist/nix-agent-sandbox/issues/149)) ([ab4f346](https://github.com/dryvist/nix-agent-sandbox/commit/ab4f34647a04e998ad889bc1ac4f46137327e721))
+
 ## [1.7.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.6.0...v1.7.0) (2026-10-26)
 
 
