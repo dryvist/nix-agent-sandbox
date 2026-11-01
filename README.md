@@ -57,7 +57,7 @@ zcode-job cancel "$job_id"
 zcode-job live
 ```
 
-Every command prints JSON. `result` requires a terminal job and includes the
+`start` and `continue` poll until completion and print `DONE|<job-id>|<pr-url-or-no-pr>` or `FAIL|<job-id>|<reason>`. `ZCODE_JOB_WAIT` controls the wait in seconds (default 240, clamped to 1–290); a timeout leaves the job running. Set `ZCODE_JOB_JSON=1` for the immediate JSON response. Other commands print JSON. `result` requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
 `start --tool` selects `zcode` (default), `opencode`, `opencode-local`,
@@ -67,8 +67,7 @@ before SSH. Continuations and cancellations check the existing job's tool and
 repository before sending a mutation.
 The dispatcher independently checks its current repository access.
 
-Requests contain the repository or job id and task text. Each SSH call has
-a five-minute deadline. Exit 64 indicates invalid input or configuration;
+Requests contain the repository or job id and task text. Polls use separate SSH calls bounded by the remaining wait. Exit 64 indicates invalid input or configuration;
 exit 1 indicates an invalid response or unavailable result; transport failures
 preserve the SSH or timeout exit code. Errors are JSON objects with `error`.
 
