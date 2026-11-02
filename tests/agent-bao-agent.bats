@@ -518,3 +518,111 @@ SH
   [ "$status" -eq 1 ]
   grep -Fq 'exec env -u PYTHONPATH -u PYTHONHOME mcp-zammad "$@"' "${wrapper}"
 }
+
+@test "OpenBao Agent keeps its child alive after token expiry and fails on a missing first-render secret" {
+  if [ -z "${BAO_BIN:-}" ]; then
+    skip "BAO_BIN is not included in the current Bats test environment"
+  fi
+
+  local worktree="$PWD" auth_dir="$BATS_TEST_TMPDIR/lifetime-auth"
+  local port address root_token=agent-lifetime-test-root-token role_id="" wrapped_id=""
+  local config="$BATS_TEST_TMPDIR/lifetime-agent.hcl"
+  local negative_config="$BATS_TEST_TMPDIR/lifetime-agent-missing.hcl" child="$BATS_TEST_TMPDIR/lifetime-child"
+  local agent_status agent_output value
+  mkdir -p "$auth_dir"
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+  address="http://127.0.0.1:${port}"
+  BAO_ADDR="$address" "$BAO_BIN" server -dev -dev-no-store-token \
+    -dev-root-token-id="$root_token" -dev-listen-address="127.0.0.1:${port}" \
+    >"$BATS_TEST_TMPDIR/lifetime-server.log" 2>&1 &
+  BAO_SERVER_PID=$!
+  for _ in {1..100}; do
+    if "$BAO_BIN" status -address="$address" >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  "$BAO_BIN" status -address="$address" >/dev/null || { tail -n 20 "$BATS_TEST_TMPDIR/lifetime-server.log" >&2; false; }
+
+  bao_admin() { BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" "$@"; }
+  bao_admin auth enable approle >/dev/null
+  bao_admin secrets enable -path=secrets-external -version=2 kv >/dev/null
+  bao_admin policy write sandbox-lifetime-read - <<'HCL' >/dev/null
+path "secrets-external/data/ai/saas/zai" {
+  capabilities = ["read"]
+}
+HCL
+  bao_admin kv put secrets-external/ai/saas/zai \
+    ZAI_API_KEY=agent-lifetime-test-key ZAI_MODEL=agent-lifetime-test-model >/dev/null
+  bao_admin write auth/approle/role/sandbox-zcode-read \
+    token_policies=sandbox-lifetime-read token_ttl=5s token_max_ttl=5s \
+    secret_id_num_uses=1 >/dev/null
+  bao_admin write auth/approle/role/sandbox-zcode-startup \
+    token_policies=sandbox-lifetime-read token_ttl=15m token_max_ttl=15m \
+    secret_id_num_uses=1 >/dev/null
+
+  issue_identity() {
+    local role=$1
+    role_id=$(bao_admin read -field=role_id "auth/approle/role/$role/role-id")
+    wrapped_id=$(bao_admin write -wrap-ttl=2m -f -format=json \
+      "auth/approle/role/$role/secret-id" | jq -er '.wrap_info.token')
+    printf '%s' "$role_id" >"$auth_dir/role-id"
+    printf '%s' "$wrapped_id" >"$auth_dir/wrapped-secret-id"
+    chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
+  }
+  issue_identity sandbox-zcode-read
+
+  cat >"$child" <<'SH'
+#!/bin/sh
+set -eu
+: >"$AGENT_TEST_CHILD_STARTED"
+test "$ZAI_API_KEY" = agent-lifetime-test-key
+test "$ZAI_MODEL" = agent-lifetime-test-model
+test "$ZCODE_MCP_CONFIG" = '{"mcp":{"servers":{}}}'
+sleep 30
+: >"$AGENT_TEST_CHILD_FINISHED"
+exit 0
+SH
+  chmod 700 "$child"
+  sed \
+    -e "s#@AGENT_ENTRYPOINT@#${child}#" \
+    -e "s#/dev/shm/agent-openbao#${auth_dir}#g" \
+    -e "s#/etc/openbao-agent/templates#${worktree}/templates/bao-agent#g" \
+    -e 's/static_secret_render_interval = "24h"/static_secret_render_interval = "60s"/' \
+    "$worktree/templates/bao-agent/read-zcode.hcl" >"$config"
+
+  agent_status=0
+  agent_output=$(env BAO_ADDR="$address" AGENT_TOOL=zcode AGENT_TTY=0 \
+    AGENT_TEST_CHILD_STARTED="$BATS_TEST_TMPDIR/child-started" \
+    AGENT_TEST_CHILD_FINISHED="$BATS_TEST_TMPDIR/child-finished" \
+    "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
+  if [ "$agent_status" -ne 0 ] || [ ! -e "$BATS_TEST_TMPDIR/child-finished" ]; then
+    for value in "$root_token" "$role_id" "$wrapped_id" agent-lifetime-test-key agent-lifetime-test-model; do
+      agent_output=${agent_output//"$value"/[REDACTED]}
+    done
+    printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g' >&2
+  fi
+  [ "$agent_status" -eq 0 ]
+  [ -e "$BATS_TEST_TMPDIR/child-started" ]
+  [ -e "$BATS_TEST_TMPDIR/child-finished" ]
+  [ ! -e "$auth_dir/wrapped-secret-id" ]
+
+  # Use a long-lived startup role so the missing-secret check isolates template failure.
+  bao_admin kv delete secrets-external/ai/saas/zai >/dev/null
+  issue_identity sandbox-zcode-startup
+  sed \
+    -e 's#auth/approle/role/sandbox-zcode-read/secret-id#auth/approle/role/sandbox-zcode-startup/secret-id#' \
+    "$config" >"$negative_config"
+  agent_status=0
+  agent_output=$(env BAO_ADDR="$address" AGENT_TOOL=zcode AGENT_TTY=0 \
+    AGENT_TEST_CHILD_STARTED="$BATS_TEST_TMPDIR/missing-child-started" \
+    AGENT_TEST_CHILD_FINISHED="$BATS_TEST_TMPDIR/missing-child-finished" \
+    "$BAO_BIN" agent -config="$negative_config" 2>&1) || agent_status=$?
+  if [ "$agent_status" -eq 0 ] || [ -e "$BATS_TEST_TMPDIR/missing-child-started" ]; then
+    for value in "$root_token" "$role_id" "$wrapped_id" agent-lifetime-test-key agent-lifetime-test-model; do
+      agent_output=${agent_output//"$value"/[REDACTED]}
+    done
+    printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g' >&2
+  fi
+  [ "$agent_status" -ne 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/missing-child-started" ]
+  [ ! -e "$auth_dir/wrapped-secret-id" ]
+}
