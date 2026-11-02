@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.2...v1.10.3) (2026-11-02)
+
+
+### Bug Fixes
+
+* **dispatch:** keep the container stderr stream in the run log ([#163](https://github.com/dryvist/nix-agent-sandbox/issues/163)) ([92322e5](https://github.com/dryvist/nix-agent-sandbox/commit/92322e591dc9c6a73cce5b1ff424a3b35f2081d3))
+
 ## [1.10.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.1...v1.10.2) (2026-11-02)
 
 
