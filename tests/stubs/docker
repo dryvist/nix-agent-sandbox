@@ -56,6 +56,8 @@ case "$1" in
   logs)
     [ "$2" = --tail ] || exit 125
     tail -n "$3" "${STUB_DOCKER_LOG_FILE:-/dev/null}"
+    # docker logs replays the container stderr stream on its own stderr.
+    if [ -n "${STUB_DOCKER_STDERR_FILE:-}" ]; then tail -n "$3" "$STUB_DOCKER_STDERR_FILE" >&2; fi
     ;;
   run)
     # Only the publisher's gitleaks scan calls `docker run`.
