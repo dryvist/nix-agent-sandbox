@@ -1287,7 +1287,7 @@ SH
 echo 1000
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
-    AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
+    AGENT_RUN_ID=run-router-required AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 64 ]
   [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
 
@@ -1363,21 +1363,52 @@ SH
 touch "$STUB_DIR/opencode-ran"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
-    AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
+    AGENT_RUN_ID=run-no-router AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 64 ]
   [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
   [ "$(cat "$home/.config/opencode/opencode.json")" = '{"existing":"opencode"}' ]
   [ ! -e "$STUB_DIR/opencode-ran" ]
 }
 
-@test "OpenCode uses the first router-listed Go model in the provider config and command" {
+@test "OpenCode requires AGENT_RUN_ID before requesting router models" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-no-run-id-home" tools="$BATS_TEST_TMPDIR/opencode-no-run-id-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  run --separate-stderr env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    AGENT_SANDBOX=1 AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [ "$stderr" = 'agent-entrypoint: OpenCode requires AGENT_RUN_ID.' ]
+  ! grep -Fq '/models' "$STUB_DIR/argv.log"
+  [ ! -e "$home/.config/opencode/opencode.json" ]
+}
+
+@test "OpenCode skips a GLM Go model and uses the first non-GLM model" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-first-home" tools="$BATS_TEST_TMPDIR/opencode-first-tools"
   prepare_opencode_entrypoint "$home" "$tools"
-  export STUB_ROUTER_MODELS='["small","medium","large","go-mimo-flash","go-deepseek-flash"]'
+  export STUB_ROUTER_MODELS='["small","go-glm-5-flash","go-mimo-flash","go-deepseek-flash"]'
   run_opencode_entrypoint "$home" "$tools"
   [ "$status" -eq 0 ]
   assert_opencode_model "$home" go-mimo-flash
+}
+
+@test "OpenCode excludes uppercase GLM from router-listed Go models" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-uppercase-glm-home" tools="$BATS_TEST_TMPDIR/opencode-uppercase-glm-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='["small","go-GLM-4.6"]'
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'no non-GLM OpenCode Go model'
+}
+
+@test "OpenCode fails closed when the router lists only GLM Go models" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-only-glm-home" tools="$BATS_TEST_TMPDIR/opencode-only-glm-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='["go-glm-5-flash"]'
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'no non-GLM OpenCode Go model'
 }
 
 @test "OpenCode preserves router response order instead of sorting model ids" {
@@ -1414,7 +1445,7 @@ SH
   prepare_opencode_entrypoint "$home" "$tools"
   export STUB_ROUTER_MODELS='["small","glm-4.5-flash"]'
   run_opencode_entrypoint "$home" "$tools"
-  assert_opencode_failed_closed "$home" 'router models list has no OpenCode Go model'
+  assert_opencode_failed_closed "$home" 'router models list has no non-GLM OpenCode Go model'
 }
 
 @test "OpenCode fails closed on invalid or missing router model data" {

@@ -116,6 +116,10 @@ fi
 
 # --- Inputs ----------------------------------------------------------------
 AGENT_TOOL="${AGENT_TOOL:-claude}"
+if [ "${AGENT_TOOL}" = opencode ] && [ -z "${AGENT_RUN_ID:-}" ]; then
+  echo "agent-entrypoint: OpenCode requires AGENT_RUN_ID." >&2
+  exit 64
+fi
 AGENT_RUN_ID="${AGENT_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 AGENT_MODE="${AGENT_MODE:-start}"
 
@@ -560,9 +564,9 @@ case "${AGENT_TOOL}" in
         exit 65
       fi
       if ! opencode_model=$(jq -er \
-        '[.data[] | .id? | select(type == "string" and test("^go-[a-z0-9-]+$"))][0] // empty' \
+        '[.data[] | .id? | select(type == "string" and test("^go-[a-z0-9-]+$") and (ascii_downcase | contains("glm") | not))][0] // empty' \
         <<<"${opencode_models_json}" 2>/dev/null); then
-        echo "agent-entrypoint: router models list has no OpenCode Go model." >&2
+        echo "agent-entrypoint: router models list has no non-GLM OpenCode Go model." >&2
         exit 65
       fi
       echo "agent-entrypoint: opencode model ${opencode_model} (router order)" >&2
