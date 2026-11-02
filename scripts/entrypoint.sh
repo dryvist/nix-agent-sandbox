@@ -534,7 +534,7 @@ case "${AGENT_TOOL}" in
       chmod 600 "${opencode_config}"
       export OPENCODE_CONFIG="${opencode_config}"
     fi
-    opencode run --auto --model "agent-router/${opencode_model}" "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --print-logs --log-level WARN --model "agent-router/${opencode_model}" "${AGENT_PROMPT}" || status=$?
     unset AGENT_ROUTER_KEY
     ;;
   shell)
@@ -543,7 +543,7 @@ case "${AGENT_TOOL}" in
   opencode-zai)
     zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
     unset ZAI_SUBSCRIPTION_KEY
-    ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto \
+    ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto --print-logs --log-level WARN \
       --model zai-coding-plan/glm-5.3 "${AGENT_PROMPT}" || status=$?
     unset zai_subscription_key
     ;;
