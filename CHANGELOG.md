@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.6](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.5...v1.10.6) (2026-11-02)
+
+
+### Bug Fixes
+
+* **opencode:** default the sandbox model to go-mimo-flash ([#169](https://github.com/dryvist/nix-agent-sandbox/issues/169)) ([fa01ba5](https://github.com/dryvist/nix-agent-sandbox/commit/fa01ba51f1af748ee33d815353b77fc162fc59f2))
+
 ## [1.10.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.4...v1.10.5) (2026-11-02)
 
 
