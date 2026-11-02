@@ -396,13 +396,15 @@ notify() {
     rc=1
   fi
 
-  url=$(field NTFY_URL)
-  token=$(field NTFY_AI_JOBS_TOKEN)
-  if [[ $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
-    post_ntfy "$url" "$topic" "$token" "$title" "$lines" "$pr" || rc=1
-  else
-    echo "agent-dispatch: $id: ntfy result skipped: topic, URL or token missing" >&2
-    rc=1
+  if [ "${AGENT_DISPATCH_NTFY_JOBS:-}" = 1 ]; then
+    url=$(field NTFY_URL)
+    token=$(field NTFY_AI_JOBS_TOKEN)
+    if [[ $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
+      post_ntfy "$url" "$topic" "$token" "$title" "$lines" "$pr" || rc=1
+    else
+      echo "agent-dispatch: $id: ntfy result skipped: topic, URL or token missing" >&2
+      rc=1
+    fi
   fi
   return "$rc"
 }

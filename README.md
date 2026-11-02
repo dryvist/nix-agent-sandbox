@@ -211,9 +211,9 @@ agent-dispatch check
   inside the session and gets no router key or provider key. A hang-up or detach kills the
   container and the run settles as cancelled. A terminal job has no
   `continue`.
-- **Results**: each finished run posts a fixed six-line result (job, tool,
-  repo, state, PR URL, duration) to a Vikunja project and an ntfy topic. No
-  model output goes into it.
+- **Results**: each finished run records a fixed six-line result (job, tool,
+  repo, state, PR URL, duration) in a Vikunja project. It posts the same result
+  to ntfy only when `AGENT_DISPATCH_NTFY_JOBS=1`. No model output goes into it.
 
 The image also runs the upstream ZCode Web/Server and includes
 `zcode-web-task`. The task client reads a prompt from stdin and writes a JSON
@@ -266,7 +266,8 @@ passed as container arguments or mounts.
 | `BAO_ADDR` | OpenBao endpoint passed to the container |
 | `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist supplied to the dispatcher |
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
-| `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for results (default `ai-jobs`) |
+| `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for job results and login alerts (default `ai-jobs`) |
+| `AGENT_DISPATCH_NTFY_JOBS` | Post per-job results to ntfy only when exactly `1` (default off; Nix package option `ntfyJobs`, default `false`) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |

@@ -11,6 +11,7 @@
   gnutar,
   jq,
   openbao,
+  ntfyJobs ? false,
 }:
 
 let
@@ -31,6 +32,7 @@ let
       AGENT_CPUS_DEFAULT=${lib.escapeShellArg hardeningDefaults.cpus}
       AGENT_PIDS_LIMIT_DEFAULT=${lib.escapeShellArg hardeningDefaults.pidsLimit}
       AGENT_TIMEOUT_DEFAULT=${lib.escapeShellArg hardeningDefaults.timeout}
+      ${lib.optionalString ntfyJobs "export AGENT_DISPATCH_NTFY_JOBS=1"}
     ''
     + builtins.readFile ../scripts/agent-dispatch-result.sh
     + builtins.readFile ../scripts/agent-dispatch.sh;
