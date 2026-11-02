@@ -5,6 +5,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
     'Usage: zcode-job start [--tool <tool>] <owner/repo> <prompt>' \
     '       zcode-job continue <job-id> <message>' \
     '       zcode-job status|result|cancel <job-id>' \
+    '       zcode-job result <job-id> --output FILE  (also writes the output text to FILE)' \
     '       zcode-job live|repos' \
     'start and continue wait up to ZCODE_JOB_WAIT seconds (default 240, range 1..290).' \
     'Set ZCODE_JOB_JSON=1 for the original immediate JSON response.' \
@@ -86,6 +87,8 @@ request() {
     ($id == "" or .job == $id) and (.tool | type == "string") and
     (.repo | type == "string") and
     (.state | IN("starting", "running", "cancelling", "succeeded", "failed", "cancelled", "timeout")) and
+    (.output == null or (.output | type == "string")) and
+    (.reason == null or (.reason | type == "string")) and
     (.duration | type == "number" and . >= 0 and floor == .) and
     (.pr | type == "string")' <<<"$response" >/dev/null || fail "Invalid dispatcher result" 1
   returned_tool=$(jq -r '.tool' <<<"$response")
@@ -104,7 +107,8 @@ request() {
     [[ ${pr,,} == "${prefix,,}"* && ${pr:${#prefix}} =~ ^[0-9]+$ ]] ||
       fail "Invalid dispatcher PR URL" 1
   fi
-  response=$(jq -c '{job, tool, repo, state, pr, duration, runs, reason}' <<<"$response")
+  response=$(jq -c '{job, tool, repo, state, pr, duration, runs, reason,
+    output: (.output // "")}' <<<"$response")
   if [ "$rc" -ne 0 ]; then
     if [ "${ZCODE_JOB_JSON:-0}" != 1 ] && { [ "$verb" = start ] || [ "$verb" = continue ]; }; then
       id=$(jq -r '.job' <<<"$response")
@@ -135,6 +139,10 @@ case "$verb" in
     if [ "$verb" = continue ]; then
       [ $# -eq 2 ] || fail "usage: zcode-job continue <job-id> <message>"
       valid_text "$2" || fail "Invalid continuation message"
+    elif [ "$verb" = result ] && [ $# -eq 3 ] && [ "$2" = --output ]; then
+      output_path=$3
+      [ -n "$output_path" ] || fail "usage: zcode-job result <job-id> [--output FILE]"
+      set -- "$1"
     else
       [ $# -eq 1 ] || fail "usage: zcode-job $verb <job-id>"
     fi
@@ -150,7 +158,16 @@ case "$verb" in
       response=$(jq -c '. + {result: (["job: " + .job, "tool: " + .tool,
         "repo: " + .repo, "state: " + .state,
         "pr: " + (if .pr == "" then "none" else .pr end),
-        "duration: " + (.duration | tostring) + "s"] | join("\n"))}' <<<"$response")
+        "duration: " + (.duration | tostring) + "s",
+        "output:\n" + (.output // "") +
+          (if .state == "failed" then
+            (if (.output // "") == "" or ((.output // "") | endswith("\n"))
+             then "" else "\n" end) + "reason: " + (.reason // "")
+          else "" end)] | join("\n"))}' <<<"$response")
+      # --output FILE: the job's output text alone, for non-interactive readers.
+      if [ -n "${output_path:-}" ]; then
+        jq -j '.output // ""' <<<"$response" >"$output_path" || fail "Cannot write $output_path" 1
+      fi
     fi
     ;;
   live)

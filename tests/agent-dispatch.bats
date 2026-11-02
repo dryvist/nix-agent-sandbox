@@ -935,7 +935,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 }
 
 @test "finalize saves the redacted last 200 container log lines before removal" {
-  local id log token logs_line rm_line
+  local id log result token logs_line rm_line
   {
     printf '%s\n' 'excluded-first-line'
     for ((i = 1; i <= 190; i++)); do printf 'filler-%s\n' "$i"; done
@@ -952,8 +952,14 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$(jq -r .reason <<<"$output")" = "exit 1" ]
   id=$(jq -r .job <<<"$output")
   log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  result="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/result.txt"
   [ -f "$log" ]
+  [ -f "$result" ]
   [ "$(wc -l <"$log" | tr -d '[:space:]')" -eq 200 ]
+  [ "$(wc -l <"$result" | tr -d '[:space:]')" -eq 60 ]
+  [ "$(sed -n '1p' "$result")" = "filler-142" ]
+  [ "$(tail -n 1 "$result")" = "last-log-line" ]
+  [ "$(jq -r .output <<<"$output")" = "$(cat "$result")" ]
   ! grep -Fxq 'excluded-first-line' "$log"
   grep -Fxq 'last-log-line' "$log"
   [ "$(grep -Fc '[REDACTED]' "$log")" -eq 10 ]
@@ -963,6 +969,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
     ! grep -Fq "$token" "$log"
   done
   [ "$(ls -l "$log" | cut -c2-10)" = rw------- ]
+  [ "$(ls -l "$result" | cut -c2-10)" = rw------- ]
   logs_line=$(grep -nF 'docker logs --tail 200 cid0123' "$STUB_DIR/argv.log" | cut -d: -f1)
   rm_line=$(grep -nF 'docker rm -f cid0123' "$STUB_DIR/argv.log" | cut -d: -f1)
   [ -n "$logs_line" ] && [ -n "$rm_line" ]
@@ -971,6 +978,32 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   run --separate-stderr dispatch status "$id"
   [ "$status" -eq 0 ]
   jq -e '((has("log_tail") or has("log")) | not)' <<<"$output"
+  jq -e --rawfile result "$result" '.output == $result' <<<"$output"
+  rm "$result"
+  run --separate-stderr dispatch status "$id"
+  [ "$status" -eq 0 ]
+  jq -e '.output == ""' <<<"$output"
+}
+
+@test "result tail keeps the last lines under 16 KiB and drops a partial UTF-8 line" {
+  local id result before after first_line
+  before=$(printf '%034d' 0)
+  after=$(printf '%0398d' 0)
+  for ((i = 1; i <= 70; i++)); do
+    printf 'line-%03d-%sλ%s\n' "$i" "$before" "$after"
+  done >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log"
+
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  result="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/result.txt"
+  [ "$(wc -c <"$result" | tr -d '[:space:]')" -le 16384 ]
+  [ "$(wc -l <"$result" | tr -d '[:space:]')" -lt 60 ]
+  first_line=$(sed -n '1p' "$result")
+  [ "$first_line" = "line-035-$beforeλ$after" ]
+  [ "$(tail -n 1 "$result")" = "line-070-$beforeλ$after" ]
+  [ "$(jq -r .output <<<"$output")" = "$(cat "$result")" ]
 }
 
 @test "saved container logs redact bare injected credentials and preserve normal lines" {
@@ -991,7 +1024,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 }
 
 @test "status omits log fields and host logs redact router and GitHub key assignments" {
-  local id log
+  local id log result
   printf '%s\n' 'AGENT_ROUTER_KEY=zcode-router-secret-value' 'GH_TOKEN=abc123' >"$STUB_DIR/container.log"
   printf '%s\n' 'X-Vault-Token: vault_test_secret' >>"$STUB_DIR/container.log"
   printf '%s\n' '{"env":{"ZAMMAD_HTTP_TOKEN": "json_test_secret","ZAMMAD_URL":"https://zammad.test"}}' \
@@ -1001,7 +1034,10 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   [ "$status" -eq 0 ]
   id=$(jq -r .job <<<"$output")
   log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  result="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/result.txt"
   grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$log"
+  grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$result"
+  jq -e '.output | contains("AGENT_ROUTER_KEY=[REDACTED]")' <<<"$output"
   grep -Fxq 'GH_TOKEN=[REDACTED]' "$log"
   grep -Fxq 'X-Vault-Token: [REDACTED]' "$log"
   grep -Fxq '{"env":{"ZAMMAD_HTTP_TOKEN": "[REDACTED]","ZAMMAD_URL":"https://zammad.test"}}' "$log"
@@ -1017,6 +1053,8 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   ! grep -Fq 'zcode-router-secret-value' <<<"$output"
   ! grep -Fq 'vault_test_secret' <<<"$output"
   ! grep -Fq 'abc123' <<<"$output"
+  ! grep -Fq 'zcode-router-secret-value' "$result"
+  [ "$(ls -l "$result" | cut -c2-10)" = rw------- ]
 }
 
 @test "cancel kills a running job; refresh settles it as cancelled" {
