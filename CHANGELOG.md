@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.1...v1.11.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **bao-agent:** keep the job alive after the agent token expires ([#175](https://github.com/dryvist/nix-agent-sandbox/issues/175)) ([4e802de](https://github.com/dryvist/nix-agent-sandbox/commit/4e802de87e729e5dc06f2da32f58469a83ea355e))
+
 ## [1.11.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.0...v1.11.1) (2026-11-02)
 
 
