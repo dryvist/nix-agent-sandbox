@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.2...v1.11.3) (2026-11-02)
+
+
+### Bug Fixes
+
+* **dispatch:** make per-job ntfy posts opt-in (AGENT_DISPATCH_NTFY_JOBS) ([#177](https://github.com/dryvist/nix-agent-sandbox/issues/177)) ([99b20d1](https://github.com/dryvist/nix-agent-sandbox/commit/99b20d1e703a5752189937382569d2f4a584d10f))
+
 ## [1.11.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.1...v1.11.2) (2026-11-02)
 
 
