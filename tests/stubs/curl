@@ -39,6 +39,9 @@ while [ $# -gt 0 ]; do
     --max-time)
       shift 2
       ;;
+    --connect-timeout)
+      shift 2
+      ;;
     -*) shift ;;
     *)
       url=$1
@@ -86,6 +89,17 @@ case "$url" in
       resp='{"errors":["1 error occurred:\n\t* permission denied\n\n"]}' code=22
     else
       resp='{"data":{"token":"ghs_minted_secret"}}'
+    fi
+    ;;
+  */v1/models)
+    if [ "${STUB_ROUTER_CURL_FAIL:-}" = 1 ]; then exit 7; fi
+    http_code=${STUB_ROUTER_HTTP_STATUS:-200}
+    if [ -n "${STUB_ROUTER_RESPONSE:-}" ]; then
+      resp=$STUB_ROUTER_RESPONSE
+    else
+      resp=$(jq -cn --argjson ids \
+        "${STUB_ROUTER_MODELS:-[\"small\",\"medium\",\"large\",\"go-mimo-flash\",\"go-deepseek-flash\"]}" \
+        '{data: [$ids[] | {id: .}]}')
     fi
     ;;
   */repos/*/properties/values)

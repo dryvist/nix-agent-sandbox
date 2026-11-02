@@ -30,7 +30,8 @@ setup() {
     STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO STUB_LABEL_FAIL STUB_CLOSE_FAIL \
     STUB_PR_CREATE_FAIL STUB_PR_LABEL_PRESENT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL \
     STUB_PROPERTY_VALUE STUB_PROPERTY_MISSING \
-    STUB_PROPERTY_HTTP_ERROR STUB_PROPERTY_INVALID_JSON
+    STUB_PROPERTY_HTTP_ERROR STUB_PROPERTY_INVALID_JSON STUB_ROUTER_CURL_FAIL \
+    STUB_ROUTER_HTTP_STATUS STUB_ROUTER_MODELS STUB_ROUTER_RESPONSE
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
   export AGENT_DISPATCH_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export AGENT_DISPATCH_APPROLE_DIR="$BATS_TEST_TMPDIR/approle"
@@ -70,6 +71,57 @@ make_dispatcher() {
 bash_stub() {
   { printf '#!%s\n' "$BASH"; cat; } >"$1"
   chmod +x "$1"
+}
+prepare_opencode_entrypoint() {
+  local home=$1 tools=$2
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"opencode":{"env":[],"routerKeyField":"opencode_router_key"}}' \
+    >"$home/.agent-profiles.json"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=opencode-router-test-key' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/opencode" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
+SH
+}
+run_opencode_entrypoint() {
+  local home=$1 tools=$2
+  run --separate-stderr env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    STUB_ROUTER_MODELS="${STUB_ROUTER_MODELS:-[\"small\",\"medium\",\"large\",\"go-mimo-flash\",\"go-deepseek-flash\"]}" \
+    STUB_ROUTER_HTTP_STATUS="${STUB_ROUTER_HTTP_STATUS:-200}" \
+    STUB_ROUTER_RESPONSE="${STUB_ROUTER_RESPONSE:-}" \
+    STUB_ROUTER_CURL_FAIL="${STUB_ROUTER_CURL_FAIL:-}" \
+    AGENT_SANDBOX=1 AGENT_TOOL=opencode AGENT_RUN_ID=run-opencode-test \
+    AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
+}
+assert_opencode_model() {
+  local home=$1 model=$2
+  [ "$(cat "$STUB_DIR/opencode-argv")" = \
+    $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nagent-router/'"$model"$'\nopencode prompt' ]
+  jq -e --arg model "$model" \
+    '.provider["agent-router"].models == {($model): {name: $model}}' \
+    "$home/.config/opencode/opencode.json" >/dev/null
+  [ "$(cat "$STUB_DIR/http.1.req")" = "GET https://router.test/v1/models" ]
+  grep -Fxq 'Authorization: Bearer opencode-router-test-key' "$STUB_DIR/http.1.hdr"
+  grep -Fxq 'User-Agent: dryvist-sandbox' "$STUB_DIR/http.1.hdr"
+  grep -Fxq 'x-opencode-session: run-opencode-test' "$STUB_DIR/http.1.hdr"
+  [ "$stderr" = "agent-entrypoint: opencode model $model (router order)" ]
+  [ -z "$output" ]
+  [[ $stderr != *opencode-router-test-key* && $output != *opencode-router-test-key* ]]
+  ! grep -Fq 'opencode-router-test-key' "$STUB_DIR/argv.log"
+}
+assert_opencode_failed_closed() {
+  local home=$1 reason=$2
+  [ "$status" -eq 65 ]
+  [[ $stderr == *"$reason"* ]]
+  [ "$(grep -c . <<<"$stderr")" -eq 1 ]
+  [ -z "$output" ]
+  [ ! -e "$home/.config/opencode/opencode.json" ]
+  [ ! -e "$STUB_DIR/opencode-argv" ]
+  [[ $stderr != *opencode-router-test-key* && $output != *opencode-router-test-key* ]]
+  ! grep -Fq 'opencode-router-test-key' "$STUB_DIR/argv.log"
 }
 run_tty_command() {
   local command=$1
@@ -1209,6 +1261,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 echo 1000
 SH
   bash_stub "$tools/opencode" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/opencode-local-argv"
 test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
 test "$AGENT_ROUTER_KEY" = router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
@@ -1216,6 +1269,11 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-local AGENT_PROMPT='route this' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/opencode-local-argv")" = \
+    $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nagent-router/medium\nroute this' ]
+  jq -e '.provider["agent-router"].models == {medium: {name: "medium"}}' \
+    "$home/.config/opencode/opencode.json" >/dev/null
+  ! grep -q '/models' "$STUB_DIR/calls.log"
   [ ! -e "$home/.agent-env" ]
 }
 
@@ -1292,23 +1350,96 @@ SH
   [ ! -e "$STUB_DIR/zcode-ran" ]
 }
 
-@test "OpenCode preserves an existing config without router values" {
+@test "OpenCode refuses to run with an existing config but missing router values" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/no-router-home" tools="$BATS_TEST_TMPDIR/no-router-tools"
   mkdir -p "$home/.config/opencode" "$tools"
-  printf '%s\n' '{"opencode":{"env":[]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"opencode":{"env":[],"routerKeyField":"opencode_router_key"}}' >"$home/.agent-profiles.json"
   printf '%s\n' '{"existing":"opencode"}' >"$home/.config/opencode/opencode.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
   bash_stub "$tools/opencode" <<'SH'
-test -z "${AGENT_ROUTER_BASE_URL:-}"
-test -z "${AGENT_ROUTER_KEY:-}"
-test "$(cat "$HOME/.config/opencode/opencode.json")" = '{"existing":"opencode"}'
+touch "$STUB_DIR/opencode-ran"
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 AGENT_TOOL=opencode \
     AGENT_PROMPT='run opencode' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"requires AGENT_ROUTER_BASE_URL"* ]]
+  [ "$(cat "$home/.config/opencode/opencode.json")" = '{"existing":"opencode"}' ]
+  [ ! -e "$STUB_DIR/opencode-ran" ]
+}
+
+@test "OpenCode uses the first router-listed Go model in the provider config and command" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-first-home" tools="$BATS_TEST_TMPDIR/opencode-first-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='["small","medium","large","go-mimo-flash","go-deepseek-flash"]'
+  run_opencode_entrypoint "$home" "$tools"
   [ "$status" -eq 0 ]
+  assert_opencode_model "$home" go-mimo-flash
+}
+
+@test "OpenCode preserves router response order instead of sorting model ids" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-order-home" tools="$BATS_TEST_TMPDIR/opencode-order-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='["small","go-deepseek-flash","go-mimo-flash"]'
+  run_opencode_entrypoint "$home" "$tools"
+  [ "$status" -eq 0 ]
+  assert_opencode_model "$home" go-deepseek-flash
+}
+
+@test "OpenCode fails closed when the router model list is empty" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-empty-home" tools="$BATS_TEST_TMPDIR/opencode-empty-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='[]'
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models list is empty'
+}
+
+@test "OpenCode fails closed on a non-200 router response" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-http-home" tools="$BATS_TEST_TMPDIR/opencode-http-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_HTTP_STATUS=403
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models request returned HTTP 403'
+}
+
+@test "OpenCode fails closed when no router id matches the sandbox Go pattern" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-no-go-home" tools="$BATS_TEST_TMPDIR/opencode-no-go-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_MODELS='["small","glm-4.5-flash"]'
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models list has no OpenCode Go model'
+}
+
+@test "OpenCode fails closed on invalid or missing router model data" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-invalid-home" tools="$BATS_TEST_TMPDIR/opencode-invalid-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_RESPONSE=not-json
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models response is invalid'
+
+  rm -rf "$home/.config/opencode" "$STUB_DIR/opencode-argv"
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=opencode-router-test-key' >"$home/.agent-env"
+  export STUB_ROUTER_RESPONSE='{"models":[]}'
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models response is invalid'
+}
+
+@test "OpenCode fails closed when curl cannot fetch router models" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/opencode-curl-home" tools="$BATS_TEST_TMPDIR/opencode-curl-tools"
+  prepare_opencode_entrypoint "$home" "$tools"
+  export STUB_ROUTER_CURL_FAIL=1
+  run_opencode_entrypoint "$home" "$tools"
+  assert_opencode_failed_closed "$home" 'router models request failed'
 }
 
 @test "qwen-code is batch only: a terminal job is refused before any side effect" {
@@ -1366,23 +1497,14 @@ SH
   [ ! -e "$home/.agent-env" ]
 }
 
-@test "OpenCode and Cursor receive their native batch command forms" {
+@test "Cursor agent receives its native batch command form" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/tools-home" tools="$BATS_TEST_TMPDIR/agent-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode":{"env":[],"routerKeyField":"opencode_router_key"},"cursor-agent":{"env":[],"routerKeyField":"cursor_router_key"}}' \
+  printf '%s\n' '{"cursor-agent":{"env":[],"routerKeyField":"cursor_router_key"}}' \
     >"$home/.agent-profiles.json"
-  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
-    'AGENT_ROUTER_KEY=opencode-router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'
 echo 1000
-SH
-bash_stub "$tools/opencode" <<'SH'
-printf '%s\n' "$@" >"$STUB_DIR/opencode-argv"
-test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
-test "$AGENT_ROUTER_KEY" = opencode-router-test-key
-test -z "${ZAI_SUBSCRIPTION_KEY:-}"
-test -z "${CURSOR_API_KEY:-}"
 SH
 bash_stub "$tools/cursor-agent" <<'SH'
 printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
@@ -1391,12 +1513,6 @@ test "$AGENT_ROUTER_KEY" = cursor-router-test-key
 test -z "${ZAI_SUBSCRIPTION_KEY:-}"
 test -z "${CURSOR_API_KEY:-}"
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nagent-router/go-mimo-flash\nopencode prompt' ]
-  [ -f "$home/.config/opencode/opencode.json" ]
-
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \

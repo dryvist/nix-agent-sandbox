@@ -530,9 +530,45 @@ case "${AGENT_TOOL}" in
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    # Router model id: go-mimo-flash for opencode; the local role for opencode-local.
-    opencode_model=go-mimo-flash
-    if [ "${AGENT_TOOL}" = opencode-local ]; then opencode_model=medium; fi
+    # OpenCode uses the router's first sandbox Go model; opencode-local uses medium.
+    if [ "${AGENT_TOOL}" = opencode ]; then
+      if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [ -z "${AGENT_ROUTER_KEY:-}" ]; then
+        echo "agent-entrypoint: OpenCode requires router base URL and key." >&2
+        exit 64
+      fi
+      opencode_models_response=$(curl -sS --connect-timeout 10 --max-time 30 \
+        -w $'\n%{http_code}' \
+        -H @<(printf 'Authorization: Bearer %s\nUser-Agent: dryvist-sandbox\nx-opencode-session: %s\n' \
+          "$AGENT_ROUTER_KEY" "$AGENT_RUN_ID") \
+        "${AGENT_ROUTER_BASE_URL%/}/models" 2>/dev/null) || {
+        echo "agent-entrypoint: router models request failed." >&2
+        exit 65
+      }
+      opencode_http_status=${opencode_models_response##*$'\n'}
+      opencode_models_json=${opencode_models_response%$'\n'*}
+      if [ "$opencode_http_status" != 200 ]; then
+        echo "agent-entrypoint: router models request returned HTTP ${opencode_http_status}." >&2
+        exit 65
+      fi
+      if ! jq -e 'type == "object" and (.data | type == "array")' \
+        <<<"${opencode_models_json}" >/dev/null 2>&1; then
+        echo "agent-entrypoint: router models response is invalid." >&2
+        exit 65
+      fi
+      if ! jq -e '.data | length > 0' <<<"${opencode_models_json}" >/dev/null 2>&1; then
+        echo "agent-entrypoint: router models list is empty." >&2
+        exit 65
+      fi
+      if ! opencode_model=$(jq -er \
+        '[.data[] | .id? | select(type == "string" and test("^go-[a-z0-9-]+$"))][0] // empty' \
+        <<<"${opencode_models_json}" 2>/dev/null); then
+        echo "agent-entrypoint: router models list has no OpenCode Go model." >&2
+        exit 65
+      fi
+      echo "agent-entrypoint: opencode model ${opencode_model} (router order)" >&2
+    else
+      opencode_model=medium
+    fi
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
       opencode_config="${HOME}/.config/opencode/opencode.json"
       mkdir -p "${opencode_config%/*}"
