@@ -158,12 +158,39 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
   [ "$(jq -r '.state' <<<"$output")" = succeeded ]
   run client result "$JOB"
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.result' <<<"$output")" = "$(printf 'job: %s\ntool: zcode\nrepo: dryvist/example\nstate: succeeded\npr: https://github.com/dryvist/example/pull/4\nduration: 23s' "$JOB")" ]
+  [ "$(jq -r '.result' <<<"$output")" = "$(printf 'job: %s\ntool: zcode\nrepo: dryvist/example\nstate: succeeded\npr: https://github.com/dryvist/example/pull/4\nduration: 23s\noutput:' "$JOB")" ]
   jq '.state = "running"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
   mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
   run client result "$JOB"
   [ "$status" -eq 1 ]
   jq -e '.error == "Job has no terminal result"' <<<"$output"
+}
+
+@test "successful result appends the dispatcher output tail" {
+  jq '.output = "review complete\nsecond useful line\n"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client result "$JOB"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.result' <<<"$output")" = "$(printf 'job: %s\ntool: zcode\nrepo: dryvist/example\nstate: succeeded\npr: https://github.com/dryvist/example/pull/4\nduration: 23s\noutput:\nreview complete\nsecond useful line' "$JOB")" ]
+}
+
+@test "result --output writes only the output text to the file" {
+  jq '.output = "answer line one\nanswer line two\n"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client result "$JOB" --output "$BATS_TEST_TMPDIR/answer.txt"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/answer.txt")" = "$(printf 'answer line one\nanswer line two')" ]
+  run client result "$JOB" --bogus "$BATS_TEST_TMPDIR/x"
+  [ "$status" -ne 0 ]
+}
+
+@test "failed result appends the output tail and failure reason" {
+  jq '.state = "failed" | .reason = "exit 1" | .output = "compiler failed\nlast diagnostic\n"' \
+    "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
+  run client result "$JOB"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.result' <<<"$output")" = "$(printf 'job: %s\ntool: zcode\nrepo: dryvist/example\nstate: failed\npr: https://github.com/dryvist/example/pull/4\nduration: 23s\noutput:\ncompiler failed\nlast diagnostic\nreason: exit 1' "$JOB")" ]
 }
 
 @test "continue and cancel scope-check the job before mutation" {
@@ -254,6 +281,8 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
 }
 
 @test "start waits and prints DONE with a PR or no-pr" {
+  jq '.output = "completed agent output"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
   unset ZCODE_JOB_JSON
   run client start dryvist/example Review
   [ "$status" -eq 0 ]
@@ -268,7 +297,8 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
 
 @test "terminal failure prints a single stripped reason" {
   unset ZCODE_JOB_JSON
-  jq '.state = "failed" | .reason = "first\nsecond"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
+  jq '.state = "failed" | .reason = "first\nsecond" | .output = "failure details"' \
+    "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
   mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
   run client start dryvist/example Review
   [ "$status" -eq 1 ]

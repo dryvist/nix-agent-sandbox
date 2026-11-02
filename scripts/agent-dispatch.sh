@@ -317,18 +317,24 @@ job_get() {
 }
 
 job_json() {
-  local dir="$STATE_DIR/$1" run rdir started ended commit
+  local dir="$STATE_DIR/$1" run rdir started ended commit output_file
   run=$(latest_run "$1")
   rdir="$dir/runs/$run"
   started=$(cat "$rdir/started" 2>/dev/null || date +%s)
   ended=$(cat "$rdir/ended" 2>/dev/null || date +%s)
   commit=$(cat "$dir/commit" 2>/dev/null || true)
+  if [ -f "$rdir/result.txt" ]; then
+    output_file="$rdir/result.txt"
+  else
+    output_file=/dev/null
+  fi
   jq -c --arg state "$(cat "$rdir/state" 2>/dev/null || echo starting)" \
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
     --arg commit "$commit" \
+    --rawfile output "$output_file" \
     --argjson runs "$run" --argjson duration "$((ended - started))" \
-    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit}' \
+    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit, output: $output}' \
     "$dir/job.json"
 }
 
@@ -955,6 +961,7 @@ finalize() {
     chmod 600 "$rdir/log"
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
+  write_result_tail "$rdir"
   rm -f "$rdir/redact-values"
   date +%s >"$rdir/ended"
   echo "$state" >"$rdir/state"

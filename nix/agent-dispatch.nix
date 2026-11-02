@@ -32,6 +32,7 @@ let
       AGENT_PIDS_LIMIT_DEFAULT=${lib.escapeShellArg hardeningDefaults.pidsLimit}
       AGENT_TIMEOUT_DEFAULT=${lib.escapeShellArg hardeningDefaults.timeout}
     ''
+    + builtins.readFile ../scripts/agent-dispatch-result.sh
     + builtins.readFile ../scripts/agent-dispatch.sh;
   };
 
