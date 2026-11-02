@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.4...v1.10.5) (2026-11-02)
+
+
+### Bug Fixes
+
+* **entrypoint:** take the Z.ai model only from OpenBao ZAI_MODEL ([#167](https://github.com/dryvist/nix-agent-sandbox/issues/167)) ([43baf59](https://github.com/dryvist/nix-agent-sandbox/commit/43baf59b613fe7be43aa4c84f300b9bf4f4dc72c))
+
 ## [1.10.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.3...v1.10.4) (2026-11-02)
 
 
