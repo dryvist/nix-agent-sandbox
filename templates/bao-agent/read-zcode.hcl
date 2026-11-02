@@ -1,5 +1,6 @@
 auto_auth {
   method "approle" {
+    exit_on_err = false
     config = {
       role_id_file_path                    = "/dev/shm/agent-openbao/role-id"
       secret_id_file_path                  = "/dev/shm/agent-openbao/wrapped-secret-id"
@@ -9,7 +10,8 @@ auto_auth {
 }
 
 template_config {
-  exit_on_retry_failure = true
+  exit_on_retry_failure         = true
+  static_secret_render_interval = "24h"
 }
 
 env_template "ZAI_API_KEY" {
