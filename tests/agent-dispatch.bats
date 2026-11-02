@@ -337,6 +337,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   [ "$status" -eq 0 ]
   env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
   grep -qx 'ZAI_SUBSCRIPTION_KEY=zai-secret-value' <<<"$env_data"
+  grep -qx 'ZAI_MODEL=fixture-zai-model' <<<"$env_data"
   grep -q 'GET https://bao.test/v1/secrets-external/data/ai/saas/zai' "$STUB_DIR/calls.log"
   [ "$(grep -c 'secret/data/secrets-external' "$STUB_DIR/calls.log" || true)" -eq 0 ]
   [[ $output != *zai-secret-value* ]]
@@ -480,7 +481,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_ROUTER_KEY"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY"]}}' \
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_ROUTER_KEY"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL"]}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -508,10 +509,18 @@ SH
   }}' "$provider_config" >/dev/null
 
   printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' >"$home/.agent-env"
+  rm -f "$STUB_DIR/opencode-fix-argv"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=opencode-zai AGENT_PROMPT='zai prompt' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 65 ]
+  [[ $output == *"ZAI_MODEL is missing"* ]]
+  [ ! -e "$STUB_DIR/opencode-fix-argv" ]
+
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-plan-key' 'ZAI_MODEL=openbao-model' >"$home/.agent-env"
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-zai AGENT_PROMPT='zai prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nzai-coding-plan/glm-5.3\nzai prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nzai-coding-plan/openbao-model\nzai prompt' ]
   [ "$(cat "$STUB_DIR/opencode-fix-zai-key")" = zai-plan-key ]
 }
 
@@ -1251,16 +1260,18 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_API_KEY=zai-batch-value \
     bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
-  [ "$(cat "$STUB_DIR/zcode-configured")" = 'zai-batch-value glm-5.3' ]
-  [ -d "$home/.zcode" ]
+  [ "$status" -eq 65 ]
+  [[ $output == *"ZAI_MODEL is missing"* ]]
+  [ ! -e "$STUB_DIR/zcode-configured" ]
+  [ ! -e "$STUB_DIR/zcode-argv" ]
 
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_PROMPT='fix the test' ZAI_API_KEY=zai-batch-value ZAI_MODEL=override-model-value \
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
   [ "$(cat "$STUB_DIR/zcode-configured")" = 'zai-batch-value override-model-value' ]
+  [ -d "$home/.zcode" ]
 }
 
 @test "ZCode batch exits 64 without ZAI_API_KEY before the tool runs" {
@@ -1551,7 +1562,7 @@ SH
 run_fix_entrypoint() {
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" REAL_GIT="$REAL_GIT" \
     AGENT_SANDBOX=1 AGENT_MODE=fix AGENT_TOOL="${ENTRY_TOOL:-zcode}" AGENT_REPO=dryvist/nix-ai \
-    ZAI_API_KEY=zai-test-value \
+    ZAI_API_KEY=zai-test-value ZAI_MODEL=test-model \
     AGENT_BRANCH="$ENTRY_BRANCH" AGENT_EXPECTED_SHA="$ENTRY_EXPECTED_SHA" \
     AGENT_PROMPT="${ENTRY_PROMPT:-repair the failure}" bash -euo pipefail "$ENTRYPOINT"
 }
@@ -2296,7 +2307,7 @@ SH
   bash_stub "$tools/zcode" <<'SH'
 exit 37
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 ZAI_API_KEY=zai-test-value \
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 ZAI_API_KEY=zai-test-value ZAI_MODEL=test-model \
     AGENT_TOOL=zcode AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 37 ]
   [[ $output == *"exited with status 37; refusing to publish"* ]]

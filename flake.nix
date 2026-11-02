@@ -270,7 +270,7 @@
                   .opencode.sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
                   .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .["opencode-local"].sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
-                  .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY"] and
+                  .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL"] and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
                   .["cursor-agent"].env == [] and .["cursor-agent"].ttyLogin == true and
                   .["qwen-code"].env == [] and .["qwen-code"].routerKeyField == "QWEN_CODE_ROUTER_KEY" and

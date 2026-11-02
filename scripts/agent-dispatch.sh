@@ -211,7 +211,11 @@ external_field() {
 }
 
 credential_value() {
-  if [ "$1" = ZAI_SUBSCRIPTION_KEY ]; then external_field ZAI_API_KEY; else field "$1"; fi
+  case "$1" in
+    ZAI_SUBSCRIPTION_KEY) external_field ZAI_API_KEY ;;
+    ZAI_MODEL) external_field ZAI_MODEL ;;
+    *) field "$1" ;;
+  esac
 }
 
 # The token must list exactly the job's repo; the mint request names its owner
@@ -580,7 +584,7 @@ publish_fix_token() {
   tool=$(job_get "$id" .tool)
   mapfile -t credential_names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
   for name in "${credential_names[@]}"; do
-    if [ "$name" = ZAI_SUBSCRIPTION_KEY ]; then need_zai=1; fi
+    case "$name" in ZAI_SUBSCRIPTION_KEY | ZAI_MODEL) need_zai=1 ;; esac
   done
   if [ "$need_zai" -eq 1 ]; then
     external_bucket=$(bao_req GET "$ZAI_BUCKET" "${6:-}") || external_bucket=""
@@ -1135,7 +1139,7 @@ run_job() {
   }
   mapfile -t names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
   for name in "${names[@]}"; do
-    if [ "$name" = ZAI_SUBSCRIPTION_KEY ]; then
+    if [ "$name" = ZAI_SUBSCRIPTION_KEY ] || [ "$name" = ZAI_MODEL ]; then
       external_bucket=$(bao_req GET "$ZAI_BUCKET" "$tok") || {
         abort "$id" "$run" "external credential read failed" "$tok"
         return 1

@@ -77,6 +77,17 @@ agent_env_name_allowed() {
     "${HOME}/.agent-profiles.json" >/dev/null 2>&1
 }
 
+# Z.ai models come only from OpenBao ZAI_MODEL (secrets-external/ai/saas/zai);
+# the router never lists GLM, so there is no fallback.
+require_zai_model() {
+  [ -n "${ZAI_MODEL:-}" ] || {
+    echo "agent-entrypoint: ZAI_MODEL is missing; set it in OpenBao secrets-external/ai/saas/zai." >&2
+    exit 65
+  }
+  zai_model=${ZAI_MODEL}
+  unset ZAI_MODEL
+}
+
 if [ -f "${HOME}/.agent-env" ]; then
   chmod 600 "${HOME}/.agent-env"
   env_file_error=0
@@ -259,7 +270,7 @@ trap '
       qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
     esac
   fi
-  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY ZAI_API_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
+  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY ZAI_API_KEY ZAI_MODEL VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
     SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_SANDBOX_ROUTER_KEY_FIELD
 ' EXIT
 if [ "${openbao_child:-}" = 1 ]; then
@@ -321,6 +332,8 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
     exit 64
   fi
   while IFS= read -r var; do
+    # require_zai_model fails closed on an empty ZAI_MODEL with its own exit 65.
+    [ "${var}" != ZAI_MODEL ] || continue
     [ -n "${!var:-}" ] || {
       echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
       exit 64
@@ -511,7 +524,8 @@ case "${AGENT_TOOL}" in
     }
     export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
     mkdir -p "${ZCODE_DATA_BASE_DIR}"
-    ZAI_MODEL="${ZAI_MODEL:-glm-5.3}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
+    require_zai_model
+    ZAI_MODEL="${zai_model}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
     unset ZAI_API_KEY ZAI_MODEL
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
@@ -541,10 +555,11 @@ case "${AGENT_TOOL}" in
     bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
     ;;
   opencode-zai)
+    require_zai_model
     zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
     unset ZAI_SUBSCRIPTION_KEY
     ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto --print-logs --log-level warn \
-      --model zai-coding-plan/glm-5.3 "${AGENT_PROMPT}" || status=$?
+      --model "zai-coding-plan/${zai_model}" "${AGENT_PROMPT}" || status=$?
     unset zai_subscription_key
     ;;
   cursor-agent)

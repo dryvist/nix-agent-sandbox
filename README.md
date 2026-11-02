@@ -154,7 +154,8 @@ agent-dispatch check
   `opencode` and `opencode-local` use `AGENT_ROUTER_BASE_URL` and the router key
   with the router route groups `opencode-public-cheap` (OpenCode Go models) and
   `medium` (the local role); `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
-  `zai-coding-plan/glm-5.3`. `cursor-agent` is terminal-only and signs in
+  `zai-coding-plan/<ZAI_MODEL>`. `zcode` and `opencode-zai` take `ZAI_MODEL`
+  only from OpenBao `secrets-external/ai/saas/zai` and exit 65 when it is empty. `cursor-agent` is terminal-only and signs in
   interactively. `shell` is accepted only by `fix`: it runs the task text as a
   `bash` command and needs no model credential. `qwen-code` batch runs use
   the router's `medium` capability with `sandbox_agent_router_llm_router_key`
