@@ -530,8 +530,8 @@ case "${AGENT_TOOL}" in
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    # Router route groups: OpenCode Go models for opencode, the local role for opencode-local.
-    opencode_model=opencode-public-cheap
+    # Router model id: go-mimo-flash for opencode; the local role for opencode-local.
+    opencode_model=go-mimo-flash
     if [ "${AGENT_TOOL}" = opencode-local ]; then opencode_model=medium; fi
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
       opencode_config="${HOME}/.config/opencode/opencode.json"

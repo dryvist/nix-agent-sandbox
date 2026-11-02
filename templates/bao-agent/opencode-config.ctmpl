@@ -1,6 +1,6 @@
 {{- $router_field := env "AGENT_SANDBOX_ROUTER_KEY_FIELD" -}}
 {{- $tracker := eq (env "AGENT_TRACKER_ACCESS") "true" -}}
-{{- $model := "opencode-public-cheap" -}}
+{{- $model := "go-mimo-flash" -}}
 {{- if eq (env "AGENT_TOOL") "opencode-local" }}{{ $model = "medium" }}{{ end -}}
 {{- if or (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") -}}
 {
