@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.3...v1.10.4) (2026-11-02)
+
+
+### Bug Fixes
+
+* **entrypoint:** pass a lowercase opencode log level ([#165](https://github.com/dryvist/nix-agent-sandbox/issues/165)) ([568ac5f](https://github.com/dryvist/nix-agent-sandbox/commit/568ac5f0be2efedf01ab5d7f1e9357fcfdd3a5f3))
+
 ## [1.10.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.2...v1.10.3) (2026-11-02)
 
 
