@@ -8,7 +8,7 @@
 #                     zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
 #   GIT_MIRROR_URL    public mirror URL for a repo-less zcode terminal
-#   AGENT_RUN_ID      optional stable run id (default: timestamp)
+#   AGENT_RUN_ID      stable run id; required for opencode, otherwise optional (default: timestamp)
 #   AGENT_SHELL=1     drop into bash instead of running an agent (debugging)
 #   GH_TOKEN          scoped token for clone/push/PR when AGENT_REPO is set
 #   AGENT_PROFILE     task profile from /home/agent/.agent-profiles.json;
