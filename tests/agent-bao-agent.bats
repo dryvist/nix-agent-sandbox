@@ -626,3 +626,12 @@ SH
   [ ! -e "$BATS_TEST_TMPDIR/missing-child-started" ]
   [ ! -e "$auth_dir/wrapped-secret-id" ]
 }
+
+@test "every Agent config renders static secrets once per job and survives auth failure" {
+  local hcl
+  for hcl in templates/bao-agent/*.hcl; do
+    grep -Eq '^  static_secret_render_interval = "24h"$' "$hcl" || { echo "render interval missing: $hcl" >&2; false; }
+    grep -Eq '^  exit_on_retry_failure +=  *true$' "$hcl" || { echo "first-render fail-closed missing: $hcl" >&2; false; }
+    grep -Eq '^    exit_on_err = false$' "$hcl" || { echo "exit_on_err missing: $hcl" >&2; false; }
+  done
+}
