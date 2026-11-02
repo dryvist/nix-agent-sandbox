@@ -68,7 +68,7 @@ try {
   const provider = view.providers.find(
     (item) => item.templateId === "zai-api" && item.providerName === "nix-agent-sandbox",
   );
-  const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3-Flash";
+  const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3";
   const model = provider?.models.find((item) => item.modelId === modelId);
   const reasoning = model?.config?.optionSpecs?.reasoningLevel?.values;
   if (!provider || !model || !Array.isArray(reasoning) || reasoning.length === 0) {

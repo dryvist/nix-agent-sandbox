@@ -511,27 +511,30 @@ case "${AGENT_TOOL}" in
     }
     export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
     mkdir -p "${ZCODE_DATA_BASE_DIR}"
-    ZAI_MODEL="${ZAI_MODEL:-glm-5.3-flash}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
+    ZAI_MODEL="${ZAI_MODEL:-glm-5.3}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
     unset ZAI_API_KEY ZAI_MODEL
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
+    # Router route groups: OpenCode Go models for opencode, the local role for opencode-local.
+    opencode_model=opencode-public-cheap
+    if [ "${AGENT_TOOL}" = opencode-local ]; then opencode_model=medium; fi
     if [ -n "${AGENT_ROUTER_BASE_URL:-}" ] && [ -n "${AGENT_ROUTER_KEY:-}" ]; then
       opencode_config="${HOME}/.config/opencode/opencode.json"
       mkdir -p "${opencode_config%/*}"
       AGENT_ROUTER_BASE_URL="$AGENT_ROUTER_BASE_URL" AGENT_ROUTER_KEY="$AGENT_ROUTER_KEY" \
-        AGENT_RUN_ID="$AGENT_RUN_ID" jq -n \
+        AGENT_RUN_ID="$AGENT_RUN_ID" jq -n --arg model "${opencode_model}" \
         '{provider: {"agent-router": {
           npm: "@ai-sdk/openai-compatible",
           name: "Agent Router",
           options: {baseURL: env.AGENT_ROUTER_BASE_URL, apiKey: env.AGENT_ROUTER_KEY,
             headers: {"User-Agent": "dryvist-sandbox", "x-opencode-session": env.AGENT_RUN_ID}},
-          models: {"public-cheap": {name: "public-cheap"}}
+          models: {($model): {name: $model}}
         }}}' >"${opencode_config}"
       chmod 600 "${opencode_config}"
       export OPENCODE_CONFIG="${opencode_config}"
     fi
-    opencode run --auto --model agent-router/public-cheap "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --model "agent-router/${opencode_model}" "${AGENT_PROMPT}" || status=$?
     unset AGENT_ROUTER_KEY
     ;;
   shell)

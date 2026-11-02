@@ -1,10 +1,12 @@
 {{- $router_field := env "AGENT_SANDBOX_ROUTER_KEY_FIELD" -}}
 {{- $tracker := eq (env "AGENT_TRACKER_ACCESS") "true" -}}
+{{- $model := "opencode-public-cheap" -}}
+{{- if eq (env "AGENT_TOOL") "opencode-local" }}{{ $model = "medium" }}{{ end -}}
 {{- if or (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") -}}
 {
   {{- if $router_field }}
-  "model":"agent-router/public-cheap",
-  "provider":{"agent-router":{"npm":"@ai-sdk/openai-compatible","name":"Agent Router","options":{"baseURL":"{env:AGENT_ROUTER_BASE_URL}","apiKey":"{env:AGENT_ROUTER_KEY}","headers":{"User-Agent":"dryvist-sandbox","x-opencode-session":"{env:AGENT_RUN_ID}"}},"models":{"public-cheap":{"name":"public-cheap"}}}}{{ if $tracker }},{{ end }}
+  "model":"agent-router/{{ $model }}",
+  "provider":{"agent-router":{"npm":"@ai-sdk/openai-compatible","name":"Agent Router","options":{"baseURL":"{env:AGENT_ROUTER_BASE_URL}","apiKey":"{env:AGENT_ROUTER_KEY}","headers":{"User-Agent":"dryvist-sandbox","x-opencode-session":"{env:AGENT_RUN_ID}"}},"models":{"{{ $model }}":{"name":"{{ $model }}"}}}}{{ if $tracker }},{{ end }}
   {{- end }}
   {{- if $tracker }}
   "mcp":{
