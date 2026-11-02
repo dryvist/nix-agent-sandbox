@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.0...v1.10.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **entrypoint:** print opencode logs into the run log ([#159](https://github.com/dryvist/nix-agent-sandbox/issues/159)) ([81c686a](https://github.com/dryvist/nix-agent-sandbox/commit/81c686ae6222847d4ed2f6e2f07a604cafc90122))
+
 ## [1.10.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.9.1...v1.10.0) (2026-11-02)
 
 
