@@ -48,6 +48,8 @@ setup() {
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
   export AGENT_REPO_DENYLIST=blocked-owner
+  # Most cases use the ntfy request as the setsid stub's completion signal.
+  export AGENT_DISPATCH_NTFY_JOBS=1
 }
 
 
@@ -676,7 +678,7 @@ no_write_mint_requested() {
 
 @test "a refused mint fails closed without another login: no container and result posted" {
   local rec
-  export STUB_MINT_FAIL=1
+  export STUB_MINT_FAIL=1 AGENT_DISPATCH_NTFY_JOBS=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 1 ]
   [ "$(jq -r .state <<<"$output")" = failed ]
@@ -780,7 +782,8 @@ scope_refused() {
   [ "$(jq -r .reason <<<"$output")" = "credential files are missing or unreadable" ]
 }
 
-@test "a refused login posts one role-and-reason alert before any container" {
+@test "a refused login posts one role-and-reason alert with job posts disabled" {
+  unset AGENT_DISPATCH_NTFY_JOBS
   export STUB_LOGIN_FAIL=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 1 ]
@@ -842,6 +845,7 @@ scope_refused() {
 
 @test "the result is fixed-format and carries only a PR URL of the job's repo" {
   local id rec pr=https://github.com/dryvist/nix-ai/pull/42
+  export AGENT_DISPATCH_NTFY_JOBS=1
   STUB_PR_URL=$pr run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   id=$(jq -r .job <<<"$output")
@@ -866,6 +870,43 @@ pr: $pr" ]
   [ "$(jq -r .title "$rec.body")" = "ai-job $id succeeded" ]
   [[ $(jq -r .description "$rec.body") == "<p>job: $id<br>tool: zcode<br>repo: dryvist/nix-ai<br>state: succeeded<br>pr: $pr<br>duration: "*"s</p>" ]]
   no_secret_on_a_command_line
+}
+
+@test "per-job ntfy is disabled by default without changing the job result" {
+  local id rec i waiter rdir state notify_log ntfy_posts revoked
+  export STUB_KEEP_WAITER=1
+  unset AGENT_DISPATCH_NTFY_JOBS
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  rdir="$AGENT_DISPATCH_STATE_DIR/$id/runs/1"
+  for ((i = 0; i < 500; i++)); do
+    state=$(cat "$rdir/state" 2>/dev/null || echo running)
+    if [ "$state" != running ] &&
+      grep -q 'PUT https://vikunja.test/api/v1/projects/55/tasks' "$STUB_DIR/calls.log"; then
+      break
+    fi
+    sleep 0.02
+  done
+  state=$(cat "$rdir/state" 2>/dev/null || echo missing)
+  rec=$(http_rec "PUT https://vikunja.test/api/v1/projects/55/tasks" 2>/dev/null || true)
+  notify_log=$(cat "$AGENT_DISPATCH_STATE_DIR/$id/dispatch.log" 2>/dev/null || true)
+  ntfy_posts=$(grep -c 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log" || true)
+  waiter=$(cat "$STUB_DIR/waiter.pid" 2>/dev/null || true)
+  AGENT_DISPATCH_RETENTION=0 dispatch refresh >/dev/null
+  for ((i = 0; i < 100; i++)); do
+    grep -q 'revoke-self token=s.tok1' "$STUB_DIR/calls.log" && break
+    sleep 0.02
+  done
+  revoked=$(grep -c 'revoke-self token=s.tok1' "$STUB_DIR/calls.log" || true)
+  kill -0 "$waiter" 2>/dev/null && kill "$waiter" 2>/dev/null || true
+  unset STUB_KEEP_WAITER
+
+  [ "$state" = succeeded ]
+  [ "$ntfy_posts" -eq 0 ]
+  [[ $notify_log != *"ntfy result skipped"* && $notify_log != *"result notification incomplete"* ]]
+  [ "$(jq -r .title "$rec.body")" = "ai-job $id succeeded" ]
+  [ "$revoked" -ge 1 ]
 }
 
 @test "a PR URL for another repo, or with extra text, is reported as none" {
@@ -951,7 +992,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 # Waits are slices of half the login TTL: STUB_LEASE=4 gives 2 s slices, and
 # the container exits on wait call STUB_WAIT_CALLS.
 @test "the login token is renewed every half TTL while the container runs" {
-  export STUB_LEASE=4 STUB_WAIT_CALLS=3
+  export STUB_LEASE=4 STUB_WAIT_CALLS=3 AGENT_DISPATCH_NTFY_JOBS=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   [ "$(run_state "$output")" = succeeded ]
@@ -1167,7 +1208,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
 
 @test "continue reuses the job token and workspace without another login" {
   local id waiter i
-  export STUB_KEEP_WAITER=1
+  export STUB_KEEP_WAITER=1 AGENT_DISPATCH_NTFY_JOBS=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "first"
   id=$(jq -r .job <<<"$output")
   for ((i = 0; i < 100; i++)); do
