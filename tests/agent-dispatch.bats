@@ -495,7 +495,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-local AGENT_RUN_ID=j-test AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/medium\nrouter prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nWARN\n--model\nagent-router/medium\nrouter prompt' ]
   local provider_config="$home/.config/opencode/opencode.json"
   [ -f "$provider_config" ]
   [ "$(ls -l "$provider_config" | cut -c2-10)" = rw------- ]
@@ -511,7 +511,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-zai AGENT_PROMPT='zai prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nzai-coding-plan/glm-5.3\nzai prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nWARN\n--model\nzai-coding-plan/glm-5.3\nzai prompt' ]
   [ "$(cat "$STUB_DIR/opencode-fix-zai-key")" = zai-plan-key ]
 }
 
@@ -1366,7 +1366,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/opencode-public-cheap\nopencode prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--print-logs\n--log-level\nWARN\n--model\nagent-router/opencode-public-cheap\nopencode prompt' ]
   [ -f "$home/.config/opencode/opencode.json" ]
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
@@ -2427,7 +2427,8 @@ SH
 }
 
 @test "every opencode run prints its own logs so a failed run names its cause" {
-  entrypoint="$BATS_TEST_DIRNAME/../scripts/entrypoint.sh"
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  entrypoint="$ENTRYPOINT"
   runs=$(grep -c 'opencode run ' "$entrypoint")
   [ "$runs" -ge 2 ]
   [ "$(grep -c 'opencode run --auto --print-logs --log-level WARN' "$entrypoint")" -eq "$runs" ]
