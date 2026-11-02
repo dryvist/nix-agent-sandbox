@@ -2425,3 +2425,10 @@ SH
   chmod 0755 "$home/work"
   chmod 0644 "$home/work/README.md"
 }
+
+@test "every opencode run prints its own logs so a failed run names its cause" {
+  entrypoint="$BATS_TEST_DIRNAME/../scripts/entrypoint.sh"
+  runs=$(grep -c 'opencode run ' "$entrypoint")
+  [ "$runs" -ge 2 ]
+  [ "$(grep -c 'opencode run --auto --print-logs --log-level WARN' "$entrypoint")" -eq "$runs" ]
+}
