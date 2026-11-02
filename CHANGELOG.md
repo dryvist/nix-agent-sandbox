@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.9.0...v1.9.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **opencode:** use the opencode-public-cheap and medium router groups; default ZCode to GLM-5.3 ([#155](https://github.com/dryvist/nix-agent-sandbox/issues/155)) ([05f6577](https://github.com/dryvist/nix-agent-sandbox/commit/05f6577873b98512b9279f02c273293cd93e40ee))
+
 ## [1.9.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.8.0...v1.9.0) (2026-11-01)
 
 
