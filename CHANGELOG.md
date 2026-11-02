@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.6...v1.11.0) (2026-11-02)
+
+
+### Features
+
+* **entrypoint:** select the OpenCode model from router order ([#171](https://github.com/dryvist/nix-agent-sandbox/issues/171)) ([3c981ac](https://github.com/dryvist/nix-agent-sandbox/commit/3c981ac074ebe399f5cf8870b654f65abc91ee74))
+
 ## [1.10.6](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.5...v1.10.6) (2026-11-02)
 
 
