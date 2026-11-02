@@ -70,7 +70,7 @@ try {
     const configured = modelView.providers.find(
       (item) => item.templateId === "zai-api" && item.providerName === "nix-agent-sandbox",
     );
-    const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3-Flash";
+    const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3";
     if (!configured?.models.some((model) => model.modelId === modelId)) throw new Error();
   } finally {
     socket?.close();

@@ -331,10 +331,10 @@ case "$AGENT_TOOL" in
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
     printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
-      .model == "agent-router/public-cheap" and
+      .model == "agent-router/opencode-public-cheap" and
       (has("small_model") | not) and
       (has("mcp") | not) and
-      .provider["agent-router"].models == {"public-cheap": {"name": "public-cheap"}} and
+      .provider["agent-router"].models == {"opencode-public-cheap": {"name": "opencode-public-cheap"}} and
       .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}" and
       .provider["agent-router"].options.headers == {"User-Agent": "dryvist-sandbox", "x-opencode-session": "{env:AGENT_RUN_ID}"}
     ' >/dev/null
