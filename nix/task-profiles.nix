@@ -71,7 +71,10 @@
   };
   opencode-zai = {
     batchCapable = true;
-    env = [ "ZAI_SUBSCRIPTION_KEY" ];
+    env = [
+      "ZAI_SUBSCRIPTION_KEY"
+      "ZAI_MODEL"
+    ];
   };
   # Runs the prompt as a bash command; fix jobs only, no model credential.
   shell = {

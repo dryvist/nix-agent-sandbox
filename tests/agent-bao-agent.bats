@@ -410,7 +410,7 @@ test "$(ls -l "$HOME/.zcode/cli/config.json" | cut -c2-10)" = rw-------
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 \
     AGENT_DISPATCHED_JOB=1 AGENT_OPENBAO_CHILD=1 AGENT_TOOL=zcode \
-    AGENT_PROMPT='Inspect the repository' ZCODE_MCP_CONFIG="$config" ZAI_API_KEY=zai-test-value \
+    AGENT_PROMPT='Inspect the repository' ZCODE_MCP_CONFIG="$config" ZAI_API_KEY=zai-test-value ZAI_MODEL=test-model \
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ ! -e "$home/.zcode/cli/config.json" ]
@@ -433,7 +433,7 @@ test "$(ls -l "$HOME/.zcode/cli/config.json" | cut -c2-10)" = rw-------
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 \
     AGENT_DISPATCHED_JOB=1 AGENT_OPENBAO_CHILD=1 AGENT_TOOL=zcode \
-    AGENT_PROMPT='Inspect the repository' ZCODE_MCP_CONFIG='{"mcp":{"servers":{}}}' ZAI_API_KEY=zai-test-value \
+    AGENT_PROMPT='Inspect the repository' ZCODE_MCP_CONFIG='{"mcp":{"servers":{}}}' ZAI_API_KEY=zai-test-value ZAI_MODEL=test-model \
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ ! -e "$home/.zcode/cli/config.json" ]
@@ -451,7 +451,7 @@ echo 1000
 SH
   # The real bao agent re-runs the entrypoint with the parent's exported environment.
   bash_stub "$tools/bao" <<'SH'
-ZAI_API_KEY=zai-test-value ZCODE_MCP_CONFIG='{"mcp":{"servers":{}}}' exec bash -euo pipefail "$ENTRYPOINT"
+ZAI_API_KEY=zai-test-value ZAI_MODEL=test-model ZCODE_MCP_CONFIG='{"mcp":{"servers":{}}}' exec bash -euo pipefail "$ENTRYPOINT"
 SH
   bash_stub "$tools/zcode-configure-key" <<'SH'
 exit 0
