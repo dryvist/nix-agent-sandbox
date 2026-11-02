@@ -985,6 +985,23 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   jq -e '.output == ""' <<<"$output"
 }
 
+@test "finalize keeps the container stderr stream, redacted, in the log and result" {
+  local id log result
+  printf '%s\n' 'stdout-line' >"$STUB_DIR/container.log"
+  printf '%s\n' 'ERROR opencode provider failed' 'AGENT_ROUTER_KEY=stderr-router-secret' >"$STUB_DIR/container.err"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log" STUB_DOCKER_STDERR_FILE="$STUB_DIR/container.err" STUB_EXIT=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  id=$(jq -r .job <<<"$output")
+  log="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/log"
+  result="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/result.txt"
+  grep -Fxq 'stdout-line' "$log"
+  grep -Fxq 'ERROR opencode provider failed' "$log"
+  grep -Fxq 'ERROR opencode provider failed' "$result"
+  ! grep -Fq 'stderr-router-secret' "$log"
+  grep -Fxq 'AGENT_ROUTER_KEY=[REDACTED]' "$log"
+}
+
 @test "result tail keeps the last lines under 16 KiB and drops a partial UTF-8 line" {
   local id result before after first_line
   before=$(printf '%034d' 0)

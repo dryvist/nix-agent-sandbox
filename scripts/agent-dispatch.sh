@@ -948,7 +948,7 @@ finalize() {
       pr=$(read_pr_url "$cid" "$(job_get "$id" .repo)")
       if [ -n "$pr" ]; then echo "$pr" >"$STATE_DIR/$id/pr_url"; fi
     fi
-    if docker logs --tail 200 "$cid" 2>/dev/null | redact_log_values | jq -Rr \
+    if docker logs --tail 200 "$cid" 2>&1 | redact_log_values | jq -Rr \
       'gsub("(?i)(?<prefix>(?:authorization|x-vault-token):[[:space:]]*).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*=).*"; "\(.prefix)[REDACTED]") |
        gsub("(?i)(?<prefix>\"[A-Z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_.-]*\"[[:space:]]*:[[:space:]]*)\"[^\"]*\""; "\(.prefix)\"[REDACTED]\"") |
