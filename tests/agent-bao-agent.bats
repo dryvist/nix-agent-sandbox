@@ -326,17 +326,42 @@ case "$AGENT_TOOL" in
     printf '%s' "$ZCODE_MCP_CONFIG" | jq -e '.mcp.servers == {}' >/dev/null
     ;;
   opencode)
+    if [ "${EXPECT_ROUTER:-}" = 1 ]; then
+      test "$AGENT_ROUTER_KEY" = router-test-key
+    else
+      test -z "${AGENT_ROUTER_KEY:-}"
+    fi
+    test -z "${ZAI_API_KEY:-}"
+    test -z "${VIKUNJA_API_TOKEN:-}"
+    test -z "${ZAMMAD_HTTP_TOKEN:-}"
+    if [ "${EXPECT_ROUTER:-}" = 1 ]; then
+      printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
+        (has("small_model") | not) and
+        (has("model") | not) and
+        (.provider["agent-router"] | has("models") | not) and
+        .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}" and
+        .provider["agent-router"].options.headers == {"User-Agent": "dryvist-sandbox", "x-opencode-session": "{env:AGENT_RUN_ID}"} and
+        (if env.EXPECT_TRACKER == "1" then has("mcp") else (has("mcp") | not) end)
+      ' >/dev/null
+    else
+      printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
+        (has("small_model") | not) and
+        (has("model") | not) and
+        (has("provider") | not) and
+        (if env.EXPECT_TRACKER == "1" then has("mcp") else (has("mcp") | not) end)
+      ' >/dev/null
+    fi
+    ;;
+  opencode-local)
     test "$AGENT_ROUTER_KEY" = router-test-key
     test -z "${ZAI_API_KEY:-}"
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
     printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
-      .model == "agent-router/go-mimo-flash" and
       (has("small_model") | not) and
-      (has("mcp") | not) and
-      .provider["agent-router"].models == {"go-mimo-flash": {"name": "go-mimo-flash"}} and
-      .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}" and
-      .provider["agent-router"].options.headers == {"User-Agent": "dryvist-sandbox", "x-opencode-session": "{env:AGENT_RUN_ID}"}
+      .model == "agent-router/medium" and
+      .provider["agent-router"].models == {"medium": {"name": "medium"}} and
+      (has("mcp") | not)
     ' >/dev/null
     ;;
 esac
@@ -386,8 +411,28 @@ SH
   issue_identity sandbox-opencode-read
   run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test EXPECT_ROUTER=1 EXPECT_TRACKER=0
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=true AGENT_RUN_ID=j-test EXPECT_ROUTER=1 EXPECT_TRACKER=1 \
+    AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
+    AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]'
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD= AGENT_TRACKER_ACCESS=false \
+    AGENT_RUN_ID=j-test EXPECT_ROUTER=0 EXPECT_TRACKER=0
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD= AGENT_TRACKER_ACCESS=true \
+    AGENT_RUN_ID=j-test EXPECT_ROUTER=0 EXPECT_TRACKER=1 \
+    AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
+    AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]'
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
     AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test
-  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 3 ]
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 7 ]
 }
 
 @test "ZCode MCP configuration is private and removed after a dispatched job" {
