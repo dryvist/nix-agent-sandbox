@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.9.1...v1.10.0) (2026-11-02)
+
+
+### Features
+
+* **dispatch:** return a redacted output tail and add zcode-job result --output ([#157](https://github.com/dryvist/nix-agent-sandbox/issues/157)) ([d25246f](https://github.com/dryvist/nix-agent-sandbox/commit/d25246f2d7548cc8f0f0cc0d3dc57e0f324d1794))
+
 ## [1.9.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.9.0...v1.9.1) (2026-11-02)
 
 
