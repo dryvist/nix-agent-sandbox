@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.1...v1.10.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **tests:** expect opencode log flags in argv and read ENTRYPOINT ([3e86b57](https://github.com/dryvist/nix-agent-sandbox/commit/3e86b57e1ef4a48b07cdce693736ac7d5279c717))
+* **tests:** expect opencode log flags in argv assertions ([#161](https://github.com/dryvist/nix-agent-sandbox/issues/161)) ([3e86b57](https://github.com/dryvist/nix-agent-sandbox/commit/3e86b57e1ef4a48b07cdce693736ac7d5279c717))
+
 ## [1.10.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.0...v1.10.1) (2026-11-02)
 
 
