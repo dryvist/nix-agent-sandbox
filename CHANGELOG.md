@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.0...v1.11.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **entrypoint:** document that opencode requires AGENT_RUN_ID ([#173](https://github.com/dryvist/nix-agent-sandbox/issues/173)) ([2b9b96d](https://github.com/dryvist/nix-agent-sandbox/commit/2b9b96d838f0ea41596431e04733f152b0940518))
+
 ## [1.11.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.10.6...v1.11.0) (2026-11-02)
 
 
