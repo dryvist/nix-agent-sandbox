@@ -346,6 +346,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
   no_ssh
+  no_curl
 }
 
 @test "continue requires the public marker before SSH" {
@@ -366,6 +367,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   jq -n '{private: false, visibility: "internal"}' >"$STUB_DIR/repo.json"
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
   no_ssh
   printf '%s\n' 'not json' >"$STUB_DIR/repo.json"
   run client start dryvist/example Review
