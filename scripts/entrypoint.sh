@@ -541,7 +541,7 @@ case "${AGENT_TOOL}" in
       chmod 600 "${opencode_config}"
       export OPENCODE_CONFIG="${opencode_config}"
     fi
-    opencode run --auto --model agent-router/medium "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --model agent-router/go-kimi-k3 "${AGENT_PROMPT}" || status=$?
     unset AGENT_ROUTER_KEY
     ;;
   shell)

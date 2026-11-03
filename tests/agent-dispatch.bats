@@ -424,7 +424,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode-local AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/medium\nrouter prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--model\nagent-router/go-kimi-k3\nrouter prompt' ]
   local provider_config="$home/.config/opencode/opencode.json"
   [ -f "$provider_config" ]
   [ "$(ls -l "$provider_config" | cut -c2-10)" = rw------- ]
@@ -1256,7 +1256,7 @@ SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=opencode AGENT_PROMPT='opencode prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/medium\nopencode prompt' ]
+  [ "$(cat "$STUB_DIR/opencode-argv")" = $'run\n--auto\n--model\nagent-router/go-kimi-k3\nopencode prompt' ]
   [ -f "$home/.config/opencode/opencode.json" ]
 
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
