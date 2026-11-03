@@ -8,14 +8,26 @@ setup() {
   jq -n '{sshHost: "zcode-dispatch", allowedRepos: ["dryvist/example"],
     liveUrl: "https://zcode.example.test"}' >"$ZCODE_JOB_CONFIG"
   export ZCODE_JOB_JSON=1
+  export UNTRUSTED_OK=public
   export JOB=j-0123456789abcdef
   jq -n --arg job "$JOB" '{job: $job, tool: "zcode", repo: "dryvist/example",
     state: "succeeded", duration: 23, pr: "https://github.com/dryvist/example/pull/4"}' \
     >"$STUB_DIR/response.json"
+  # curl stand-in on PATH: records its argv and serves repo.json as GitHub would.
+  jq -n '{private: false, visibility: "public"}' >"$STUB_DIR/repo.json"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '%s\n' "#!$BASH" 'set -euo pipefail' \
+    'printf "%s\n" "$@" >"$STUB_DIR/curl-argv"' \
+    '[ "${STUB_CURL_EXIT:-0}" -eq 0 ] || exit "$STUB_CURL_EXIT"' \
+    'cat "$STUB_DIR/repo.json"' >"$BATS_TEST_TMPDIR/bin/curl"
+  chmod +x "$BATS_TEST_TMPDIR/bin/curl"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }
 
 client() { "$ZCODE_JOB_BIN/zcode-job" "$@"; }
 no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
+no_curl() { [ ! -e "$STUB_DIR/curl-argv" ]; }
+marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may only receive public data'
 
 @test "help succeeds without client configuration" {
   rm "$ZCODE_JOB_CONFIG"
@@ -321,4 +333,81 @@ no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
   [ "$status" -eq 0 ]
   jq -e --arg job "$JOB" '.job == $job' <<<"$output"
   ! grep -q '^status ' "$STUB_DIR/ssh-commands"
+}
+
+@test "start requires the public marker before any lookup or SSH" {
+  unset UNTRUSTED_OK
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e --arg error "$marker_error" '.error == $error' <<<"$output"
+  no_ssh
+  no_curl
+  export UNTRUSTED_OK=Public
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  no_ssh
+}
+
+@test "continue requires the public marker before SSH" {
+  unset UNTRUSTED_OK
+  run client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  jq -e --arg error "$marker_error" '.error == $error' <<<"$output"
+  no_ssh
+}
+
+@test "start refuses a repository that is not verifiably public" {
+  jq '.private = true | .visibility = "private"' "$STUB_DIR/repo.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/repo.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+  jq -n '{private: false, visibility: "internal"}' >"$STUB_DIR/repo.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  no_ssh
+  printf '%s\n' 'not json' >"$STUB_DIR/repo.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+}
+
+@test "start fails closed when the GitHub lookup fails" {
+  export STUB_CURL_EXIT=22
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+}
+
+@test "start with a public repository proceeds to SSH" {
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "start zcode dryvist/example Review" ]
+  grep -Fx "https://api.github.com/repos/dryvist/example" "$STUB_DIR/curl-argv"
+}
+
+@test "status, live and repos work without the public marker" {
+  unset UNTRUSTED_OK
+  run client status "$JOB"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.state' <<<"$output")" = succeeded ]
+  no_curl
+  run client live
+  [ "$status" -eq 0 ]
+  run client repos
+  [ "$status" -eq 0 ]
+}
+
+@test "the visibility lookup is unauthenticated and honours the API override" {
+  export GH_TOKEN=github-secret GITHUB_TOKEN=github-secret
+  export ZCODE_JOB_GITHUB_API=https://github-api.test
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  grep -Fx "https://github-api.test/repos/dryvist/example" "$STUB_DIR/curl-argv"
+  run grep -iE 'authorization|github-secret' "$STUB_DIR/curl-argv"
+  [ "$status" -eq 1 ]
+  grep -Fx -- --max-time "$STUB_DIR/curl-argv"
 }

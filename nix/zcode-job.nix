@@ -4,6 +4,8 @@
   openssh,
   coreutils,
 }:
+# curl comes from the host; it stays off runtimeInputs so the bats suite can
+# stand it in from PATH.
 writeShellApplication {
   name = "zcode-job";
   runtimeInputs = [
