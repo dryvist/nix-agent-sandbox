@@ -816,8 +816,11 @@ publish_fix_token() {
       rm -rf "$tmp"
       return 1
     fi
-    request=$(jq -cn --arg title "$headline" --arg head "$branch" --arg base "$default_branch" \
-      '{title: $title, head: $head, base: $base, draft: false, body: "Human review is requested: an agent authored this change and a trusted reviewer decides the merge."}')
+    # Shell results open ready; other tools open draft.
+    draft=true
+    [ "$tool" != shell ] || draft=false
+    request=$(jq -cn --argjson draft "$draft" --arg title "$headline" --arg head "$branch" --arg base "$default_branch" \
+      '{title: $title, head: $head, base: $base, draft: $draft, body: "Agent-authored change."}')
     resp=$(gh_write POST "$gh" "repos/$(job_get "$id" .repo)/pulls" "$request" 2>/dev/null) || resp=""
     pr_url=$(jq -r '.html_url // empty' <<<"$resp")
     pr_repo=""
@@ -828,19 +831,6 @@ publish_fix_token() {
     fi
     repo=$(job_get "$id" .repo)
     if [[ ${pr_repo,,} == "${repo,,}" ]] && [ -n "$pr_number" ]; then
-      if [ "$tool" != shell ]; then
-        request='{"labels":["human:review"]}'
-        if ! gh_write POST "$gh" "repos/$(job_get "$id" .repo)/issues/$pr_number/labels" "$request" \
-          >/dev/null 2>&1; then
-          if ! gh_write PATCH "$gh" "repos/$(job_get "$id" .repo)/pulls/$pr_number" \
-            '{"state":"closed"}' >/dev/null 2>&1; then
-            echo "pull request close failed" >&2
-          fi
-          echo "pull request labeling failed" >"$rdir/reason"
-          rm -rf "$tmp"
-          return 1
-        fi
-      fi
       echo "$pr_url" >"$dir/pr_url"
     else
       echo "pull request identity invalid" >"$rdir/reason"
@@ -1031,8 +1021,6 @@ container_args() {
     args+=(--label agent-dispatch.mode=fix -e AGENT_MODE=fix
       -e "AGENT_BRANCH=$(job_get "$1" .branch)"
       -e "AGENT_EXPECTED_SHA=$(job_get "$1" .expected_sha)")
-  elif [ -n "$4" ]; then
-    args+=(-e AGENT_PR_HUMAN_REVIEW=1)
   fi
   if [ "$5" = 1 ]; then args+=(-e AGENT_CONTINUE=1); fi
   if [ "$6" = 1 ]; then args+=(--interactive --tty -e AGENT_TTY=1); fi
