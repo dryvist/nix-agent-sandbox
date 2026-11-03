@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.3...v1.11.4) (2026-11-03)
+
+
+### Bug Fixes
+
+* open agent PRs as drafts with no label ([#182](https://github.com/dryvist/nix-agent-sandbox/issues/182)) ([bc0c893](https://github.com/dryvist/nix-agent-sandbox/commit/bc0c893472a1284f98a8aa3ab5155f71b9df958c))
+
 ## [1.11.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.2...v1.11.3) (2026-11-02)
 
 
