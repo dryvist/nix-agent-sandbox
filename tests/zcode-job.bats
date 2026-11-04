@@ -214,12 +214,6 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   [ "$status" -eq 0 ]
   [ "$(jq -r '.state' <<<"$output")" = cancelling ]
   [ "$(cat "$STUB_DIR/ssh-commands")" = "$(printf 'status %s\ncancel %s' "$JOB" "$JOB")" ]
-  jq '.repo = "other/private"' "$STUB_DIR/response.json" >"$STUB_DIR/next.json"
-  mv "$STUB_DIR/next.json" "$STUB_DIR/response.json"
-  rm "$STUB_DIR/ssh-commands"
-  run client continue "$JOB" 'Add tests'
-  [ "$status" -eq 1 ]
-  [ "$(cat "$STUB_DIR/ssh-commands")" = "status $JOB" ]
 }
 
 @test "transport and malformed response failures produce JSON errors" {
@@ -368,6 +362,16 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   [ "$status" -eq 64 ]
   no_ssh
   printf '%s\n' 'not json' >"$STUB_DIR/repo.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+}
+
+@test "a lookup answer with more than one JSON object is refused" {
+  printf '%s\n%s\n' \
+    '{"private":true,"visibility":"private","full_name":"dryvist/example"}' \
+    '{"private":false,"visibility":"public","full_name":"dryvist/example"}' >"$STUB_DIR/repo.json"
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"

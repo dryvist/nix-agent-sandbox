@@ -70,8 +70,8 @@ require_public_repo() {
   body=$(curl -q -fsS --max-time 10 \
     "https://api.github.com/repos/$1" 2>/dev/null) ||
     fail "repository is not verifiably public: $1"
-  jq -e --arg repo "$1" '.private == false and .visibility == "public" and
-    ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase)' <<<"$body" >/dev/null 2>&1 ||
+  jq -es --arg repo "$1" 'length == 1 and (.[0] | .private == false and .visibility == "public" and
+    ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))' <<<"$body" >/dev/null 2>&1 ||
     fail "repository is not verifiably public: $1"
 }
 
