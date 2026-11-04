@@ -1,4 +1,6 @@
 export LC_ALL=C
+# Set before any use, so an inherited environment value cannot mark a job as submitted.
+submitted=0
 
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
   printf '%s\n' \
