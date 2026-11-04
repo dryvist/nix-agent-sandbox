@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-ai = {
-      url = "github:dryvist/nix-ai?ref=v7";
+      url = "github:dryvist/nix-ai?ref=v8";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.nixpkgs-unstable.follows = "nixpkgs";
     };
