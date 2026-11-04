@@ -171,7 +171,10 @@ case "$verb" in
     [[ $id =~ ^j-[0-9a-f]{16}$ ]] || fail "Invalid job id"
     # Validate the existing job's tool and repository before a mutation.
     request "status $id"
-    if [ "$verb" = continue ]; then request "continue $id $2"; fi
+    if [ "$verb" = continue ]; then
+      require_public_repo "$(jq -r '.repo' <<<"$response")"
+      request "continue $id $2"
+    fi
     if [ "$verb" = cancel ]; then request "cancel $id"; fi
     if [ "$verb" = result ]; then
       jq -e '.state | IN("succeeded", "failed", "cancelled", "timeout")' \

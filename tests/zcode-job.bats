@@ -374,6 +374,15 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   no_ssh
 }
 
+@test "continue refuses a job whose repository is not verifiably public" {
+  jq '.private = true | .visibility = "private"' "$STUB_DIR/repo.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/repo.json"
+  run client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "status $JOB" ]
+}
+
 @test "start fails closed when the GitHub lookup fails" {
   export STUB_CURL_EXIT=22
   run client start dryvist/example Review
