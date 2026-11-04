@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.12.0...v1.13.0) (2026-11-04)
+
+
+### Features
+
+* **agent:** autonomous zcode run j-71f32b1ed94b42c6 ([#185](https://github.com/dryvist/nix-agent-sandbox/issues/185)) ([9fd896a](https://github.com/dryvist/nix-agent-sandbox/commit/9fd896a131b6bdf8df5f0161888ba8fc5ecc702a))
+
 ## [1.12.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.4...v1.12.0) (2026-11-04)
 
 
