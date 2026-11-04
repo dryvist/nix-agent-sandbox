@@ -66,9 +66,10 @@ untrusted_gate() {
 require_public_repo() {
   local body
   body=$(curl -q -fsS --max-time 10 \
-    "${ZCODE_JOB_GITHUB_API:-https://api.github.com}/repos/$1" 2>/dev/null) ||
+    "https://api.github.com/repos/$1" 2>/dev/null) ||
     fail "repository is not verifiably public: $1"
-  jq -e '.private == false and .visibility == "public"' <<<"$body" >/dev/null 2>&1 ||
+  jq -e --arg repo "$1" '.private == false and .visibility == "public" and
+    ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase)' <<<"$body" >/dev/null 2>&1 ||
     fail "repository is not verifiably public: $1"
 }
 

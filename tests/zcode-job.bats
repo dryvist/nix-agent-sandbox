@@ -14,7 +14,7 @@ setup() {
     state: "succeeded", duration: 23, pr: "https://github.com/dryvist/example/pull/4"}' \
     >"$STUB_DIR/response.json"
   # curl stand-in on PATH: records its argv and serves repo.json as GitHub would.
-  jq -n '{private: false, visibility: "public"}' >"$STUB_DIR/repo.json"
+  jq -n '{private: false, visibility: "public", full_name: "dryvist/example"}' >"$STUB_DIR/repo.json"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   printf '%s\n' "#!$BASH" 'set -euo pipefail' \
     'printf "%s\n" "$@" >"$STUB_DIR/curl-argv"' \
@@ -374,6 +374,18 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   no_ssh
 }
 
+@test "a public answer for a different repository is refused on start and continue" {
+  jq '.full_name = "other/repo"' "$STUB_DIR/repo.json" >"$STUB_DIR/next.json"
+  mv "$STUB_DIR/next.json" "$STUB_DIR/repo.json"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+  run client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "status $JOB" ]
+}
+
 @test "continue refuses a job whose repository is not verifiably public" {
   jq '.private = true | .visibility = "private"' "$STUB_DIR/repo.json" >"$STUB_DIR/next.json"
   mv "$STUB_DIR/next.json" "$STUB_DIR/repo.json"
@@ -410,12 +422,12 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   [ "$status" -eq 0 ]
 }
 
-@test "the visibility lookup is unauthenticated and honours the API override" {
+@test "the visibility lookup is unauthenticated and always uses the GitHub API" {
   export GH_TOKEN=github-secret GITHUB_TOKEN=github-secret
   export ZCODE_JOB_GITHUB_API=https://github-api.test
   run client start dryvist/example Review
   [ "$status" -eq 0 ]
-  grep -Fx "https://github-api.test/repos/dryvist/example" "$STUB_DIR/curl-argv"
+  grep -Fx "https://api.github.com/repos/dryvist/example" "$STUB_DIR/curl-argv"
   run grep -iE 'authorization|github-secret' "$STUB_DIR/curl-argv"
   [ "$status" -eq 1 ]
   grep -Fx -- --max-time "$STUB_DIR/curl-argv"
