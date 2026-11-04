@@ -32,6 +32,6 @@ publish) and pull the published image for local smoke tests.
 
 ## Flake input pinning
 
-`nix-ai` is pinned to the `feat/autonomy-profiles` branch until
-dryvist/nix-ai#939 merges — repoint to the default branch afterwards
-(tracked by the TODO(repin) comment in flake.nix).
+`nix-ai` follows its floating major release tag (`?ref=vN` in `flake.nix`);
+`flake.lock` records the exact revision. Move to a new major deliberately when
+nix-ai cuts one.
