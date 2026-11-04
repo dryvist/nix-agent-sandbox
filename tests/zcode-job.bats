@@ -370,7 +370,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 
 @test "a lookup answer with more than one JSON object is refused" {
   printf '%s\n%s\n' \
-    '{"private":true,"visibility":"private","full_name":"dryvist/example"}' \
+    '{"private":false,"visibility":"public","full_name":"dryvist/example"}' \
     '{"private":false,"visibility":"public","full_name":"dryvist/example"}' >"$STUB_DIR/repo.json"
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
