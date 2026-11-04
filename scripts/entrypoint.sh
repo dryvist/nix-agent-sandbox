@@ -663,6 +663,13 @@ signed_push() {
   : >"${tmp}/changes"
   while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
     read -r old new _ _ kind <<<"${meta#:}"
+    case "${path}" in
+      .github/workflows/*)
+        echo "agent-entrypoint: ${path} is a workflow file; the sandbox token has no workflows permission, so nothing was published." >&2
+        rm -rf "${tmp}"
+        return 1
+        ;;
+    esac
     case "${old}:${new}" in
       100644:100644 | 000000:100644 | 100644:000000) ;;
       *)
