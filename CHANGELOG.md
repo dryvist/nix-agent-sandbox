@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.12.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.4...v1.12.0) (2026-11-04)
+
+
+### Features
+
+* **zcode-job:** require the public marker and verify repository visibility before dispatch ([#179](https://github.com/dryvist/nix-agent-sandbox/issues/179)) ([b991fd6](https://github.com/dryvist/nix-agent-sandbox/commit/b991fd635512703ab0b72f1e896d727f4ac2c219))
+
+
+### Bug Fixes
+
+* **zcode-job:** accept a visibility answer only when it is one object ([29f31d0](https://github.com/dryvist/nix-agent-sandbox/commit/29f31d0bd9b272bd9745666914dc3381f1e09bbc))
+* **zcode-job:** bind the visibility check to the requested repository ([007bcf6](https://github.com/dryvist/nix-agent-sandbox/commit/007bcf6f4d2e09b3f75de5d53a7af27c6ff7dd2e))
+* **zcode-job:** initialise the submitted flag before use ([733b660](https://github.com/dryvist/nix-agent-sandbox/commit/733b660443ab883cda7ab9054616752046d0c195))
+* **zcode-job:** verify the job repository is public before continue ([d0cb59c](https://github.com/dryvist/nix-agent-sandbox/commit/d0cb59c21e60d92d865673939c5481a2b5857c45))
+
 ## [1.11.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.11.3...v1.11.4) (2026-11-03)
 
 
