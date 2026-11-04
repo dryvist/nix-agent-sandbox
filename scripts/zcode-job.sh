@@ -1,4 +1,6 @@
 export LC_ALL=C
+# Set before any use, so an inherited environment value cannot mark a job as submitted.
+submitted=0
 
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
   printf '%s\n' \
@@ -52,6 +54,25 @@ allowed_repo() {
 valid_text() {
   local control=$'[\001-\010\013-\037\177]'
   [ -n "$1" ] && [ "${#1}" -le 16384 ] && [[ $1 != *$control* ]]
+}
+
+# start and continue hand their text to an untrusted agent, so the caller
+# must state that it only contains public data.
+untrusted_gate() {
+  [ "${UNTRUSTED_OK:-}" = public ] ||
+    fail "UNTRUSTED_OK=public is required: jobs run untrusted agents and may only receive public data"
+}
+
+# Unauthenticated lookup, so a token in the environment can never widen the
+# answer: anything but a verifiably public repository fails closed.
+require_public_repo() {
+  local body
+  body=$(curl -q -fsS --max-time 10 \
+    "https://api.github.com/repos/$1" 2>/dev/null) ||
+    fail "repository is not verifiably public: $1"
+  jq -es --arg repo "$1" 'length == 1 and (.[0] | .private == false and .visibility == "public" and
+    ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))' <<<"$body" >/dev/null 2>&1 ||
+    fail "repository is not verifiably public: $1"
 }
 
 config_path="${ZCODE_JOB_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/zcode-job/config.json}"
@@ -133,12 +154,15 @@ case "$verb" in
     allowed_repo "$1" || fail "Repository is not approved for ZCode"
     valid_text "$2" || fail "Invalid prompt"
     requested_repo="$1"
+    untrusted_gate
+    require_public_repo "$requested_repo"
     request "start $requested_tool $requested_repo $2"
     ;;
   continue | status | result | cancel)
     if [ "$verb" = continue ]; then
       [ $# -eq 2 ] || fail "usage: zcode-job continue <job-id> <message>"
       valid_text "$2" || fail "Invalid continuation message"
+      untrusted_gate
     elif [ "$verb" = result ] && [ $# -eq 3 ] && [ "$2" = --output ]; then
       output_path=$3
       [ -n "$output_path" ] || fail "usage: zcode-job result <job-id> [--output FILE]"
@@ -150,7 +174,10 @@ case "$verb" in
     [[ $id =~ ^j-[0-9a-f]{16}$ ]] || fail "Invalid job id"
     # Validate the existing job's tool and repository before a mutation.
     request "status $id"
-    if [ "$verb" = continue ]; then request "continue $id $2"; fi
+    if [ "$verb" = continue ]; then
+      require_public_repo "$(jq -r '.repo' <<<"$response")"
+      request "continue $id $2"
+    fi
     if [ "$verb" = cancel ]; then request "cancel $id"; fi
     if [ "$verb" = result ]; then
       jq -e '.state | IN("succeeded", "failed", "cancelled", "timeout")' \
