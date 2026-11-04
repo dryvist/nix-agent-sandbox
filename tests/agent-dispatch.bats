@@ -1993,6 +1993,24 @@ SH
   [ ! -e "$STUB_DIR/gh-api.log" ]
 }
 
+@test "a workflow file change is refused before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture workflow 0
+  bash_stub "$tools/zcode" <<'SH'
+mkdir -p .github/workflows
+echo 'on: push' >.github/workflows/nightly.yml
+git add .github/workflows/nightly.yml
+git commit -q -m "add a workflow"
+SH
+  run_publish j-wf
+  [ "$status" -eq 1 ]
+  [[ $output == *".github/workflows/nightly.yml is a workflow file; the sandbox token has no workflows permission, so nothing was published."* ]]
+  [ ! -e "$STUB_DIR/graphql.json" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+}
+
 @test "a change over the publish size limit fails whole, before anything reaches origin" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin
