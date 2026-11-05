@@ -15,23 +15,11 @@ SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  agent run [--tool claude|codex|qwen|zcode|opencode|cursor-agent] [--repo owner/name]
-            [--host fqdn] [--profile name] [--no-oauth] <prompt...>
-  agent sweep --group name [--concurrency N] [--tool claude|codex|qwen|zcode|opencode|cursor-agent]
+  agent run [--tool claude|codex|qwen|zcode|opencode|cursor-agent]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
-Runs the prompt fully autonomously inside a disposable container (--rm;
-the only durable output is a pushed branch/PR when --repo is given).
-
-`sweep` fans the same prompt out across every repo in a named group (see
-lib.repoGroups / nix/repo-groups.nix), one disposable container per repo —
-each cloning, branching, and PR'ing its own repo with its own repo-scoped
-GitHub token, exactly like `agent run --repo`. At most --concurrency runs
-(default 8) execute at once; an end-of-run table lists each repo, its base
-branch, and the PR URL or exit code. A group's `profile` is the default
-unless --profile overrides it. Each member gets its GitHub token just as
-`run --repo` does.
+Runs the prompt fully autonomously inside a disposable container (--rm).
 
 The workstation's subscription-OAuth credentials for the selected --tool
 are injected into the container per run (never baked into the image, never
@@ -52,14 +40,8 @@ default "agents"; proxy AGENT_PROXY_URL, default http://proxy:3128).
 variable it names is forwarded from the caller's environment and must be
 set.
 
---repo uses a repo-scoped GH_TOKEN from the environment. When GH_TOKEN is
-unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
-`$AGENT_GH_TOKEN_CMD owner/name` once per run and uses the token it prints
-on stdout.
-
 Routed tools receive AGENT_ROUTER_BASE_URL and AGENT_ROUTER_KEY from their
-task profile. GH_TOKEN (repo-scoped) is used for --repo. Override the image
-with AGENT_IMAGE.
+task profile. Override the image with AGENT_IMAGE.
 
 On the docker runtime, autonomous runs are capped and hardened (defaults
 baked in nix/agent-cli.nix, overridable per run): AGENT_MEMORY (8g),
@@ -95,13 +77,13 @@ env_flags() {
   local -a fixed_vars=()
   case "$tool" in
     zcode | opencode | cursor-agent)
-      fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY)
       ;;
     qwen)
-      fixed_vars=(GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=()
       ;;
     *)
-      fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN)
       ;;
   esac
   for var in "${fixed_vars[@]}" "$@"; do
@@ -129,26 +111,6 @@ require_tool_profile() {
       }
       ;;
   esac
-}
-
-# --- GitHub token for --repo (launcher-side). GH_TOKEN from the environment
-# wins; otherwise AGENT_GH_TOKEN_CMD prints a repo-scoped token. No
-# coordination lock: each run clones fresh and pushes its own uniquely-named
-# branch, so concurrent same-repo runs share no git state to race on.
-github_token() {
-  local repo="$1" token_cmd
-  [ -n "${AGENT_GH_TOKEN_CMD:-}" ] || {
-    echo "agent: --repo needs GH_TOKEN, or AGENT_GH_TOKEN_CMD to print one." >&2
-    exit 64
-  }
-  # The command may carry its own arguments.
-  read -ra token_cmd <<<"$AGENT_GH_TOKEN_CMD"
-  GH_TOKEN="$("${token_cmd[@]}" "$repo")" && [ -n "$GH_TOKEN" ] || {
-    echo "agent: AGENT_GH_TOKEN_CMD printed no token for $repo." >&2
-    exit 64
-  }
-  GITHUB_TOKEN=$GH_TOKEN
-  export GH_TOKEN GITHUB_TOKEN
 }
 
 # --- Subscription-OAuth credential injection (launcher-side only; the
@@ -302,8 +264,8 @@ case "$cmd" in
           shift 2
           ;;
         --repo)
-          repo="$2"
-          shift 2
+          echo "agent: local --repo runs are retired; start the job through the dispatcher: zcode-job start <owner/repo> <prompt>" >&2
+          exit 64
           ;;
         --host)
           apply_host "$2"
@@ -342,10 +304,6 @@ case "$cmd" in
     pvars_list="$(profile_vars "${profile}")" || exit 64
     pvars=()
     [ -z "${pvars_list}" ] || mapfile -t pvars <<<"${pvars_list}"
-
-    if [ -n "${repo}" ] && [ -z "${GH_TOKEN:-}" ]; then
-      github_token "${repo}"
-    fi
 
     rt="$(runtime)"
     flags=()
@@ -425,134 +383,8 @@ case "$cmd" in
     exit "$status"
     ;;
   sweep)
-    # Launcher-side fan-out: one `agent run --repo` per group member. Each
-    # member re-invokes this same CLI ("$0"), so it reuses the identical
-    # token-mint + OAuth-injection + container path — one repo per run, the
-    # law held. Nothing about the container changes for a sweep.
-    group=""
-    concurrency=8
-    tool=claude
-    profile=""
-    host=""
-    no_oauth=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --group)
-          group="$2"
-          shift 2
-          ;;
-        --concurrency)
-          concurrency="$2"
-          shift 2
-          ;;
-        --tool)
-          tool="$2"
-          shift 2
-          ;;
-        --host)
-          host="$2"
-          shift 2
-          ;;
-        --profile)
-          profile="$2"
-          shift 2
-          ;;
-        --no-oauth)
-          no_oauth=1
-          shift
-          ;;
-        --)
-          shift
-          break
-          ;;
-        -*)
-          usage
-          ;;
-        *)
-          break
-          ;;
-      esac
-    done
-    [ -n "${group}" ] || usage
-    [ $# -gt 0 ] || usage
-    prompt="$*"
-
-    case "${concurrency}" in
-      '' | *[!0-9]*) usage ;;
-    esac
-    [ "${concurrency}" -ge 1 ] || concurrency=1
-
-    [ -n "${AGENT_REPO_GROUPS:-}" ] || {
-      echo "agent: no repo-group table baked in; run the nix-built 'agent' (not the raw script)." >&2
-      exit 70
-    }
-    group_json="$(jq -ce --arg g "${group}" '.[$g]' <<<"${AGENT_REPO_GROUPS}")" || group_json="null"
-    if [ "${group_json}" = "null" ]; then
-      echo "agent: unknown group '${group}'. Known groups:" >&2
-      jq -r 'keys[]' <<<"${AGENT_REPO_GROUPS}" | sed 's/^/  /' >&2
-      exit 64
-    fi
-    # Group profile is the default; an explicit --profile wins.
-    [ -n "${profile}" ] || profile="$(jq -re '.profile // ""' <<<"${group_json}")"
-    if [ -z "${profile}" ]; then
-      case "${tool}" in
-        qwen | zcode | opencode | cursor-agent) profile="${tool}" ;;
-      esac
-    fi
-    require_tool_profile "$tool" "$profile" || exit $?
-
-    repos=()
-    while IFS= read -r entry; do repos+=("${entry}"); done \
-      < <(jq -r '.repos[] | [.name, .branch] | @tsv' <<<"${group_json}")
-    [ "${#repos[@]}" -gt 0 ] || {
-      echo "agent: group '${group}' has no repos." >&2
-      exit 64
-    }
-
-    sweep_tmp="$(mktemp -d)"
-    trap 'rm -rf "${sweep_tmp}"' EXIT
-
-    # Every member is owner dryvist (repo-groups.nix records name only).
-    run_member() {
-      local name="$1" idx="$2" args rc=0
-      args=(run --repo "dryvist/${name}" --tool "${tool}")
-      [ -n "${profile}" ] && args+=(--profile "${profile}")
-      [ -n "${host}" ] && args+=(--host "${host}")
-      [ "${no_oauth}" -eq 1 ] && args+=(--no-oauth)
-      args+=(-- "${prompt}")
-      "$0" "${args[@]}" >"${sweep_tmp}/${idx}.out" 2>&1 || rc=$?
-      echo "${rc}" >"${sweep_tmp}/${idx}.rc"
-    }
-
-    # Fan out in batches of --concurrency (portable; no `wait -n` needed).
-    idx=0
-    for entry in "${repos[@]}"; do
-      IFS=$'\t' read -r name _branch <<<"${entry}"
-      run_member "${name}" "${idx}" &
-      idx=$((idx + 1))
-      [ "$((idx % concurrency))" -eq 0 ] && wait
-    done
-    wait
-
-    # Summary table + overall exit: nonzero if any member failed.
-    printf '\n%-30s %-10s %s\n' "REPO" "BRANCH" "RESULT"
-    overall=0
-    idx=0
-    for entry in "${repos[@]}"; do
-      IFS=$'\t' read -r name branch <<<"${entry}"
-      rc="$(cat "${sweep_tmp}/${idx}.rc" 2>/dev/null || echo '?')"
-      pr="$(grep -Eom1 'https://github\.com/[^ ]+/pull/[0-9]+' \
-        "${sweep_tmp}/${idx}.out" 2>/dev/null || true)"
-      if [ -n "${pr}" ]; then
-        result="${pr}"
-      else
-        result="exit ${rc}"
-      fi
-      [ "${rc}" = 0 ] || overall=1
-      printf '%-30s %-10s %s\n' "dryvist/${name}" "${branch}" "${result}"
-      idx=$((idx + 1))
-    done
-    exit "${overall}"
+    echo "agent: local sweep runs are retired; start the jobs through the dispatcher: zcode-job start <owner/repo> <prompt>" >&2
+    exit 64
     ;;
   shell)
     while [ $# -gt 0 ]; do

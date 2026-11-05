@@ -10,12 +10,8 @@ let
 in
 writeShellApplication {
   name = "agent";
-  # The repo-group table (repo-groups.nix, also exported as lib.repoGroups)
-  # is the single source of truth; inject it as JSON so `agent sweep` reads
-  # the same data with no second copy and no runtime `nix eval`. The
-  # hardening defaults are injected the same way (baked here, env-overridable).
+  # The hardening defaults are baked in here; each is overridable per run.
   text = ''
-    AGENT_REPO_GROUPS=${lib.escapeShellArg (builtins.toJSON (import ./repo-groups.nix))}
     AGENT_TASK_PROFILES=${lib.escapeShellArg (builtins.toJSON (import ./task-profiles.nix))}
     AGENT_MEMORY_DEFAULT=${lib.escapeShellArg hardeningDefaults.memory}
     AGENT_CPUS_DEFAULT=${lib.escapeShellArg hardeningDefaults.cpus}
