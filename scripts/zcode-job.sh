@@ -63,14 +63,15 @@ untrusted_gate() {
     fail "UNTRUSTED_OK=public is required: jobs run untrusted agents and may only receive public data"
 }
 
-# Anonymous git read: credential helpers, askpass, terminal prompts and global
-# or system git config are disabled, and only exit 0 (reachable) allows the
+# Anonymous git read: the environment is cleared, so no inherited git config or
+# GIT_DIR can reach the call; credential helpers, askpass, terminal prompts and
+# global or system git config are disabled. Only exit 0 (reachable) allows the
 # repository. It runs in an empty directory so no repository config is read.
 require_public_repo() {
   local probe rc=0
   probe=$(mktemp -d) || fail "repository is not verifiably public: $1"
   (cd "$probe" &&
-    GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    env -i PATH="$PATH" GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
       git -c credential.helper= ls-remote --exit-code "https://github.com/$1" HEAD >/dev/null 2>&1) || rc=$?
   rmdir "$probe" 2>/dev/null || true
   [ "$rc" -eq 0 ] || fail "repository is not verifiably public: $1"

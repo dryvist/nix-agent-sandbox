@@ -13,16 +13,18 @@ setup() {
   jq -n --arg job "$JOB" '{job: $job, tool: "zcode", repo: "dryvist/example",
     state: "succeeded", duration: 23, pr: "https://github.com/dryvist/example/pull/4"}' \
     >"$STUB_DIR/response.json"
-  # git stand-in on PATH: records the isolation environment and argv of the visibility
-  # read, then exits with STUB_GIT_EXIT (default 0, reachable) and prints STUB_GIT_STDERR.
+  # git stand-in on PATH. The visibility read runs under env -i, which strips test
+  # variables, so the stub has its output directory baked in and reads its exit code
+  # and stderr from files that set_git_read writes. Default: exit 0 (reachable).
   mkdir -p "$BATS_TEST_TMPDIR/bin"
-  printf '%s\n' "#!$BASH" 'set -euo pipefail' \
-    'for name in GIT_TERMINAL_PROMPT GIT_ASKPASS GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM; do' \
+  printf '%s\n' "#!$BASH" "stub_out=$(printf %q "$STUB_DIR")" 'set -euo pipefail' \
+    'for name in GIT_TERMINAL_PROMPT GIT_ASKPASS GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS GIT_DIR; do' \
     '  printf "%s=%s\n" "$name" "${!name-unset}"' \
-    'done >"$STUB_DIR/git-env"' \
-    'printf "%s\n" "$@" >"$STUB_DIR/git-argv"' \
-    '[ -z "${STUB_GIT_STDERR:-}" ] || printf "%s\n" "$STUB_GIT_STDERR" >&2' \
-    'exit "${STUB_GIT_EXIT:-0}"' >"$BATS_TEST_TMPDIR/bin/git"
+    'done >"$stub_out/git-env"' \
+    'printf "%s\n" "$@" >"$stub_out/git-argv"' \
+    'if [ -e "$stub_out/git-stderr" ]; then cat "$stub_out/git-stderr" >&2; fi' \
+    'if [ -e "$stub_out/git-exit" ]; then exit "$(cat "$stub_out/git-exit")"; fi' \
+    'exit 0' >"$BATS_TEST_TMPDIR/bin/git"
   chmod +x "$BATS_TEST_TMPDIR/bin/git"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }
@@ -30,7 +32,9 @@ setup() {
 client() { "$ZCODE_JOB_BIN/zcode-job" "$@"; }
 no_ssh() { [ ! -e "$STUB_DIR/ssh-commands" ]; }
 no_git() { [ ! -e "$STUB_DIR/git-argv" ]; }
+set_git_read() { printf '%s\n' "$1" >"$STUB_DIR/git-exit"; printf '%s\n' "${2-}" >"$STUB_DIR/git-stderr"; }
 marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may only receive public data'
+sanitized_git_env=$'GIT_TERMINAL_PROMPT=0\nGIT_ASKPASS=/bin/false\nGIT_CONFIG_GLOBAL=/dev/null\nGIT_CONFIG_NOSYSTEM=1\nGIT_CONFIG_COUNT=unset\nGIT_CONFIG_KEY_0=unset\nGIT_CONFIG_VALUE_0=unset\nGIT_CONFIG_PARAMETERS=unset\nGIT_DIR=unset'
 
 @test "help succeeds without client configuration" {
   rm "$ZCODE_JOB_CONFIG"
@@ -354,8 +358,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 }
 
 @test "start refuses a repository that is not verifiably public" {
-  export STUB_GIT_EXIT=128
-  export STUB_GIT_STDERR="fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+  set_git_read 128 "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
@@ -363,7 +366,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 }
 
 @test "continue refuses a job whose repository is not verifiably public" {
-  export STUB_GIT_EXIT=128
+  set_git_read 128
   run client continue "$JOB" 'Add tests'
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
@@ -374,13 +377,20 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   run client start dryvist/example Review
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/ssh-commands")" = "start zcode dryvist/example Review" ]
-  [ "$(cat "$STUB_DIR/git-env")" = $'GIT_TERMINAL_PROMPT=0\nGIT_ASKPASS=/bin/false\nGIT_CONFIG_GLOBAL=/dev/null\nGIT_CONFIG_NOSYSTEM=1' ]
+  [ "$(cat "$STUB_DIR/git-env")" = "$sanitized_git_env" ]
   [ "$(cat "$STUB_DIR/git-argv")" = $'-c\ncredential.helper=\nls-remote\n--exit-code\nhttps://github.com/dryvist/example\nHEAD' ]
 }
 
+@test "visibility check ignores environment-injected git config" {
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: injected"
+  export GIT_CONFIG_PARAMETERS="'credential.helper=echo injected'" GIT_DIR="$BATS_TEST_TMPDIR/not-a-repo"
+  run client start dryvist/example Review
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/git-env")" = "$sanitized_git_env" ]
+}
+
 @test "visibility check refuses a repo that does not exist" {
-  export STUB_GIT_EXIT=128
-  export STUB_GIT_STDERR=$'remote: Repository not found.\nfatal: repository not found'
+  set_git_read 128 $'remote: Repository not found.\nfatal: repository not found'
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
@@ -388,8 +398,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 }
 
 @test "visibility check refuses when the lookup fails" {
-  export STUB_GIT_EXIT=128
-  export STUB_GIT_STDERR="fatal: unable to access 'https://github.com/dryvist/example/': Could not resolve host: github.com"
+  set_git_read 128 "fatal: unable to access 'https://github.com/dryvist/example/': Could not resolve host: github.com"
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
@@ -399,7 +408,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 @test "visibility check refuses every non-zero exit of the git read" {
   local code
   for code in $(seq 1 255); do
-    export STUB_GIT_EXIT=$code
+    set_git_read "$code"
     run client start dryvist/example Review
     [ "$status" -eq 64 ]
     jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
