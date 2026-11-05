@@ -398,7 +398,7 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
 
 @test "visibility check refuses every non-zero exit of the git read" {
   local code
-  for code in 1 2 128 255; do
+  for code in $(seq 1 255); do
     export STUB_GIT_EXIT=$code
     run client start dryvist/example Review
     [ "$status" -eq 64 ]
