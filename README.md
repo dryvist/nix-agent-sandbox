@@ -83,25 +83,10 @@ eligibility and trusted verification of the returned draft PR.
 ## Usage
 
 ```sh
-# One-shot autonomous run against a repo; output is a branch + PR. The
-# workstation's subscription-OAuth credentials for --tool claude are
-# injected into the container automatically (no ANTHROPIC_API_KEY needed).
-# Prefer `claude setup-token` once and export CLAUDE_CODE_OAUTH_TOKEN — a
-# long-lived token, so no per-run file copy and no refresh-rotation risk.
-GH_TOKEN=<repo-scoped token> \
-  agent run --tool claude --repo dryvist/some-repo "fix the flaky test in ci.yml"
-
-# API-key auth instead of subscription OAuth: skip injection with --no-oauth
-GH_TOKEN=<repo-scoped token> ANTHROPIC_API_KEY=... \
-  agent run --tool claude --no-oauth --repo dryvist/some-repo "fix the flaky test in ci.yml"
-
-# Same, on a remote Docker host inside its egress-allowlisted network. The
-# `dev` profile forwards the variables it names (here ANTHROPIC_API_KEY)
-# from your environment. Without GH_TOKEN, the launcher runs
-# `$AGENT_GH_TOKEN_CMD owner/name` and uses the token it prints.
-AGENT_GH_TOKEN_CMD=./mint-repo-token \
-  agent run --host docker-host.example.internal --profile dev \
-  --repo dryvist/some-repo "fix the flaky test in ci.yml"
+# One-shot autonomous run against a repo; output is a branch + PR. Start it
+# through the dispatcher. Local `agent run --repo` is retired; it exits and
+# prints this command instead.
+zcode-job start dryvist/some-repo "fix the flaky test in ci.yml"
 
 # Qwen Code against an OpenAI-compatible endpoint; values come from the caller
 AGENT_ROUTER_BASE_URL="$MODEL_ENDPOINT" AGENT_ROUTER_KEY="$MODEL_ROUTER_KEY" \
@@ -340,7 +325,6 @@ entries into that checkout's `automation/ci-workbook/`; it changes files only.
   Docker network whose sole route out is a CONNECT proxy allowlisting
   `lib.egressDomains`.
 - **Secrets**: the container receives only the fixed credential list and the
-  variables its `--profile` names, from the caller's environment. `--repo`
-  uses a repo-scoped `GH_TOKEN`, or the token that
-  `AGENT_GH_TOKEN_CMD owner/name` prints.
+  variables its `--profile` names, from the caller's environment. No GitHub
+  token is forwarded into a local run.
 - **Durability**: git. The branch/PR is the only thing that survives the run.
