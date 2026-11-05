@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.0...v1.13.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **zcode-job:** check repo visibility with an anonymous git read ([#190](https://github.com/dryvist/nix-agent-sandbox/issues/190)) ([69776ec](https://github.com/dryvist/nix-agent-sandbox/commit/69776ec1536e765ff2552be1bc97eb9053d19c59))
+
 ## [1.13.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.12.0...v1.13.0) (2026-11-04)
 
 
