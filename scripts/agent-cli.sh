@@ -15,14 +15,13 @@ SPOOL_DIR="${AGENT_SPOOL_DIR:-/var/lib/agent-sandbox/spool}"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  agent run [--tool claude|codex|qwen|zcode|opencode|cursor-agent] [--repo owner/name]
+  agent run [--tool claude|codex|qwen|zcode|opencode|cursor-agent]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent sweep --group name [--concurrency N] [--tool claude|codex|qwen|zcode|opencode|cursor-agent]
             [--host fqdn] [--profile name] [--no-oauth] <prompt...>
   agent shell [--host fqdn]
 
-Runs the prompt fully autonomously inside a disposable container (--rm;
-the only durable output is a pushed branch/PR when --repo is given).
+Runs the prompt fully autonomously inside a disposable container (--rm).
 
 `sweep` fans the same prompt out across every repo in a named group (see
 lib.repoGroups / nix/repo-groups.nix), one disposable container per repo —
@@ -52,14 +51,8 @@ default "agents"; proxy AGENT_PROXY_URL, default http://proxy:3128).
 variable it names is forwarded from the caller's environment and must be
 set.
 
---repo uses a repo-scoped GH_TOKEN from the environment. When GH_TOKEN is
-unset and AGENT_GH_TOKEN_CMD is set, the launcher runs
-`$AGENT_GH_TOKEN_CMD owner/name` once per run and uses the token it prints
-on stdout.
-
 Routed tools receive AGENT_ROUTER_BASE_URL and AGENT_ROUTER_KEY from their
-task profile. GH_TOKEN (repo-scoped) is used for --repo. Override the image
-with AGENT_IMAGE.
+task profile. Override the image with AGENT_IMAGE.
 
 On the docker runtime, autonomous runs are capped and hardened (defaults
 baked in nix/agent-cli.nix, overridable per run): AGENT_MEMORY (8g),
@@ -95,13 +88,13 @@ env_flags() {
   local -a fixed_vars=()
   case "$tool" in
     zcode | opencode | cursor-agent)
-      fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=(AGENT_ROUTER_BASE_URL AGENT_ROUTER_KEY)
       ;;
     qwen)
-      fixed_vars=(GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=()
       ;;
     *)
-      fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GITHUB_TOKEN)
+      fixed_vars=(ANTHROPIC_API_KEY OPENAI_API_KEY CLAUDE_CODE_OAUTH_TOKEN)
       ;;
   esac
   for var in "${fixed_vars[@]}" "$@"; do
@@ -129,26 +122,6 @@ require_tool_profile() {
       }
       ;;
   esac
-}
-
-# --- GitHub token for --repo (launcher-side). GH_TOKEN from the environment
-# wins; otherwise AGENT_GH_TOKEN_CMD prints a repo-scoped token. No
-# coordination lock: each run clones fresh and pushes its own uniquely-named
-# branch, so concurrent same-repo runs share no git state to race on.
-github_token() {
-  local repo="$1" token_cmd
-  [ -n "${AGENT_GH_TOKEN_CMD:-}" ] || {
-    echo "agent: --repo needs GH_TOKEN, or AGENT_GH_TOKEN_CMD to print one." >&2
-    exit 64
-  }
-  # The command may carry its own arguments.
-  read -ra token_cmd <<<"$AGENT_GH_TOKEN_CMD"
-  GH_TOKEN="$("${token_cmd[@]}" "$repo")" && [ -n "$GH_TOKEN" ] || {
-    echo "agent: AGENT_GH_TOKEN_CMD printed no token for $repo." >&2
-    exit 64
-  }
-  GITHUB_TOKEN=$GH_TOKEN
-  export GH_TOKEN GITHUB_TOKEN
 }
 
 # --- Subscription-OAuth credential injection (launcher-side only; the
@@ -302,8 +275,8 @@ case "$cmd" in
           shift 2
           ;;
         --repo)
-          repo="$2"
-          shift 2
+          echo "agent: local --repo runs are retired; start the job through the dispatcher: zcode-job start <owner/repo> <prompt>" >&2
+          exit 64
           ;;
         --host)
           apply_host "$2"
@@ -342,10 +315,6 @@ case "$cmd" in
     pvars_list="$(profile_vars "${profile}")" || exit 64
     pvars=()
     [ -z "${pvars_list}" ] || mapfile -t pvars <<<"${pvars_list}"
-
-    if [ -n "${repo}" ] && [ -z "${GH_TOKEN:-}" ]; then
-      github_token "${repo}"
-    fi
 
     rt="$(runtime)"
     flags=()

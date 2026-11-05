@@ -32,3 +32,33 @@ setup() {
   [ "$status" -eq 64 ]
   [[ "$output" == *"(default 8) execute at once"* ]]
 }
+
+@test "run --repo is retired: exits before any container and names the dispatcher" {
+  run bash "$AGENT_CLI_SOURCE" run --repo dryvist/example "hello"
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"local --repo runs are retired; start the job through the dispatcher: zcode-job start <owner/repo> <prompt>"* ]]
+  [ ! -e "$STUB_LOG" ]
+}
+
+@test "run without --repo passes no GitHub token into the container" {
+  export DOCKER_HOST=unix:///dev/null AGENT_TIMEOUT=1
+  export GH_TOKEN=sentinel-gh GITHUB_TOKEN=sentinel-github ANTHROPIC_API_KEY=sentinel-anthropic
+  run bash "$AGENT_CLI_SOURCE" run --no-oauth "hello"
+  [ "$status" -eq 0 ]
+  run ! grep -Eq 'GH_TOKEN=|GITHUB_TOKEN=' "$STUB_LOG"
+  grep -Fq 'ANTHROPIC_API_KEY=sentinel-anthropic' "$STUB_LOG"
+}
+
+@test "routed and qwen env forwards carry no GitHub token" {
+  export GH_TOKEN=sentinel-gh GITHUB_TOKEN=sentinel-github AGENT_ROUTER_KEY=sentinel-router
+  # Exercise the launcher's actual env-flag builder without starting a container.
+  # shellcheck disable=SC1090
+  source <(sed -n '/^env_flags() {/,/^}/p' "$AGENT_CLI_SOURCE")
+  local tool flags
+  for tool in zcode opencode cursor-agent qwen claude; do
+    flags="$(env_flags "$tool")"
+    [[ "$flags" != *GH_TOKEN=* ]]
+    [[ "$flags" != *GITHUB_TOKEN=* ]]
+  done
+  [[ "$(env_flags zcode)" == *"AGENT_ROUTER_KEY=sentinel-router"* ]]
+}
