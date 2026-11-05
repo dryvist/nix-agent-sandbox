@@ -63,16 +63,17 @@ untrusted_gate() {
     fail "UNTRUSTED_OK=public is required: jobs run untrusted agents and may only receive public data"
 }
 
-# Unauthenticated lookup, so a token in the environment can never widen the
-# answer: anything but a verifiably public repository fails closed.
+# Anonymous git read: credential helpers, askpass, terminal prompts and global
+# or system git config are disabled, and only exit 0 (reachable) allows the
+# repository. It runs in an empty directory so no repository config is read.
 require_public_repo() {
-  local body
-  body=$(curl -q -fsS --max-time 10 \
-    "https://api.github.com/repos/$1" 2>/dev/null) ||
-    fail "repository is not verifiably public: $1"
-  jq -es --arg repo "$1" 'length == 1 and (.[0] | .private == false and .visibility == "public" and
-    ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))' <<<"$body" >/dev/null 2>&1 ||
-    fail "repository is not verifiably public: $1"
+  local probe rc=0
+  probe=$(mktemp -d) || fail "repository is not verifiably public: $1"
+  (cd "$probe" &&
+    GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+      git -c credential.helper= ls-remote --exit-code "https://github.com/$1" HEAD >/dev/null 2>&1) || rc=$?
+  rmdir "$probe" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || fail "repository is not verifiably public: $1"
 }
 
 config_path="${ZCODE_JOB_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/zcode-job/config.json}"
