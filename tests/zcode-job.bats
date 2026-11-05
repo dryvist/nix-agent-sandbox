@@ -403,7 +403,17 @@ marker_error='UNTRUSTED_OK=public is required: jobs run untrusted agents and may
   export STUB_CURL_EXIT=22
   run client start dryvist/example Review
   [ "$status" -eq 64 ]
-  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  jq -e '.error == "repository is not verifiably public: dryvist/example (http unknown, rate-limit remaining unknown)"' <<<"$output"
+  no_ssh
+}
+
+@test "a failed GitHub lookup reports the HTTP status and rate-limit remaining" {
+  printf '%s\n' "#!$BASH" 'set -euo pipefail' 'prev=""' 'for arg in "$@"; do' \
+    '  if [ "$prev" = -D ]; then printf "HTTP/2 403\r\nx-ratelimit-remaining: 0\r\n" >"$arg"; fi' \
+    '  prev=$arg' 'done' 'exit 22' >"$BATS_TEST_TMPDIR/bin/curl"
+  run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error | contains("http 403") and contains("rate-limit remaining 0")' <<<"$output"
   no_ssh
 }
 

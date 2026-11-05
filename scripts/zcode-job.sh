@@ -66,10 +66,21 @@ untrusted_gate() {
 # Unauthenticated lookup, so a token in the environment can never widen the
 # answer: anything but a verifiably public repository fails closed.
 require_public_repo() {
-  local body
-  body=$(curl -q -fsS --max-time 10 \
-    "https://api.github.com/repos/$1" 2>/dev/null) ||
-    fail "repository is not verifiably public: $1"
+  local body headers line status=unknown remaining=unknown
+  headers=$(mktemp) || fail "repository is not verifiably public: $1"
+  body=$(curl -q -fsS --max-time 10 -D "$headers" \
+    "https://api.github.com/repos/$1" 2>/dev/null) || {
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%$'\r'}
+      case ${line,,} in
+        http/*) read -r _ status _ <<<"$line" ;;
+        x-ratelimit-remaining:*) remaining=${line#*:}; remaining=${remaining# } ;;
+      esac
+    done <"$headers"
+    rm -f "$headers"
+    fail "repository is not verifiably public: $1 (http $status, rate-limit remaining $remaining)"
+  }
+  rm -f "$headers"
   jq -es --arg repo "$1" 'length == 1 and (.[0] | .private == false and .visibility == "public" and
     ((.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))' <<<"$body" >/dev/null 2>&1 ||
     fail "repository is not verifiably public: $1"
