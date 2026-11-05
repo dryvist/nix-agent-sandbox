@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.1...v1.13.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **agent-cli:** retire local --repo mode and stop forwarding GitHub tokens ([#189](https://github.com/dryvist/nix-agent-sandbox/issues/189)) ([6fab8ba](https://github.com/dryvist/nix-agent-sandbox/commit/6fab8ba03a304e92c99ac2be27410801d4fce10e))
+
 ## [1.13.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.0...v1.13.1) (2026-11-05)
 
 
