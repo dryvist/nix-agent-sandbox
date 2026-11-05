@@ -8,6 +8,9 @@ setup() {
   export STUB_LOG="${BATS_TEST_TMPDIR}/docker.log"
   docker() { printf '%s\n' "$*" >>"$STUB_LOG"; }
   export -f docker
+  export CONTAINER_LOG="${BATS_TEST_TMPDIR}/container.log"
+  container() { printf '%s\n' "$*" >>"$CONTAINER_LOG"; }
+  export -f container
   # Exercise the launcher's actual mount builder without starting a container.
   # shellcheck disable=SC1090
   source <(sed -n '/^spool_mount_flags() {/,/^}/p' "$AGENT_CLI_SOURCE")
@@ -26,6 +29,7 @@ setup() {
   [ "$status" -eq 64 ]
   [[ "$output" == *"local sweep runs are retired; start the jobs through the dispatcher: zcode-job start <owner/repo> <prompt>"* ]]
   [ ! -e "$STUB_LOG" ]
+  [ ! -e "$CONTAINER_LOG" ]
 }
 
 @test "run --repo is retired: exits before any container and names the dispatcher" {
@@ -33,6 +37,7 @@ setup() {
   [ "$status" -eq 64 ]
   [[ "$output" == *"local --repo runs are retired; start the job through the dispatcher: zcode-job start <owner/repo> <prompt>"* ]]
   [ ! -e "$STUB_LOG" ]
+  [ ! -e "$CONTAINER_LOG" ]
 }
 
 @test "run without --repo passes no GitHub token into the container" {
@@ -40,7 +45,8 @@ setup() {
   export GH_TOKEN=sentinel-gh GITHUB_TOKEN=sentinel-github ANTHROPIC_API_KEY=sentinel-anthropic
   run bash "$AGENT_CLI_SOURCE" run --no-oauth "hello"
   [ "$status" -eq 0 ]
-  run ! grep -Eq 'GH_TOKEN=|GITHUB_TOKEN=' "$STUB_LOG"
+  run grep -Eq 'GH_TOKEN=|GITHUB_TOKEN=' "$STUB_LOG"
+  [ "$status" -eq 1 ]
   grep -Fq 'ANTHROPIC_API_KEY=sentinel-anthropic' "$STUB_LOG"
 }
 
