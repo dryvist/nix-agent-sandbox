@@ -75,8 +75,7 @@
         # Task profiles (required environment variables per profile); baked
         # into the image and the CLI, exported for docs and consumers.
         taskProfiles = import ./nix/task-profiles.nix;
-        # Repo groups: named fan-out sets for `agent sweep`. Baked into the
-        # CLI as JSON (agent-cli.nix), exported for docs and consumers.
+        # Repo groups: named sets of repos, exported for docs and consumers.
         repoGroups = import ./nix/repo-groups.nix;
       };
 

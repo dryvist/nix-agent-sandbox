@@ -1,19 +1,12 @@
-# Repo groups: named fan-out sets for `agent sweep --group <name>`.
-#
-# One repo per container run stays the law — a group is purely launcher-side
-# fan-out (agent-cli.sh `sweep`), never a single multi-repo run. Each member
-# is cloned, branched, and PR'd in its own disposable container with its own
-# repo-scoped GitHub write token, exactly like `agent run --repo`.
-#
-# Baked into the `agent` CLI as JSON by agent-cli.nix (single source of
-# truth) and exported as `lib.repoGroups` for docs and downstream consumers.
+# Repo groups: named sets of repos, exported as `lib.repoGroups` for docs and
+# downstream consumers. No CLI command reads this table.
 #
 # Shape per group:
 #   profile  task profile (see task-profiles.nix) every run in the group uses.
 #   repos    list of { name, branch }: the repo (owner dryvist) and the base
 #            branch the container clones/PRs against. `branch` is each repo's
 #            live GitHub default branch — the branch `gh repo clone` checks
-#            out — recorded here for the sweep summary and to document intent.
+#            out — recorded here to document intent.
 #
 # Repo lists derive from ${GIT_HOME}/REPOS.md; branches verified live at
 # authoring time.

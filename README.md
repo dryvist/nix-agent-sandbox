@@ -13,14 +13,14 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 | Output | What it is |
 | --- | --- |
 | `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, Vikunja/Zammad MCP servers, git/gh/nix, and nix-ai rendered configs. |
-| `packages.*.agent-cli` | `agent run\|sweep\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
+| `packages.*.agent-cli` | `agent run\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
 | `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
 | `packages.*.ci-resolver` | `ci-resolver`: reconcile failed workflow runs into check runs, dispatcher jobs, and review requests. |
 | `packages.*.zcode-job` | SSH client for the dispatcher's batch tools (`zcode` by default) with JSON output and an approved repository subset. |
 | `homeManagerModules.zcode-job` | Optional client package and configuration for a restricted SSH alias and native Web/Server URL. |
 | `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
 | `lib.taskProfiles` | Task profiles: the environment variables each `--profile` requires. |
-| `lib.repoGroups` | Named repo groups for `agent sweep` fan-out (baked into the CLI as JSON). |
+| `lib.repoGroups` | Named repo groups. |
 | `.github/workflows/build-image.yml` | Builds both architectures and publishes the multi-arch manifest to GHCR. |
 
 ## Installation
@@ -91,15 +91,6 @@ zcode-job start dryvist/some-repo "fix the flaky test in ci.yml"
 # Qwen Code against an OpenAI-compatible endpoint; values come from the caller
 AGENT_ROUTER_BASE_URL="$MODEL_ENDPOINT" AGENT_ROUTER_KEY="$MODEL_ROUTER_KEY" \
 AGENT_MODEL="$MODEL_ID" agent run --tool qwen --profile qwen "fix the failing test"
-
-# Fan the same task across every repo in a named group (lib.repoGroups),
-# one disposable container per repo — each with its own repo-scoped token,
-# just like `agent run --repo`. At most --concurrency run at once (default
-# 8); an end-of-run table lists each repo, base branch, and PR URL or exit
-# code. The group's profile is the default unless --profile overrides it.
-AGENT_GH_TOKEN_CMD=./mint-repo-token \
-  agent sweep --group nix --host docker-host.example.internal \
-  "bump the flake.lock and open a PR"
 
 # Debug shell inside the image (add --host to debug on the Docker host)
 agent shell

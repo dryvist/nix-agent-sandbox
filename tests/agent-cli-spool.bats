@@ -21,16 +21,11 @@ setup() {
   grep -Fq "/spool/run-123/zcode" "$STUB_LOG"
 }
 
-@test "agent sweep defaults to eight concurrent runs" {
-  local default
-  default="$(sed -n '/^  sweep)/,/^  shell)/s/^    concurrency=//p' "$AGENT_CLI_SOURCE" | head -n 1)"
-  [ "$default" = "8" ]
-}
-
-@test "agent CLI help documents eight as the sweep default" {
-  run bash "$AGENT_CLI_SOURCE" invalid
+@test "sweep is retired: exits before any container and names the dispatcher" {
+  run bash "$AGENT_CLI_SOURCE" sweep --group nix "hello"
   [ "$status" -eq 64 ]
-  [[ "$output" == *"(default 8) execute at once"* ]]
+  [[ "$output" == *"local sweep runs are retired; start the jobs through the dispatcher: zcode-job start <owner/repo> <prompt>"* ]]
+  [ ! -e "$STUB_LOG" ]
 }
 
 @test "run --repo is retired: exits before any container and names the dispatcher" {
