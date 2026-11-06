@@ -284,6 +284,11 @@ entries into that checkout's `automation/ci-workbook/`; it changes files only.
 | --- | --- |
 | `CI_RESOLVER_APP_ID` | GitHub App ID for the check runs used by the resolver; required for automatic merges |
 
+`CI_RESOLVER_MODEL_TIERS` sets the ordered, comma-separated model tiers.
+The default, `t2,t3`, tries `opencode-local` first and `opencode-zai` only after
+`t2` fails for the same signature. Set `t2` for local fixes only. Other orders
+are rejected. Private repositories use `t2` only.
+
 ## Safety model
 
 - **Filesystem/process**: disposable container, non-root, `--rm`. On the

@@ -321,6 +321,9 @@ class Resolver:
         self.halt_file = self.state / "halted"
         self.entries = load_workbook(self.env.get("CI_RESOLVER_WORKBOOK_DIR", ""))
         self.shadow = self.env.get("CI_RESOLVER_SHADOW", "0") == "1"
+        self.model_tiers = [tier.strip() for tier in self.env.get("CI_RESOLVER_MODEL_TIERS", "t2,t3").split(",")]
+        if self.model_tiers not in (["t2"], ["t2", "t3"]):
+            raise ValueError("CI_RESOLVER_MODEL_TIERS must be t2 or t2,t3")
         self.repo_cache = {}
         self.pr_cache = {}
 
@@ -573,22 +576,27 @@ class Resolver:
         model_attempts = sum(1 for message in fixes if trailer(message, "CI-Resolver-Tier") in ("t2", "t3"))
         return {"fixes": fixes, "last_tier": tier, "last_sig": sig, "model_attempts": model_attempts}
 
+    def tier_order(self, repo_data):
+        return ["t1"] + [tier for tier in self.model_tiers if tier != "t3" or not repo_data.get("private")]
+
+    def next_tier(self, repo_data, previous):
+        order = self.tier_order(repo_data)
+        if previous not in order or previous == order[-1]:
+            return "escalate"
+        return order[order.index(previous) + 1]
+
     def decide_tier(self, classification, repo, branch, forced_tier=None):
         repo_data = self.repo(repo)
         history = self.attempt_history(repo, branch, repo_data["default_branch"])
         entry = classification.get("entry") or {}
         if entry.get("class") == "deterministic":
             tier = "t1"
-        elif entry.get("class") == "recipe" or repo_data.get("private"):
-            tier = "t2"
         else:
-            tier = "t3"
+            tier = self.tier_order(repo_data)[1]
         if classification["signature"] == history["last_sig"]:
-            order = ["t1", "t2"] if repo_data.get("private") else ["t1", "t2", "t3"]
-            previous = history["last_tier"] if history["last_tier"] in order else tier
-            tier = order[min(order.index(previous) + 1, len(order) - 1)] if previous != order[-1] else "escalate"
+            tier = self.next_tier(repo_data, history["last_tier"])
         if forced_tier:
-            tier = forced_tier
+            tier = forced_tier if forced_tier in self.tier_order(repo_data) else "escalate"
         max_attempts = int(self.env.get("CI_RESOLVER_MAX_ATTEMPTS", "3"))
         if history["model_attempts"] >= max_attempts:
             tier = "escalate"
@@ -726,9 +734,7 @@ class Resolver:
             if meta.get("tier") not in ("t1", "t2", "t3"):
                 self.complete_neutral(group, check, reason, meta)
                 return
-            next_tier = {"t1": "t2", "t2": "t3", "t3": "escalate"}[meta["tier"]]
-            if self.repo(group["repo"]).get("private") and next_tier == "t3":
-                next_tier = "escalate"
+            next_tier = self.next_tier(self.repo(group["repo"]), meta["tier"])
             self.complete_neutral(group, check, "attempt produced no usable fix: %s" % reason, meta)
             if next_tier == "escalate":
                 classification = {"class": meta.get("classification", "novel"), "signature": meta.get("signature"), "signature_text": meta.get("signature_text"), "entry_id": meta.get("entry_id")}
