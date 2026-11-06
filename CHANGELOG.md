@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.2...v1.13.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ci-resolver:** try local model tier before cloud ([#193](https://github.com/dryvist/nix-agent-sandbox/issues/193)) ([f700aca](https://github.com/dryvist/nix-agent-sandbox/commit/f700aca4919724dd70b51000df8e1321cedcf5cc))
+
 ## [1.13.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.1...v1.13.2) (2026-11-05)
 
 
