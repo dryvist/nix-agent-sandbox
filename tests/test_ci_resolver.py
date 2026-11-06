@@ -299,6 +299,56 @@ class ResolverTests(unittest.TestCase):
                 result = resolver_module.classify_data(run, jobs, annotations, entries, REPO, orphaned)
                 self.assertEqual(result["class"], expected)
 
+    def test_unmatched_public_failure_dispatches_local_first(self):
+        self.resolver.process_group(self.group())
+        self.assertEqual(self.dispatched[0][0:2], ["fix", "opencode-local"])
+
+    def test_repeated_signature_advances_from_local_to_cloud(self):
+        result = resolver_module.classify_data({"conclusion": "failure"}, [self.failed_job()], [], [], REPO)
+        self.gh.compare_commits[REPO] = [{"commit": {"message": "fix\n\nCI-Resolver-Attempt: 1\nCI-Resolver-Tier: t2\nCI-Resolver-Signature: %s" % result["signature"]}}]
+        self.resolver.process_group(self.group())
+        self.assertEqual(self.dispatched[0][0:2], ["fix", "opencode-zai"])
+        result["signature"] = "different"
+        self.assertEqual(self.resolver.decide_tier(result, REPO, "main")[0], "t2")
+
+    def test_local_only_escalates_repeated_signature_and_forced_cloud(self):
+        self.env["CI_RESOLVER_MODEL_TIERS"] = "t2"
+        self.resolver = resolver_module.Resolver(self.gh, env=self.env, dispatcher=self.dispatcher, now=lambda: NOW)
+        result = resolver_module.classify_data({"conclusion": "failure"}, [self.failed_job()], [], [], REPO)
+        self.assertEqual(self.resolver.decide_tier(result, REPO, "main")[0], "t2")
+        self.gh.compare_commits[REPO] = [{"commit": {"message": "fix\n\nCI-Resolver-Attempt: 1\nCI-Resolver-Tier: t2\nCI-Resolver-Signature: %s" % result["signature"]}}]
+        self.assertEqual(self.resolver.decide_tier(result, REPO, "main")[0], "escalate")
+        self.assertEqual(self.resolver.decide_tier(result, REPO, "main", "t3")[0], "escalate")
+        self.resolver.process_group(self.group())
+        self.assertFalse(self.dispatched)
+
+    def test_failed_local_job_retries_cloud_only_when_enabled(self):
+        for tiers, expected in [("t2,t3", "opencode-zai"), ("t2", None)]:
+            with self.subTest(tiers=tiers):
+                self.gh = FakeGitHub()
+                self.dispatched = []
+                self.env["CI_RESOLVER_MODEL_TIERS"] = tiers
+                self.resolver = resolver_module.Resolver(self.gh, env=self.env, dispatcher=self.dispatcher, now=lambda: NOW)
+                group = self.group()
+                self.resolver.process_group(group)
+                self.assertEqual(self.dispatched[0][1], "opencode-local")
+                self.status_reply = (0, {"state": "failed", "reason": "no diff"})
+                self.resolver.process_group(group)
+                self.resolver.process_group(group)
+                fixes = [args[1] for args in self.dispatched if args[0] == "fix"]
+                self.assertEqual(fixes, ["opencode-local", expected] if expected else ["opencode-local"])
+                if not expected:
+                    self.assertEqual(self.gh.checks[(REPO, SHA)][-1]["conclusion"], "action_required")
+
+    def test_model_tier_setting_parses_whitespace_and_rejects_invalid_orders(self):
+        self.env["CI_RESOLVER_MODEL_TIERS"] = " t2 , t3 "
+        self.assertEqual(resolver_module.Resolver(self.gh, env=self.env).model_tiers, ["t2", "t3"])
+        for value in ("", "t3", "t3,t2", "t2,t2", "t2,t4", "t2,"):
+            with self.subTest(value=value):
+                self.env["CI_RESOLVER_MODEL_TIERS"] = value
+                with self.assertRaisesRegex(ValueError, "CI_RESOLVER_MODEL_TIERS"):
+                    resolver_module.Resolver(self.gh, env=self.env)
+
     def test_tier_repeats_private_cap_and_human_commit_reset(self):
         result = resolver_module.classify_data({"conclusion": "failure"}, [self.failed_job()], [], [entry("deterministic", "compiler failure", fix={"command": "make"})], REPO)
         self.gh.compare_commits[REPO] = [{"commit": {"message": "first\n\nCI-Resolver-Attempt: 1\nCI-Resolver-Tier: t1\nCI-Resolver-Signature: %s" % result["signature"]}}]
@@ -702,7 +752,7 @@ class ResolverTests(unittest.TestCase):
         out = Path(self.tmp.name) / "prompts"
         (out / "automation" / "ci-workbook").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(out)], check=True)
-        subprocess.run(["git", "-C", str(out), "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        subprocess.run(["git", "-C", str(out), "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "test(ci-resolver): initialize fixture"], check=True)
         base = subprocess.run(["git", "-C", str(out), "rev-parse", "HEAD"], text=True, capture_output=True, check=True).stdout.strip()
         self.gh.prs[REPO] = [{"number": 3, "head": {"ref": "ci-resolver/workbook-202601010000", "repo": {"full_name": REPO}}}]
         self.assertEqual(self.resolver.learn(str(out), REPO), [])
