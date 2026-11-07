@@ -21,9 +21,11 @@ fi
 pid=$!
 printf '%s\n' "$pid" >"$STUB_DIR/waiter.pid"
 if [ -n "${STUB_KEEP_WAITER:-}" ]; then exit 0; fi
+# calls.log is shared across fix subcases; use this dispatcher's job marker.
+notify_marker="$STUB_DIR/ntfy.${3:-}"
 
 for ((i = 0; i < 500; i++)); do
-  if grep -q 'curl POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log"; then
+  if [ -e "$notify_marker" ]; then
     for ((j = 0; j < 50; j++)); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.01
