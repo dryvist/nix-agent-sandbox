@@ -24,7 +24,8 @@ if [ -n "${STUB_KEEP_WAITER:-}" ]; then exit 0; fi
 # calls.log is shared across fix subcases; use this dispatcher's job marker.
 notify_marker="$STUB_DIR/ntfy.${3:-}"
 
-for ((i = 0; i < 500; i++)); do
+# Allow up to 60 s: the CI build can compile hundreds of derivations alongside this suite.
+for ((i = 0; i < 6000; i++)); do
   if [ -e "$notify_marker" ]; then
     for ((j = 0; j < 50; j++)); do
       kill -0 "$pid" 2>/dev/null || break
@@ -40,6 +41,7 @@ for ((i = 0; i < 500; i++)); do
   fi
   sleep 0.01
 done
+echo "setsid stub: no notification for ${3:-unknown job} within 60 s" >&2
 kill "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
 exit 1
