@@ -48,7 +48,7 @@ setup() {
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
   export AGENT_REPO_DENYLIST=blocked-owner
-  # Most cases use the ntfy request as the setsid stub's completion signal.
+  # Most cases use a per-job ntfy marker as the setsid stub's completion signal.
   export AGENT_DISPATCH_NTFY_JOBS=1
 }
 

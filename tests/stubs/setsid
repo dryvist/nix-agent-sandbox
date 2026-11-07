@@ -17,13 +17,18 @@ if [ -n "${STUB_NO_WAITER:-}" ]; then
   fi
   exit 0
 fi
+# calls.log is shared across fix subcases; use this dispatcher's job marker.
+# A continuation reuses the job ID, so clear the previous run's marker first.
+notify_marker="$STUB_DIR/ntfy.${3:-}"
+rm -f "$notify_marker"
 "$@" <&0 &
 pid=$!
 printf '%s\n' "$pid" >"$STUB_DIR/waiter.pid"
 if [ -n "${STUB_KEEP_WAITER:-}" ]; then exit 0; fi
 
-for ((i = 0; i < 500; i++)); do
-  if grep -q 'curl POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log"; then
+# Allow up to 60 s: the CI build can compile hundreds of derivations alongside this suite.
+for ((i = 0; i < 6000; i++)); do
+  if [ -e "$notify_marker" ]; then
     for ((j = 0; j < 50; j++)); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.01
@@ -38,6 +43,7 @@ for ((i = 0; i < 500; i++)); do
   fi
   sleep 0.01
 done
+echo "setsid stub: no notification for ${3:-unknown job} within 60 s" >&2
 kill "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
 exit 1
