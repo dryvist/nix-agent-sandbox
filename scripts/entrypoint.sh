@@ -696,7 +696,7 @@ signed_push() {
   fi
   query="mutation(\$input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: \$input) { commit { oid } } }"
   jq -s --arg q "${query}" --arg repo "${AGENT_REPO}" --arg br "${branch}" --arg oid "${remote_head}" \
-    --arg h "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
+    --arg h "${commit_subject}" \
     --arg b "$(git log --reverse --format='- %s' "${base}..HEAD")" \
     '{query: $q, variables: {input: {
       branch: {repositoryNameWithOwner: $repo, branchName: $br},
