@@ -1943,10 +1943,13 @@ SH
 - Tool: zcode; run id: j-contract"
   [ "$(cat "$STUB_DIR/pr-body.md")" = "$expected_body" ]
   [ "$(pr_create_arg_after --body-file)" != "" ]
-  jq -e --arg title "feat(agent): zcode run j-contract" '
-    .variables.input.message.headline == $title and
-    ([.variables.input.fileChanges.additions[].path] + [.variables.input.fileChanges.deletions[].path]) as $paths |
-    ($paths | index(".agent-pr-title") == null and index(".agent-pr-body.md") == null)
+  jq -e --arg title "$title" '
+    (
+      ([.variables.input.fileChanges.additions[].path] + [.variables.input.fileChanges.deletions[].path]) as $paths |
+      (.variables.input.message.headline == $title and
+        ($paths | index(".agent-pr-title")) == null and
+        ($paths | index(".agent-pr-body.md")) == null)
+    )
   ' "$STUB_DIR/graphql.json"
   [ -z "$(git -C "$home/work/repo" ls-tree -r --name-only HEAD | grep -E '^\.(agent-pr-title|agent-pr-body\.md)$' || true)" ]
   commit_body="$(git -C "$home/work/repo" log -1 --format=%B)"

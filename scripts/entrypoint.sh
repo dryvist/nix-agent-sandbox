@@ -777,8 +777,8 @@ Agent-authored change.
 Prompt:
 
 \`\`\`
-${AGENT_PROMPT:-}
-\`\`\`
+${AGENT_PROMPT:+${AGENT_PROMPT}
+}\`\`\`
 EOF
 fi
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
