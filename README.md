@@ -78,7 +78,7 @@ exit 1 indicates an invalid response or unavailable result; transport failures
 preserve the SSH or timeout exit code. Errors are JSON objects with `error`.
 
 The shared `ai-delegation` plugin's `delegate-to-ai` skill owns content
-eligibility and trusted verification of the returned draft PR.
+eligibility and trusted verification of the returned ready PR.
 
 ## Usage
 
@@ -150,7 +150,7 @@ agent-dispatch check
   checks both with the job's token. It refuses any other repository and
   revokes that token. Classic branch protection is not readable with the job
   token and does not count.
-- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
+- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a ready
   PR with no label. Every branch requires signed commits, so the run's tree reaches
   GitHub as one commit created through the API (`createCommitOnBranch`), which
   GitHub signs. That carries file contents only: a change to a file mode or a
@@ -265,6 +265,19 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | `~/.agent-env` | Start job: GitHub token, profile values, and optional router values. Fix job: profile values and optional router values. |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
+
+Jobs can return optional PR metadata at the repository root:
+
+- `~/work/repo/.agent-pr-title` accepts a one-line Conventional Commit subject
+  up to 100 characters. A valid value becomes the entrypoint commit subject
+  and PR title; otherwise the defaults are used.
+- `~/work/repo/.agent-pr-body.md` supplies the PR body verbatim. The body and
+  appended tool/run line must fit within 64 KiB; a missing, empty, or oversized
+  file uses the default template.
+
+The entrypoint reads both files after the tool exits and removes them before
+staging changes. It appends one line naming the tool and run id to a supplied
+body.
 
 ## CI resolver workbook
 

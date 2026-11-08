@@ -1703,7 +1703,11 @@ case "$1 $2" in
   "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
   "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
   "pr create")
-    printf '%s\n' "$*" >"$STUB_DIR/pr-create.argv"
+    printf '%s\n' "$@" >"$STUB_DIR/pr-create.argv"
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --body-file ]; then cp "$2" "$STUB_DIR/pr-body.md"; fi
+      shift
+    done
     [ -z "${STUB_PR_CREATE_FAIL:-}" ] || exit 1
     echo https://github.com/dryvist/nix-ai/pull/7
     ;;
@@ -1763,6 +1767,29 @@ run_publish() {
     STUB_PR_VIEW_FAIL="${STUB_PR_VIEW_FAIL:-}" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" "$@" \
     bash -euo pipefail "$ENTRYPOINT"
+}
+
+pr_create_arg_after() {
+  awk -v wanted="$1" '$0 == wanted { if (getline) print; exit }' "$STUB_DIR/pr-create.argv"
+}
+
+assert_invalid_title_falls_back() {
+  local id=$1 candidate=$2 fallback_subject fallback_title
+  fallback_subject="feat(agent): zcode run ${id}"
+  fallback_title="feat(agent): autonomous zcode run ${id}"
+  publish_fixture "invalid-title-${id}" 0
+  bash_stub "$tools/zcode" <<'SH'
+printf '%s' "$TITLE_CANDIDATE" >.agent-pr-title
+echo change >tool-file
+SH
+  run_publish "$id" TITLE_CANDIDATE="$candidate"
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$home/work/repo" log -1 --format=%s)" = "$fallback_subject" ]
+  [ "$(pr_create_arg_after --title)" = "$fallback_title" ]
+  jq -e --arg title "$fallback_subject" '.variables.input.message.headline == $title' \
+    "$STUB_DIR/graphql.json"
+  [ ! -e "$home/work/repo/.agent-pr-title" ]
+  [ ! -e "$home/work/repo/.agent-pr-body.md" ]
 }
 
 @test "fix entrypoint emits the staged full diff, tool commit summary and review patch" {
@@ -1853,7 +1880,7 @@ SH
   [ ! -e "$home/work/.agent-fix" ]
 }
 
-@test "the run's commits publish as one API-created commit and a draft PR with no label, never a push" {
+@test "the run's commits publish as one API-created commit and a ready PR with no label, never a push" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin head
   publish_fixture signed 0
@@ -1865,8 +1892,22 @@ git commit -q -m "tool commit"
 SH
   run_publish j-1
   [ "$status" -eq 0 ]
-  grep -Fq 'pr create --draft --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
-  grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-create.argv"
+  grep -Fxq 'pr' "$STUB_DIR/pr-create.argv"
+  grep -Fxq 'create' "$STUB_DIR/pr-create.argv"
+  grep -Fxq 'agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  run ! grep -Fxq -- '--draft' "$STUB_DIR/pr-create.argv"
+  [ "$(cat "$STUB_DIR/pr-body.md")" = "Autonomous run by nix-agent-sandbox.
+
+Agent-authored change.
+
+- Tool: zcode
+- Run id: j-1
+- Exit status: 0
+
+Prompt:
+
+\`\`\`
+\`\`\`" ]
   run ! grep -Fq 'human:review' "$STUB_DIR/pr-create.argv"
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
@@ -1880,6 +1921,97 @@ SH
     .message.body == "- tool commit"' "$STUB_DIR/graphql.json"
   run ! git -C "$origin" rev-parse --verify -q refs/heads/agent/zcode/j-1
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "job PR title and body become the commit subject and ready PR arguments literally" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin title body expected_body commit_body
+  publish_fixture job-pr-contract 0
+  title='feat(test): literal $(touch "$STUB_DIR/title-executed") `touch "$STUB_DIR/backtick-executed"`'
+  body='Job-authored body with $(touch "$STUB_DIR/body-executed") and `touch "$STUB_DIR/body-backtick-executed"`.'
+  bash_stub "$tools/zcode" <<'SH'
+printf '%s\n' "$TITLE_CANDIDATE" >.agent-pr-title
+printf '%s' "$BODY_CANDIDATE" >.agent-pr-body.md
+echo change >tool-file
+SH
+  run_publish j-contract TITLE_CANDIDATE="$title" BODY_CANDIDATE="$body" AGENT_PROMPT='custom job prompt'
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$home/work/repo" log -1 --format=%s)" = "$title" ]
+  [ "$(pr_create_arg_after --title)" = "$title" ]
+  run ! grep -Fxq -- '--draft' "$STUB_DIR/pr-create.argv"
+  expected_body="${body}
+- Tool: zcode; run id: j-contract"
+  [ "$(cat "$STUB_DIR/pr-body.md")" = "$expected_body" ]
+  [ "$(pr_create_arg_after --body-file)" != "" ]
+  jq -e --arg title "feat(agent): zcode run j-contract" '
+    .variables.input.message.headline == $title and
+    ([.variables.input.fileChanges.additions[].path] + [.variables.input.fileChanges.deletions[].path]) as $paths |
+    ($paths | index(".agent-pr-title") == null and index(".agent-pr-body.md") == null)
+  ' "$STUB_DIR/graphql.json"
+  [ -z "$(git -C "$home/work/repo" ls-tree -r --name-only HEAD | grep -E '^\.(agent-pr-title|agent-pr-body\.md)$' || true)" ]
+  commit_body="$(git -C "$home/work/repo" log -1 --format=%B)"
+  [[ "$commit_body" == *"Prompt: custom job prompt"* ]]
+  [[ "$commit_body" == *"Assisted-by: zcode (nix-agent-sandbox)"* ]]
+  [ ! -e "$home/work/repo/.agent-pr-title" ]
+  [ ! -e "$home/work/repo/.agent-pr-body.md" ]
+  [ ! -e "$STUB_DIR/title-executed" ]
+  [ ! -e "$STUB_DIR/backtick-executed" ]
+  [ ! -e "$STUB_DIR/body-executed" ]
+  [ ! -e "$STUB_DIR/body-backtick-executed" ]
+}
+
+@test "a title without a type falls back" {
+  assert_invalid_title_falls_back no-type 'release: missing type'
+}
+
+@test "a title longer than 100 characters falls back" {
+  local too_long="feat: $(printf '%095d' 0)"
+  assert_invalid_title_falls_back too-long "$too_long"
+}
+
+@test "a breaking marker in a title falls back" {
+  assert_invalid_title_falls_back breaking 'feat!: breaking marker'
+}
+
+@test "a multi-line title falls back" {
+  assert_invalid_title_falls_back multi-line $'feat: first line\nfix: second line'
+}
+
+@test "missing title and body use the default commit, PR title and template body" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin fallback_subject fallback_title commit_body expected_body
+  publish_fixture missing-pr-files 0
+  fallback_subject='feat(agent): zcode run j-defaults'
+  fallback_title='feat(agent): autonomous zcode run j-defaults'
+  expected_body=$'Autonomous run by nix-agent-sandbox.\n\nAgent-authored change.\n\n- Tool: zcode\n- Run id: j-defaults\n- Exit status: 0\n\nPrompt:\n\n```\nfallback prompt\n```'
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+SH
+  run_publish j-defaults AGENT_PROMPT='fallback prompt'
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$home/work/repo" log -1 --format=%s)" = "$fallback_subject" ]
+  [ "$(pr_create_arg_after --title)" = "$fallback_title" ]
+  [ "$(cat "$STUB_DIR/pr-body.md")" = "$expected_body" ]
+  commit_body="$(git -C "$home/work/repo" log -1 --format=%B)"
+  [[ "$commit_body" == *"Prompt: fallback prompt"* ]]
+  [[ "$commit_body" == *"Assisted-by: zcode (nix-agent-sandbox)"* ]]
+  [ ! -e "$home/work/repo/.agent-pr-title" ]
+  [ ! -e "$home/work/repo/.agent-pr-body.md" ]
+}
+
+@test "an empty PR body falls back to the template" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture empty-pr-body 0
+  bash_stub "$tools/zcode" <<'SH'
+: >.agent-pr-body.md
+echo change >tool-file
+SH
+  run_publish j-empty-body
+  [ "$status" -eq 0 ]
+  grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-body.md"
+  grep -Fq -- '- Tool: zcode' "$STUB_DIR/pr-body.md"
+  [ ! -e "$home/work/repo/.agent-pr-body.md" ]
 }
 
 @test "the entrypoint fetches origin and creates an untracked run branch from origin/HEAD" {
@@ -1907,7 +2039,7 @@ SH
   [ -z "$(git -C "$home/work/repo" for-each-ref --format='%(upstream:short)' "refs/heads/$branch")" ]
 }
 
-@test "the entrypoint fails when PR creation fails and the branch PR is not a draft" {
+@test "the entrypoint accepts an existing ready PR when creation fails" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin
   publish_fixture not-draft-create-fail 0
@@ -1918,12 +2050,25 @@ git add tool-file
 git commit -q -m "tool commit"
 SH
   run_publish j-1
-  [ "$status" -ne 0 ]
-  [[ $output == *"existing PR is not a draft"* ]]
-  grep -Fq 'pr create --draft --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+  run ! grep -Fxq -- '--draft' "$STUB_DIR/pr-create.argv"
   grep -Fq 'pr view agent/zcode/j-1 --json url,isDraft' "$STUB_DIR/gh.log"
-  [ ! -e "$home/work/.agent-pr-url" ]
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
+}
+
+@test "the entrypoint refuses an existing draft PR when creation fails" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture existing-draft 0
+  export STUB_PR_CREATE_FAIL=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+SH
+  run_publish j-draft
+  [ "$status" -ne 0 ]
+  [[ $output == *"existing PR is not ready"* ]]
+  [ ! -e "$home/work/.agent-pr-url" ]
 }
 
 @test "the entrypoint propagates a PR creation and lookup failure" {

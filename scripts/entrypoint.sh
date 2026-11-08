@@ -727,32 +727,46 @@ signed_push() {
 # tool left at that path is removed first.
 pr_file="${workdir}/.agent-pr-url"
 rm -rf "${pr_file}"
-if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
-  git add -A
-  git commit -m "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}
-
-${AGENT_PROMPT:+Prompt: ${AGENT_PROMPT}
-
-}Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
+pr_title_file="${PWD}/.agent-pr-title"
+pr_body_source="${PWD}/.agent-pr-body.md"
+commit_subject="feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}"
+pr_title="feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}"
+title_pattern='^(feat|fix|docs|chore|refactor|test|perf|ci|build|style|revert)(\([a-z0-9._/-]+\))?: .+'
+if [ -f "${pr_title_file}" ] && [ ! -L "${pr_title_file}" ]; then
+  title_size="$(wc -c <"${pr_title_file}")"
+  if [ "${title_size}" -le 401 ]; then
+    title_candidate=""
+    IFS= read -r title_candidate <"${pr_title_file}" || :
+    title_chars=101
+    if title_chars="$(jq -nr --arg title "${title_candidate}" '$title | length' 2>/dev/null)"; then
+      title_line_ok=0
+      if printf '%s\n' "${title_candidate}" | cmp -s - "${pr_title_file}" ||
+        printf '%s' "${title_candidate}" | cmp -s - "${pr_title_file}"; then
+        title_line_ok=1
+      fi
+      if [ "${title_line_ok}" -eq 1 ] && [[ "${title_candidate}" != *$'\r'* &&
+        ${title_chars} -le 100 && "${title_candidate}" =~ ${title_pattern} ]]; then
+        commit_subject="${title_candidate}"
+        pr_title="${title_candidate}"
+      fi
+    fi
+  fi
 fi
-# Commits the tool made itself are published too. Before publishing, gitleaks
-# scans every new commit (redacted output). Any finding, or a scanner error
-# or missing binary, aborts before anything reaches origin.
-if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
-  if ! gitleaks git --log-opts="${base}..HEAD" --redact --no-banner; then
-    echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
-    exit 65
+pr_body_file="$(mktemp)"
+pr_body_custom=0
+if [ -f "${pr_body_source}" ] && [ ! -L "${pr_body_source}" ] && [ -s "${pr_body_source}" ]; then
+  pr_body_size="$(wc -c <"${pr_body_source}")"
+  if [ "${pr_body_size}" -le 65536 ]; then
+    cp "${pr_body_source}" "${pr_body_file}"
+    printf '\n- Tool: %s; run id: %s\n' "${AGENT_TOOL}" "${AGENT_RUN_ID}" >>"${pr_body_file}"
+    pr_body_size="$(wc -c <"${pr_body_file}")"
+    [ "${pr_body_size}" -le 65536 ] && pr_body_custom=1
   fi
-  if ! signed_push; then
-    echo "agent-entrypoint: publishing ${branch} failed." >&2
-    exit 1
-  fi
-  # Shell results open ready; other tools open draft.
-  pr_draft=(--draft)
-  [ "${AGENT_TOOL}" != shell ] || pr_draft=()
-  if url="$(gh pr create "${pr_draft[@]}" --head "${branch}" \
-    --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
-    --body "Autonomous run by nix-agent-sandbox.
+fi
+rm -f "${pr_title_file}" "${pr_body_source}"
+if [ "${pr_body_custom}" -ne 1 ]; then
+  cat >"${pr_body_file}" <<EOF
+Autonomous run by nix-agent-sandbox.
 
 Agent-authored change.
 
@@ -764,20 +778,47 @@ Prompt:
 
 \`\`\`
 ${AGENT_PROMPT:-}
-\`\`\`")"; then
+\`\`\`
+EOF
+fi
+if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
+  git add -A
+  git commit -m "${commit_subject}
+
+${AGENT_PROMPT:+Prompt: ${AGENT_PROMPT}
+
+}Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
+fi
+# Commits the tool made itself are published too. Before publishing, gitleaks
+# scans every new commit (redacted output). Any finding, or a scanner error
+# or missing binary, aborts before anything reaches origin.
+if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
+  if ! gitleaks git --log-opts="${base}..HEAD" --redact --no-banner; then
+    echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
+    rm -f "${pr_body_file}"
+    exit 65
+  fi
+  if ! signed_push; then
+    echo "agent-entrypoint: publishing ${branch} failed." >&2
+    rm -f "${pr_body_file}"
+    exit 1
+  fi
+  if url="$(gh pr create --head "${branch}" \
+    --title "${pr_title}" --body-file "${pr_body_file}")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
   elif pr_info="$(gh pr view "${branch}" --json url,isDraft)"; then
-    # A continued run pushes to the branch of the PR it already opened. A non-shell PR must be a draft.
-    if [ "${AGENT_TOOL}" != shell ] && ! jq -e '.isDraft == true' <<<"${pr_info}" >/dev/null; then
-      echo "agent-entrypoint: existing PR is not a draft; refusing to report success." >&2
-      exit 1
-    fi
+    # A continued run pushes to the branch of the ready PR it already opened.
     url="$(jq -r '.url // empty' <<<"${pr_info}")"
-    if [ -n "${url}" ]; then
-      printf '%s\n' "${url}" | tee "${pr_file}"
-    else
+    if [ -z "${url}" ]; then
       echo "agent-entrypoint: PR lookup returned no URL; refusing to report success." >&2
       status=1
+    elif ! jq -e '.isDraft == false' <<<"${pr_info}" >/dev/null; then
+      echo "agent-entrypoint: existing PR is not ready; refusing to report success." >&2
+      rm -f "${pr_body_file}"
+      exit 1
+    fi
+    if [ -n "${url}" ]; then
+      printf '%s\n' "${url}" | tee "${pr_file}"
     fi
   else
     echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
@@ -785,4 +826,5 @@ ${AGENT_PROMPT:-}
   fi
 fi
 
+rm -f "${pr_body_file}"
 exit "${status}"
