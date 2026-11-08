@@ -156,7 +156,9 @@ agent-dispatch check
   GitHub signs. That carries file contents only: a change to a file mode or a
   symlink is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES`
   encoded (default 8 MiB) fails whole. The dispatcher records the PR URL only
-  when it points at the job's repo.
+  when it points at the job's repo. Before the run reports the PR, the
+  entrypoint marks a draft ready and disarms an armed auto-merge; a green run
+  cannot merge itself before the required review.
 - **`continue`** starts a new container on the same workspace and branch.
 - **`fix`** applies a change to the named branch at the expected 40-character
   commit. Its prompt starts with a

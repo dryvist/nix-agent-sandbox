@@ -28,7 +28,8 @@ setup() {
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
     STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO \
-    STUB_PR_CREATE_FAIL STUB_PR_NOT_DRAFT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL \
+    STUB_PR_CREATE_FAIL STUB_PR_DRAFT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL \
+    STUB_PR_AUTO_MERGE STUB_PR_READY_FAIL STUB_PR_MERGE_FAIL \
     STUB_PROPERTY_VALUE STUB_PROPERTY_MISSING \
     STUB_PROPERTY_HTTP_ERROR STUB_PROPERTY_INVALID_JSON STUB_ROUTER_CURL_FAIL \
     STUB_ROUTER_HTTP_STATUS STUB_ROUTER_MODELS STUB_ROUTER_RESPONSE
@@ -1709,12 +1710,19 @@ case "$1 $2" in
     ;;
   "pr view")
     [ -z "${STUB_PR_VIEW_FAIL:-}" ] || exit 1
-    if [ "${STUB_PR_NOT_DRAFT:-}" = 1 ]; then draft=false; else draft=true; fi
+    if [ "${STUB_PR_DRAFT:-}" = 1 ]; then draft=true; else draft=false; fi
+    if [ -n "${STUB_PR_AUTO_MERGE:-}" ]; then auto_merge='{"mergeMethod":"SQUASH"}'; else auto_merge=null; fi
     if [ -n "${STUB_PR_VIEW_EMPTY_URL:-}" ]; then
-      printf '{"url":"","isDraft":%s}\n' "$draft"
+      printf '{"url":"","isDraft":%s,"autoMergeRequest":%s}\n' "$draft" "$auto_merge"
     else
-      printf '{"url":"https://github.com/dryvist/nix-ai/pull/7","isDraft":%s}\n' "$draft"
+      printf '{"url":"https://github.com/dryvist/nix-ai/pull/7","isDraft":%s,"autoMergeRequest":%s}\n' "$draft" "$auto_merge"
     fi
+    ;;
+  "pr ready")
+    [ -z "${STUB_PR_READY_FAIL:-}" ] || exit 1
+    ;;
+  "pr merge")
+    [ -z "${STUB_PR_MERGE_FAIL:-}" ] || exit 1
     ;;
   *) exit 1 ;;
 esac
@@ -1759,8 +1767,10 @@ run_publish() {
   local id=$1
   shift
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
-    STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_NOT_DRAFT="${STUB_PR_NOT_DRAFT:-}" \
-    STUB_PR_VIEW_FAIL="${STUB_PR_VIEW_FAIL:-}" AGENT_SANDBOX=1 \
+    STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_DRAFT="${STUB_PR_DRAFT:-}" \
+    STUB_PR_VIEW_FAIL="${STUB_PR_VIEW_FAIL:-}" STUB_PR_AUTO_MERGE="${STUB_PR_AUTO_MERGE:-}" \
+    STUB_PR_READY_FAIL="${STUB_PR_READY_FAIL:-}" STUB_PR_MERGE_FAIL="${STUB_PR_MERGE_FAIL:-}" \
+    AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" "$@" \
     bash -euo pipefail "$ENTRYPOINT"
 }
@@ -1868,7 +1878,7 @@ SH
   grep -Fq 'pr create --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
   grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-create.argv"
   run ! grep -Fq 'human:review' "$STUB_DIR/pr-create.argv"
-  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
+  run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
   grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
@@ -1911,7 +1921,7 @@ SH
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin
   publish_fixture not-draft-create-fail 0
-  export STUB_PR_CREATE_FAIL=1 STUB_PR_NOT_DRAFT=1
+  export STUB_PR_CREATE_FAIL=1
   bash_stub "$tools/zcode" <<'SH'
 echo change >tool-file
 git add tool-file
@@ -1920,9 +1930,9 @@ SH
   run_publish j-1
   [ "$status" -eq 0 ]
   grep -Fq 'pr create --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
-  grep -Fq 'pr view agent/zcode/j-1 --json url' "$STUB_DIR/gh.log"
+  grep -Fq 'pr view agent/zcode/j-1 --json url,isDraft,autoMergeRequest' "$STUB_DIR/gh.log"
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
-  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
+  run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
 }
 
 @test "the entrypoint propagates a PR creation and lookup failure" {
@@ -1938,9 +1948,9 @@ SH
   run_publish j-1
   [ "$status" -ne 0 ]
   [[ $output == *"PR creation failed"* ]]
-  grep -Fq 'pr view agent/zcode/j-1 --json url' "$STUB_DIR/gh.log"
+  grep -Fq 'pr view agent/zcode/j-1 --json url,isDraft,autoMergeRequest' "$STUB_DIR/gh.log"
   [ ! -e "$home/work/.agent-pr-url" ]
-  run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
+  run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
 }
 
 @test "the entrypoint fails an empty successful PR lookup without interpolating the branch" {
@@ -1958,7 +1968,74 @@ SH
   [ "$status" -ne 0 ]
   diagnostic=$(grep -F 'agent-entrypoint: PR lookup returned no URL' <<<"$output")
   [ "$diagnostic" = "agent-entrypoint: PR lookup returned no URL; refusing to report success." ]
-  grep -Fq "pr view agent/zcode/$branch --json url" "$STUB_DIR/gh.log"
+  grep -Fq "pr view agent/zcode/$branch --json url,isDraft,autoMergeRequest" "$STUB_DIR/gh.log"
+  [ ! -e "$home/work/.agent-pr-url" ]
+}
+
+@test "the entrypoint marks a found draft PR ready and reports success" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture draft-found 0
+  export STUB_PR_CREATE_FAIL=1 STUB_PR_DRAFT=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr ready https://github.com/dryvist/nix-ai/pull/7' "$STUB_DIR/gh.log"
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "the entrypoint fails when a found draft PR cannot be marked ready" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture draft-stuck 0
+  export STUB_PR_CREATE_FAIL=1 STUB_PR_DRAFT=1 STUB_PR_READY_FAIL=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -ne 0 ]
+  [[ $output == *"still a draft"* ]]
+  grep -Fq 'pr ready https://github.com/dryvist/nix-ai/pull/7' "$STUB_DIR/gh.log"
+  run ! grep -Eq 'pr merge' "$STUB_DIR/gh.log"
+  [ ! -e "$home/work/.agent-pr-url" ]
+}
+
+@test "the entrypoint disarms armed auto-merge before reporting success" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture auto-merge-armed 0
+  export STUB_PR_AUTO_MERGE=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr merge https://github.com/dryvist/nix-ai/pull/7 --disable-auto' "$STUB_DIR/gh.log"
+  run ! grep -Eq 'pr merge [^ ]+ --(auto|squash|merge|rebase)' "$STUB_DIR/gh.log"
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "the entrypoint refuses success when auto-merge cannot be disarmed" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture auto-merge-stuck 0
+  export STUB_PR_AUTO_MERGE=1 STUB_PR_MERGE_FAIL=1
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-1
+  [ "$status" -ne 0 ]
+  [[ $output == *"auto-merge stays armed"* ]]
   [ ! -e "$home/work/.agent-pr-url" ]
 }
 
