@@ -747,10 +747,8 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     echo "agent-entrypoint: publishing ${branch} failed." >&2
     exit 1
   fi
-  # Shell results open ready; other tools open draft.
-  pr_draft=(--draft)
-  [ "${AGENT_TOOL}" != shell ] || pr_draft=()
-  if url="$(gh pr create "${pr_draft[@]}" --head "${branch}" \
+  # Agent PRs open ready with no label; an existing PR for the branch is success.
+  if url="$(gh pr create --head "${branch}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 
@@ -766,12 +764,8 @@ Prompt:
 ${AGENT_PROMPT:-}
 \`\`\`")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
-  elif pr_info="$(gh pr view "${branch}" --json url,isDraft)"; then
-    # A continued run pushes to the branch of the PR it already opened. A non-shell PR must be a draft.
-    if [ "${AGENT_TOOL}" != shell ] && ! jq -e '.isDraft == true' <<<"${pr_info}" >/dev/null; then
-      echo "agent-entrypoint: existing PR is not a draft; refusing to report success." >&2
-      exit 1
-    fi
+  elif pr_info="$(gh pr view "${branch}" --json url)"; then
+    # A continued run pushes to the branch of the PR it already opened.
     url="$(jq -r '.url // empty' <<<"${pr_info}")"
     if [ -n "${url}" ]; then
       printf '%s\n' "${url}" | tee "${pr_file}"

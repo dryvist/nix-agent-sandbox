@@ -1853,7 +1853,7 @@ SH
   [ ! -e "$home/work/.agent-fix" ]
 }
 
-@test "the run's commits publish as one API-created commit and a draft PR with no label, never a push" {
+@test "the run's commits publish as one API-created commit and a ready PR with no label, never a push" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin head
   publish_fixture signed 0
@@ -1865,7 +1865,7 @@ git commit -q -m "tool commit"
 SH
   run_publish j-1
   [ "$status" -eq 0 ]
-  grep -Fq 'pr create --draft --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  grep -Fq 'pr create --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
   grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-create.argv"
   run ! grep -Fq 'human:review' "$STUB_DIR/pr-create.argv"
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
@@ -1907,7 +1907,7 @@ SH
   [ -z "$(git -C "$home/work/repo" for-each-ref --format='%(upstream:short)' "refs/heads/$branch")" ]
 }
 
-@test "the entrypoint fails when PR creation fails and the branch PR is not a draft" {
+@test "the entrypoint reports success when PR creation fails and the branch PR is ready" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin
   publish_fixture not-draft-create-fail 0
@@ -1918,11 +1918,10 @@ git add tool-file
 git commit -q -m "tool commit"
 SH
   run_publish j-1
-  [ "$status" -ne 0 ]
-  [[ $output == *"existing PR is not a draft"* ]]
-  grep -Fq 'pr create --draft --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
-  grep -Fq 'pr view agent/zcode/j-1 --json url,isDraft' "$STUB_DIR/gh.log"
-  [ ! -e "$home/work/.agent-pr-url" ]
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr create --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
+  grep -Fq 'pr view agent/zcode/j-1 --json url' "$STUB_DIR/gh.log"
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
 }
 
@@ -1939,7 +1938,7 @@ SH
   run_publish j-1
   [ "$status" -ne 0 ]
   [[ $output == *"PR creation failed"* ]]
-  grep -Fq 'pr view agent/zcode/j-1 --json url,isDraft' "$STUB_DIR/gh.log"
+  grep -Fq 'pr view agent/zcode/j-1 --json url' "$STUB_DIR/gh.log"
   [ ! -e "$home/work/.agent-pr-url" ]
   run ! grep -Eq 'pr merge|--auto' "$STUB_DIR/gh.log"
 }
@@ -1959,7 +1958,7 @@ SH
   [ "$status" -ne 0 ]
   diagnostic=$(grep -F 'agent-entrypoint: PR lookup returned no URL' <<<"$output")
   [ "$diagnostic" = "agent-entrypoint: PR lookup returned no URL; refusing to report success." ]
-  grep -Fq "pr view agent/zcode/$branch --json url,isDraft" "$STUB_DIR/gh.log"
+  grep -Fq "pr view agent/zcode/$branch --json url" "$STUB_DIR/gh.log"
   [ ! -e "$home/work/.agent-pr-url" ]
 }
 

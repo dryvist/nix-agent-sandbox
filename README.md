@@ -150,7 +150,7 @@ agent-dispatch check
   checks both with the job's token. It refuses any other repository and
   revokes that token. Classic branch protection is not readable with the job
   token and does not count.
-- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a draft
+- **Output**: the container publishes `agent/<tool>/<job-id>` and opens a ready
   PR with no label. Every branch requires signed commits, so the run's tree reaches
   GitHub as one commit created through the API (`createCommitOnBranch`), which
   GitHub signs. That carries file contents only: a change to a file mode or a
