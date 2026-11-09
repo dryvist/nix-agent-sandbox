@@ -326,7 +326,8 @@ path "secret/data/apps/sandbox-agent-router" {
 }
 HCL
   bao_admin kv put secrets-external/ai/saas/zai ZAI_API_KEY=zai-test-key ZAI_MODEL=override-model-value >/dev/null
-  bao_admin kv put secret/apps/sandbox-agent-router sandbox_agent_router_llm_router_key=router-test-key >/dev/null
+  bao_admin kv put secret/apps/sandbox-agent-router sandbox_agent_router_llm_router_key=router-test-key \
+    sandbox_agent_local_router_llm_router_key=local-router-test-key >/dev/null
   bao_admin write auth/approle/role/sandbox-zcode-read token_policies=sandbox-zcode-read \
     token_ttl=15m token_max_ttl=15m secret_id_num_uses=1 >/dev/null
   bao_admin write auth/approle/role/sandbox-opencode-read token_policies=sandbox-opencode-read \
