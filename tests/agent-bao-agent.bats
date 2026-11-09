@@ -381,12 +381,17 @@ case "$AGENT_TOOL" in
     test -z "${ZAI_API_KEY:-}"
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
-    printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
-      (has("small_model") | not) and
-      .model == "agent-router/medium" and
-      .provider["agent-router"].models == {"medium": {"name": "medium"}} and
-      (has("mcp") | not)
-    ' >/dev/null
+    printf '%s' "$OPENCODE_CONFIG_CONTENT" >"$BATS_TEST_TMPDIR/opencode-local-rendered.json"
+    if [ -n "${EXPECTED_CONFIG_FILE:-}" ]; then
+      git diff --no-index "$EXPECTED_CONFIG_FILE" "$BATS_TEST_TMPDIR/opencode-local-rendered.json"
+    else
+      printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e --argjson limit "$MODEL_LIMIT" '
+        (has("small_model") | not) and
+        .model == "agent-router/medium" and
+        .provider["agent-router"].models.medium == {"name": "medium", "limit": $limit} and
+        (has("mcp") | not)
+      ' >/dev/null
+    fi
     ;;
 esac
 printf '%s\n' "$AGENT_TOOL" >>"$BATS_TEST_TMPDIR/tool-children"
@@ -455,8 +460,26 @@ SH
   issue_identity sandbox-opencode-read
   run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_local_router_llm_router_key \
-    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test
-  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 7 ]
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test \
+    EXPECTED_CONFIG_FILE="$worktree/tests/fixtures/opencode-local-config.json"
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_local_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test \
+    AGENT_OPENCODE_CONTEXT_TOKENS=98304 AGENT_OPENCODE_OUTPUT_TOKENS=16384 \
+    MODEL_LIMIT='{"context": 98304, "output": 16384}'
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_local_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test \
+    AGENT_OPENCODE_CONTEXT_TOKENS=98304 MODEL_LIMIT='{"context": 98304, "output": 8192}'
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_local_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test \
+    AGENT_OPENCODE_CONTEXT_TOKENS=huge \
+    EXPECTED_CONFIG_FILE="$worktree/tests/fixtures/opencode-local-config.json"
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 10 ]
 }
 
 @test "ZCode MCP configuration is private and removed after a dispatched job" {

@@ -285,6 +285,8 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 | `AGENT_EXPECTED_SHA` | Expected branch head |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
 | `AGENT_TTY=1` | Run the tool's interactive session on the attached terminal |
+| `AGENT_OPENCODE_CONTEXT_TOKENS` | Context tokens for the `opencode-local` model's `limit` block |
+| `AGENT_OPENCODE_OUTPUT_TOKENS` | Output tokens for that `limit` (8192 when unset) |
 | `~/.agent-env` | Start GitHub/profile keys; fix profile/router keys |
 | `~/.agent-prompt` | the prompt or message |
 | `~/work/.agent-pr-url` | Written after exit; read by the dispatcher |
