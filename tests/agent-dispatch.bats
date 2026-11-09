@@ -412,9 +412,22 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   role_token="s.tok$(basename "$login_record" | cut -d. -f2)"
   cursor_record=$(http_rec 'GET https://bao.test/v1/secrets-external/data/ai/saas/cursor')
   grep -Fxq "X-Vault-Token: $role_token" "$cursor_record.hdr"
+  grep -Fxq "curl POST https://bao.test/v1/auth/token/revoke-self token=$role_token" "$STUB_DIR/calls.log"
   [[ $output != *cursor-secret-value* && $stderr != *cursor-secret-value* ]]
   ! grep -Fq 'cursor-secret-value' "$STUB_DIR/argv.log"
   no_secret_on_a_command_line
+}
+
+@test "a malformed Cursor key read revokes its token and refuses the job" {
+  local login_record role_token
+  printf '%s\n' '{"data":{"data":"not-an-object"}}' >"$STUB_DIR/cursor-external.json"
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "Cursor credential read failed" ]
+  login_record=$(http_rec 'POST https://bao.test/v1/auth/approle/login')
+  role_token="s.tok$(basename "$login_record" | cut -d. -f2)"
+  grep -Fxq "curl POST https://bao.test/v1/auth/token/revoke-self token=$role_token" "$STUB_DIR/calls.log"
+  [ ! -e "$STUB_DIR/cp.1.tar" ]
 }
 
 @test "an empty Cursor key reaches the entrypoint for its path-specific failure" {
