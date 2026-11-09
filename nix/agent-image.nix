@@ -8,7 +8,10 @@
 # The autonomous tool configs are baked from dryvist/nix-ai's
 # lib.renderAutonomous.files — the only place they are ever rendered.
 # Per-repo toolchains are NOT baked in; the target repo's own flake
-# devShell supplies them via `nix develop` (nix is in the image).
+# devShell supplies them via `nix develop` (nix is in the image). The
+# common repo-check toolchain IS baked
+# (nix/agent-image-toolchain.nix): jobs run repo checks with no network
+# even when the target repo has no flake devShell.
 {
   lib,
   dockerTools,
@@ -38,6 +41,7 @@
   vikunjaMcp,
   zammadMcp,
   renderAutonomous,
+  repoCheckToolchain,
   zcodeWeb,
 }:
 
@@ -105,7 +109,7 @@ let
     nix
     openbao
     ripgrep
-  ];
+  ] ++ repoCheckToolchain.checkToolchain;
 
   entrypoint = writeShellApplication {
     name = "agent-entrypoint";

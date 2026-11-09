@@ -89,6 +89,7 @@
             inherit pyproject-nix pyproject-build-systems uv2nix;
             src = zammadMcpSrc;
           };
+          repoCheckToolchain = pkgs.callPackage ./nix/agent-image-toolchain.nix { };
         in
         {
           agent-cli = pkgs.callPackage ./nix/agent-cli.nix { };
@@ -114,6 +115,7 @@
             in
             pkgs.callPackage ./nix/agent-image.nix {
               renderAutonomous = nix-ai.lib.renderAutonomous;
+              inherit repoCheckToolchain;
               zcodeWeb = nix-ai.packages.${system}.zcode-web;
               vikunjaMcp = npmMcpPackages.vikunja-mcp;
               zammadMcp = zammadMcpPackage;
@@ -246,6 +248,31 @@
             assert !(allowedRepos "owner/*x");
             assert !(allowedRepos "*/repo");
             pkgs.runCommand "zcode-job-module-tests" { } "touch $out";
+          # Fails unless every repo-check binary the image bakes onto PATH
+          # is present in a /bin merged from the same package list.
+          agent-image-toolchain =
+            let
+              toolchain = pkgs.callPackage ./nix/agent-image-toolchain.nix { };
+              binTree = pkgs.symlinkJoin {
+                name = "agent-image-toolchain-bin";
+                paths = toolchain.checkToolchain ++ [ pkgs.jq ];
+                pathsToLink = [ "/bin" ];
+              };
+            in
+            pkgs.runCommand "agent-image-toolchain-tests"
+              {
+                nativeBuildInputs = [ pkgs.coreutils ];
+              }
+              ''
+                for binary in ${lib.escapeShellArgs toolchain.requiredBinaries}; do
+                  test -x "${binTree}/bin/$binary" || {
+                    printf 'missing from the image PATH: %s\n' "$binary" >&2
+                    exit 1
+                  }
+                done
+                ${toolchain.pythonEnv}/bin/python3 -c 'import pytest, yaml, jinja2'
+                touch $out
+              '';
           sandbox-contract =
             pkgs.runCommand "sandbox-contract-tests"
               {
