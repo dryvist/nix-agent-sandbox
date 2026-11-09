@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.18.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.17.0...v1.18.0) (2026-11-09)
+
+
+### Features
+
+* **agent:** zcode run j-2181574bf61fe8d4 ([130e5e6](https://github.com/dryvist/nix-agent-sandbox/commit/130e5e67fee62f7ec727d622a8db8461e2adc495))
+* **opencode-local:** declare the model's context and output limits from the job environment ([#210](https://github.com/dryvist/nix-agent-sandbox/issues/210)) ([130e5e6](https://github.com/dryvist/nix-agent-sandbox/commit/130e5e67fee62f7ec727d622a8db8461e2adc495))
+
 ## [1.17.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.16.0...v1.17.0) (2026-11-09)
 
 
