@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.4...v1.14.0) (2026-11-09)
+
+
+### Features
+
+* **sandbox:** ship the repo-check toolchain in the job image ([#201](https://github.com/dryvist/nix-agent-sandbox/issues/201)) ([4f36590](https://github.com/dryvist/nix-agent-sandbox/commit/4f3659008b0a39845e4d8303c2fafb28d60740d3))
+
 ## [1.13.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.3...v1.13.4) (2026-11-09)
 
 
