@@ -2,13 +2,17 @@
 {{- $tracker := eq (env "AGENT_TRACKER_ACCESS") "true" -}}
 {{- $model := "" -}}
 {{- if eq (env "AGENT_TOOL") "opencode-local" }}{{ $model = "medium" }}{{ end -}}
+{{- $context_tokens := env "AGENT_OPENCODE_CONTEXT_TOKENS" -}}
+{{- $output_tokens := env "AGENT_OPENCODE_OUTPUT_TOKENS" -}}
+{{- $limit := "" -}}
+{{- if and (eq (env "AGENT_TOOL") "opencode-local") (regexMatch "^[1-9][0-9]*$" $context_tokens) }}{{ if not (regexMatch "^[1-9][0-9]*$" $output_tokens) }}{{ $output_tokens = "8192" }}{{ end }}{{ $limit = printf `,"limit":{"context":%s,"output":%s}` $context_tokens $output_tokens }}{{ end -}}
 {{- if or (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") -}}
 {
   {{- if $router_field }}
   {{- if $model }}
   "model":"agent-router/{{ $model }}",
   {{- end }}
-  "provider":{"agent-router":{"npm":"@ai-sdk/openai-compatible","name":"Agent Router","options":{"baseURL":"{env:AGENT_ROUTER_BASE_URL}","apiKey":"{env:AGENT_ROUTER_KEY}","headers":{"User-Agent":"dryvist-sandbox","x-opencode-session":"{env:AGENT_RUN_ID}"}}{{ if $model }},"models":{"{{ $model }}":{"name":"{{ $model }}"}}{{ end }}}}{{ if $tracker }},{{ end }}
+  "provider":{"agent-router":{"npm":"@ai-sdk/openai-compatible","name":"Agent Router","options":{"baseURL":"{env:AGENT_ROUTER_BASE_URL}","apiKey":"{env:AGENT_ROUTER_KEY}","headers":{"User-Agent":"dryvist-sandbox","x-opencode-session":"{env:AGENT_RUN_ID}"}}{{ if $model }},"models":{"{{ $model }}":{"name":"{{ $model }}"{{ $limit }}}}{{ end }}}}{{ if $tracker }},{{ end }}
   {{- end }}
   {{- if $tracker }}
   "mcp":{

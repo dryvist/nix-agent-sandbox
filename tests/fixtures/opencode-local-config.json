@@ -1,0 +1,4 @@
+{
+  "model":"agent-router/medium",
+  "provider":{"agent-router":{"npm":"@ai-sdk/openai-compatible","name":"Agent Router","options":{"baseURL":"{env:AGENT_ROUTER_BASE_URL}","apiKey":"{env:AGENT_ROUTER_KEY}","headers":{"User-Agent":"dryvist-sandbox","x-opencode-session":"{env:AGENT_RUN_ID}"}},"models":{"medium":{"name":"medium"}}}}
+}
