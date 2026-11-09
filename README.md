@@ -165,9 +165,10 @@ agent-dispatch check
   token and does not count.
 - **Output**: the container publishes `agent/<tool>/<job-id>` and opens a ready
   PR with no label. Every branch requires signed commits, so the run's tree reaches
-  GitHub as one commit created through the API (`createCommitOnBranch`), which
-  GitHub signs. That carries file contents only: a change to a file mode or a
-  symlink is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES`
+  GitHub as one commit created through the Git Data REST API, which GitHub signs
+  for the job's App token like `createCommitOnBranch` commits. It carries file
+  contents with their git mode (100644 or 100755): a symlink, a submodule, or a
+  real mode change is refused, and a change larger than `AGENT_PUBLISH_MAX_BYTES`
   encoded (default 8 MiB) fails whole. The dispatcher records the PR URL only
   when it points at the job's repo. The job's clone also fetches every pull
   request head, so pull request N is available as `origin/pr/N`. Before the

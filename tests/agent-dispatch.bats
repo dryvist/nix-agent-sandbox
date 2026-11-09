@@ -1733,8 +1733,6 @@ SH
 printf '%s\n' "$*" >>"$STUB_DIR/gh.log"
 case "$1 $2" in
   "repo clone") exec git clone -q "$(cat "$STUB_DIR/origin-path")" "$4" ;;
-  "api graphql") cp "$4" "$STUB_DIR/graphql.json" ;;
-  "api repos/"*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
   "pr create")
     printf '%s\n' "$*" >"$STUB_DIR/pr-create.argv"
     [ -z "${STUB_PR_CREATE_FAIL:-}" ] || exit 1
@@ -1756,8 +1754,35 @@ case "$1 $2" in
   "pr merge")
     [ -z "${STUB_PR_MERGE_FAIL:-}" ] || exit 1
     ;;
-  *) exit 1 ;;
+  *)
+    [ "$1" = api ] || exit 1 ;;
 esac
+# Git Data stubs print what the entrypoint reads through gh --jq .sha.
+if [ "$1" = api ]; then
+  if [ "$2" = "-X" ]; then
+    input=""
+    args=("$@")
+    for i in "${!args[@]}"; do
+      if [ "${args[$i]}" = --input ]; then input=${args[$((i + 1))]}; fi
+    done
+    printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log"
+    case "$4" in
+      *"/git/blobs")
+        jq -c . "$input" >>"$STUB_DIR/blobs.jsonl"
+        printf 'blob%03d\n' "$(wc -l <"$STUB_DIR/blobs.jsonl")"
+        ;;
+      *"/git/trees") cp "$input" "$STUB_DIR/tree.json"; printf 'tree-new\n' ;;
+      *"/git/commits") cp "$input" "$STUB_DIR/commit.json"; printf 'commit-new\n' ;;
+      *"/git/refs/"*) cp "$input" "$STUB_DIR/ref-update.json"; printf '{}\n' ;;
+      *) exit 1 ;;
+    esac
+    exit 0
+  fi
+  case "$2" in
+    repos/*) printf '%s\n' "$*" >>"$STUB_DIR/gh-api.log" ;;
+    *) exit 1 ;;
+  esac
+fi
 SH
   bash_stub "$tools/gitleaks" <<SH
 printf '%s\n' "\$@" >"\$STUB_DIR/gitleaks-argv"
@@ -1866,6 +1891,27 @@ SH
   [ ! -e "$STUB_DIR/gitleaks-argv" ]
 }
 
+@test "fix entrypoint refuses an executable change because the fix publish cannot keep its mode" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin seed
+  fix_entry_fixture fix-exec 0 ci/fix
+  seed="$BATS_TEST_TMPDIR/fix-exec-seed"
+  printf '#!/bin/sh\necho one\n' >"$seed/fix.sh"
+  chmod +x "$seed/fix.sh"
+  git -C "$seed" add fix.sh
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m "add fix script"
+  git -C "$seed" push -q origin HEAD
+  ENTRY_EXPECTED_SHA=$(git -C "$seed" rev-parse HEAD)
+  bash_stub "$tools/zcode" <<'SH'
+printf 'echo two\n' >fix.sh
+git add fix.sh
+SH
+  run_fix_entrypoint
+  [ "$status" -eq 1 ]
+  [[ $output == *"fix.sh is executable; the fix publish cannot keep the executable bit"* ]]
+  [ ! -e "$home/work/.agent-fix/changes.json" ]
+}
+
 @test "fix entrypoint reports head moved when the remote branch no longer matches" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   fix_entry_fixture moved 0 ci/fix
@@ -1913,13 +1959,16 @@ SH
   run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
-  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=$head" "$STUB_DIR/gh-api.log"
-  jq -e --arg h "$head" '.variables.input |
-    .branch == {repositoryNameWithOwner: "dryvist/nix-ai", branchName: "agent/zcode/j-1"} and
-    .expectedHeadOid == $h and
-    .fileChanges.additions == [{path: "tool-file", contents: "Y2hhbmdlCg=="}] and
-    .fileChanges.deletions == [{path: "old-file"}] and
-    .message.body == "- tool commit"' "$STUB_DIR/graphql.json"
+  jq -se '. == [{content: "Y2hhbmdlCg==", encoding: "base64"}]' "$STUB_DIR/blobs.jsonl"
+  jq -e --arg t "$(git -C "$origin" rev-parse "$head^{tree}")" '
+    .base_tree == $t and .tree == [
+      {path: "old-file", sha: null},
+      {path: "tool-file", mode: "100644", type: "blob", sha: "blob001"}]' "$STUB_DIR/tree.json"
+  jq -e --arg h "$head" '
+    .message == "feat(agent): zcode run j-1\n\n- tool commit" and .tree == "tree-new" and
+    .parents == [$h]' "$STUB_DIR/commit.json"
+  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-1 -f sha=commit-new" "$STUB_DIR/gh-api.log"
+  [ ! -e "$STUB_DIR/ref-update.json" ]
   run ! git -C "$origin" rev-parse --verify -q refs/heads/agent/zcode/j-1
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
 }
@@ -2144,9 +2193,68 @@ git commit -q -am "make it executable"
 SH
   run_publish j-3
   [ "$status" -eq 1 ]
-  [[ $output == *"old-file changes a file mode or symlink (100644 -> 100755)"* ]]
+  [[ $output == *"old-file changes the file mode (100644 -> 100755); the publish refuses a real mode change."* ]]
   [ ! -e "$STUB_DIR/graphql.json" ]
   [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "a symlink change is refused before anything reaches origin" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture symlink 0
+  bash_stub "$tools/zcode" <<'SH'
+ln -s old-file link
+git add link
+git commit -q -m "add a link"
+SH
+  run_publish j-link
+  [ "$status" -eq 1 ]
+  [[ $output == *"link adds a symlink (000000 -> 120000); the publish cannot carry symlinks."* ]]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+}
+
+@test "an executable content edit publishes with its 100755 mode kept" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin head seed
+  publish_fixture exec-edit 0
+  seed="$BATS_TEST_TMPDIR/exec-edit-seed"
+  printf '#!/bin/sh\necho one\n' >"$seed/fix.sh"
+  chmod +x "$seed/fix.sh"
+  git -C "$seed" add fix.sh
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m "add script"
+  git -C "$seed" push -q origin HEAD
+  bash_stub "$tools/zcode" <<'SH'
+printf 'echo two\n' >fix.sh
+git add fix.sh
+git commit -q -m "tool commit"
+SH
+  run_publish j-exec
+  [ "$status" -eq 0 ]
+  head=$(git -C "$origin" rev-parse HEAD)
+  jq -se '. == [{content: "ZWNobyB0d28K", encoding: "base64"}]' "$STUB_DIR/blobs.jsonl"
+  jq -e --arg t "$(git -C "$origin" rev-parse "$head^{tree}")" '
+    .base_tree == $t and .tree == [
+      {path: "fix.sh", mode: "100755", type: "blob", sha: "blob001"}]' "$STUB_DIR/tree.json"
+  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-exec -f sha=commit-new" \
+    "$STUB_DIR/gh-api.log"
+}
+
+@test "an existing run branch updates fast-forward only and never sets force" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin seed
+  publish_fixture ff-update 0
+  seed="$BATS_TEST_TMPDIR/ff-update-seed"
+  git -C "$seed" push -q origin HEAD:refs/heads/agent/zcode/j-ff
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-ff
+  [ "$status" -eq 0 ]
+  jq -e '.sha == "commit-new" and .force == false' "$STUB_DIR/ref-update.json"
+  grep -q -- "-X PATCH repos/dryvist/nix-ai/git/refs/heads/agent/zcode/j-ff" "$STUB_DIR/gh-api.log"
+  run ! grep -q "git/refs -f ref=refs/heads/agent/zcode/j-ff" "$STUB_DIR/gh-api.log"
 }
 
 @test "a workflow file change is refused before anything reaches origin" {

@@ -420,8 +420,67 @@ if [ -n "${AGENT_REPO:-}" ]; then
   base="$(git rev-parse HEAD)"
 fi
 
+# One classifier for both publish paths: writes one JSON line per change
+# between $1 and the index ("cached") or $3 (a commit) to file $2. An
+# addition carries path, git mode (100644 or 100755) and base64 contents; a
+# deletion carries path and "delete": true. Nothing here touches the network.
+collect_changes() {
+  local from=$1 out=$2 target=$3 meta path old new kind
+  local -a range=()
+  if [ "${target}" = cached ]; then
+    range=(-z --raw --no-renames --cached "${from}")
+  else
+    range=(-z --raw --no-renames "${from}" "${target}")
+  fi
+  : >"${out}"
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    read -r old new _ _ kind <<<"${meta#:}"
+    case "${path}" in
+      .github/workflows/*)
+        echo "agent-entrypoint: ${path} is a workflow file; the sandbox token has no workflows permission, so nothing was published." >&2
+        return 1
+        ;;
+    esac
+    case "${old}:${new}" in
+      120000:*)
+        echo "agent-entrypoint: ${path} deletes or replaces a symlink (${old} -> ${new}); the publish cannot carry symlinks." >&2
+        return 1
+        ;;
+      *:120000)
+        echo "agent-entrypoint: ${path} adds a symlink (${old} -> ${new}); the publish cannot carry symlinks." >&2
+        return 1
+        ;;
+      160000:*)
+        echo "agent-entrypoint: ${path} deletes or replaces a submodule (${old} -> ${new}); the publish cannot carry submodules." >&2
+        return 1
+        ;;
+      *:160000)
+        echo "agent-entrypoint: ${path} adds a submodule (${old} -> ${new}); the publish cannot carry submodules." >&2
+        return 1
+        ;;
+      100644:100755 | 100755:100644)
+        echo "agent-entrypoint: ${path} changes the file mode (${old} -> ${new}); the publish refuses a real mode change." >&2
+        return 1
+        ;;
+      100644:100644 | 100755:100755 | 000000:100644 | 000000:100755 | 100644:000000 | 100755:000000) ;;
+      *)
+        echo "agent-entrypoint: ${path} has an unsupported file type (${old} -> ${new}); nothing was published." >&2
+        return 1
+        ;;
+    esac
+    if [ "${kind}" = D ]; then
+      jq -cn --arg p "${path}" '{path: $p, delete: true}'
+    else
+      base64 -w0 <"${path}" >"${out}.b64"
+      jq -cn --arg p "${path}" --arg m "${new}" --rawfile c "${out}.b64" \
+        '{path: $p, mode: $m, contents: $c}'
+    fi >>"${out}"
+  done < <(git diff "${range[@]}")
+  rm -f "${out}.b64"
+}
+
 make_fix_outputs() {
-  local tmp outdir meta path old new kind size subject=""
+  local tmp outdir path size subject=""
   local max="${AGENT_PUBLISH_MAX_BYTES:-8388608}"
   FIX_NO_CHANGE=0
   tmp=$(mktemp -d)
@@ -437,24 +496,18 @@ make_fix_outputs() {
     subject=$(git log -1 --format=%s)
     subject=${subject:0:100}
   fi
-  : >"${tmp}/changes"
-  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
-    read -r old new _ _ kind <<<"${meta#:}"
-    case "${old}:${new}" in
-      100644:100644 | 000000:100644 | 100644:000000) ;;
-      *)
-        echo "agent-entrypoint: ${path} changes a file mode or symlink (${old} -> ${new}); the signed publish carries contents only." >&2
-        rm -rf "${tmp}"
-        return 1
-        ;;
-    esac
-    if [ "${kind}" = D ]; then
-      jq -cn --arg p "${path}" '{deletion: {path: $p}}'
-    else
-      base64 -w0 <"${path}" >"${tmp}/contents"
-      jq -cn --arg p "${path}" --rawfile c "${tmp}/contents" '{addition: {path: $p, contents: $c}}'
-    fi >>"${tmp}/changes"
-  done < <(git diff --cached -z --raw --no-renames "${AGENT_EXPECTED_SHA}")
+  if ! collect_changes "${AGENT_EXPECTED_SHA}" "${tmp}/changes" cached; then
+    rm -rf "${tmp}"
+    return 1
+  fi
+  # The dispatcher publishes these changes with createCommitOnBranch, which
+  # carries contents only, so an executable change has nowhere to keep its
+  # bit; only the start-mode publish can carry one.
+  while IFS= read -r path; do
+    echo "agent-entrypoint: ${path} is executable; the fix publish cannot keep the executable bit, so nothing was published." >&2
+    rm -rf "${tmp}"
+    return 1
+  done < <(jq -r 'select(.mode == "100755") | .path' "${tmp}/changes")
   if [ ! -s "${tmp}/changes" ]; then
     rm -rf "${tmp}"
     rm -rf "${outdir}"
@@ -467,7 +520,8 @@ make_fix_outputs() {
     rm -rf "${tmp}"
     return 1
   fi
-  jq -s '{additions: [.[].addition | select(.)], deletions: [.[].deletion | select(.)]}' \
+  jq -s '{additions: [.[] | select(has("contents")) | {path, contents}],
+    deletions: [.[] | select(.delete) | {path}]}' \
     "${tmp}/changes" >"${tmp}/changes.json"
   if ! git diff --cached --quiet HEAD; then
     git -c user.name="${AGENT_GIT_NAME:-nix-agent-sandbox}" \
@@ -654,18 +708,82 @@ fi
 # The branch/PR is the only durable output; the container is destroyed.
 #
 # Every branch requires signed commits, so the run's tree reaches origin as
-# one commit created through the GitHub API (createCommitOnBranch), which
-# GitHub signs for the job's App token. Local commits are never pushed.
-# The mutation is all-or-nothing, and both limits are checked before anything
-# reaches origin:
-# ponytail: contents only. A change to a file mode or a symlink is refused,
-# since the API would silently drop it; upgrade to the REST git-data API
-# (blobs and a tree with modes) once its commits are confirmed signed.
-# ponytail: one request carries the whole diff, capped at
-# AGENT_PUBLISH_MAX_BYTES of encoded contents (default 8 MiB); upgrade to
-# several chained commits if real runs need more.
+# one commit created through the GitHub Git Data REST API: one blob per
+# changed path, one tree on the remote head's tree carrying each path's mode
+# (100644 or 100755) and its deletions, one commit with the remote head as
+# parent, then a fast-forward-only ref update (force false), or a ref create
+# when the branch is new. GitHub signs commits created through the API for
+# the job's App token, as it does createCommitOnBranch commits (see
+# "Signature verification for bots" on the "About commit signature
+# verification" page, docs.github.com/authentication/managing-commit-
+# signature-verification/about-commit-signature-verification). Local commits
+# are never pushed. The ref update refuses a non-fast-forward, and both
+# limits are checked before anything reaches origin:
+# ponytail: contents and modes only. A symlink, a submodule, or a real mode
+# change is refused; the API carries git modes but no symlink or gitlink
+# objects.
+# ponytail: the change is capped at AGENT_PUBLISH_MAX_BYTES of encoded
+# contents (default 8 MiB); upgrade to several chained commits if real runs
+# need more.
+# publish_to_branch <owner/name> <branch> <head sha> <changes file> <exists>:
+# the one publish path. Builds the tree on the head's tree so the changes
+# keep their git modes, commits it with the head as parent, then moves the
+# branch fast-forward only (a non-fast-forward head refuses the update).
+publish_to_branch() {
+  local repo=$1 br=$2 head=$3 changes=$4 exists=$5
+  local tmp tree_sha entry entry_path entry_mode blob_sha new_tree new_commit
+  tmp="$(mktemp -d)"
+  tree_sha="$(git rev-parse "${head}^{tree}")"
+  : >"${tmp}/tree"
+  while IFS= read -r entry; do
+    if [ "$(jq -r 'has("contents")' <<<"${entry}")" = true ]; then
+      jq -j '.contents' <<<"${entry}" >"${tmp}/contents.b64"
+      jq -n --rawfile c "${tmp}/contents.b64" '{content: $c, encoding: "base64"}' \
+        >"${tmp}/blob.json"
+      blob_sha="$(gh api -X POST "repos/${repo}/git/blobs" --input "${tmp}/blob.json" --jq .sha)" || {
+        rm -rf "${tmp}"
+        return 1
+      }
+      entry_path="$(jq -r '.path' <<<"${entry}")"
+      entry_mode="$(jq -r '.mode' <<<"${entry}")"
+      jq -cn --arg p "${entry_path}" --arg m "${entry_mode}" --arg s "${blob_sha}" \
+        '{path: $p, mode: $m, type: "blob", sha: $s}' >>"${tmp}/tree"
+    else
+      jq -cn --arg p "$(jq -r '.path' <<<"${entry}")" '{path: $p, sha: null}' >>"${tmp}/tree"
+    fi
+  done <"${changes}"
+  jq -s --arg b "${tree_sha}" '{base_tree: $b, tree: .}' "${tmp}/tree" >"${tmp}/tree.json"
+  new_tree="$(gh api -X POST "repos/${repo}/git/trees" --input "${tmp}/tree.json" --jq .sha)" || {
+    rm -rf "${tmp}"
+    return 1
+  }
+  jq -n --arg t "${new_tree}" --arg p "${head}" \
+    --arg h "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
+    --arg b "$(git log --reverse --format='- %s' "${base}..HEAD")" \
+    '{message: (if $b == "" then $h else ($h + "\n\n" + $b) end), tree: $t, parents: [$p]}' \
+    >"${tmp}/commit.json"
+  new_commit="$(gh api -X POST "repos/${repo}/git/commits" --input "${tmp}/commit.json" --jq .sha)" || {
+    rm -rf "${tmp}"
+    return 1
+  }
+  if [ "${exists}" = 1 ]; then
+    jq -n --arg s "${new_commit}" '{sha: $s, force: false}' >"${tmp}/ref.json"
+    gh api -X PATCH "repos/${repo}/git/refs/heads/${br}" --input "${tmp}/ref.json" >/dev/null || {
+      rm -rf "${tmp}"
+      return 1
+    }
+  else
+    gh api "repos/${repo}/git/refs" -f "ref=refs/heads/${br}" \
+      -f "sha=${new_commit}" >/dev/null || {
+      rm -rf "${tmp}"
+      return 1
+    }
+  fi
+  rm -rf "${tmp}"
+}
+
 signed_push() {
-  local remote_head="" exists=0 created=0 tmp meta path old new kind query
+  local remote_head="" exists=0 tmp
   local max="${AGENT_PUBLISH_MAX_BYTES:-8388608}"
   if remote_head="$(git ls-remote --exit-code origin "refs/heads/${branch}" | cut -f1)"; then
     exists=1
@@ -674,31 +792,10 @@ signed_push() {
     remote_head="$(git rev-parse origin/HEAD)"
   fi
   tmp="$(mktemp -d)"
-  : >"${tmp}/changes"
-  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
-    read -r old new _ _ kind <<<"${meta#:}"
-    case "${path}" in
-      .github/workflows/*)
-        echo "agent-entrypoint: ${path} is a workflow file; the sandbox token has no workflows permission, so nothing was published." >&2
-        rm -rf "${tmp}"
-        return 1
-        ;;
-    esac
-    case "${old}:${new}" in
-      100644:100644 | 000000:100644 | 100644:000000) ;;
-      *)
-        echo "agent-entrypoint: ${path} changes a file mode or symlink (${old} -> ${new}); the signed publish carries contents only." >&2
-        rm -rf "${tmp}"
-        return 1
-        ;;
-    esac
-    if [ "${kind}" = D ]; then
-      jq -cn --arg p "${path}" '{deletion: {path: $p}}'
-    else
-      base64 -w0 <"${path}" >"${tmp}/contents"
-      jq -cn --arg p "${path}" --rawfile c "${tmp}/contents" '{addition: {path: $p, contents: $c}}'
-    fi >>"${tmp}/changes"
-  done < <(git diff -z --raw --no-renames "${remote_head}" HEAD)
+  if ! collect_changes "${remote_head}" "${tmp}/changes" HEAD; then
+    rm -rf "${tmp}"
+    return 1
+  fi
   if [ ! -s "${tmp}/changes" ]; then
     rm -rf "${tmp}"
     return 0
@@ -708,29 +805,8 @@ signed_push() {
     rm -rf "${tmp}"
     return 1
   fi
-  query="mutation(\$input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: \$input) { commit { oid } } }"
-  jq -s --arg q "${query}" --arg repo "${AGENT_REPO}" --arg br "${branch}" --arg oid "${remote_head}" \
-    --arg h "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
-    --arg b "$(git log --reverse --format='- %s' "${base}..HEAD")" \
-    '{query: $q, variables: {input: {
-      branch: {repositoryNameWithOwner: $repo, branchName: $br},
-      message: {headline: $h, body: $b},
-      expectedHeadOid: $oid,
-      fileChanges: {additions: [.[].addition | select(.)], deletions: [.[].deletion | select(.)]}}}}' \
-    "${tmp}/changes" >"${tmp}/request.json"
-  if [ "${exists}" = 0 ]; then
-    gh api "repos/${AGENT_REPO}/git/refs" -f "ref=refs/heads/${branch}" \
-      -f "sha=${remote_head}" >/dev/null || {
-      rm -rf "${tmp}"
-      return 1
-    }
-    created=1
-  fi
-  if ! gh api graphql --input "${tmp}/request.json" --jq .data.createCommitOnBranch.commit.oid >/dev/null; then
-    # No partial commit exists; drop a branch this run created.
-    if [ "${created}" = 1 ]; then
-      gh api -X DELETE "repos/${AGENT_REPO}/git/refs/heads/${branch}" >/dev/null 2>&1 || true
-    fi
+  if ! publish_to_branch "${AGENT_REPO}" "${branch}" "${remote_head}" \
+    "${tmp}/changes" "${exists}"; then
     rm -rf "${tmp}"
     return 1
   fi
