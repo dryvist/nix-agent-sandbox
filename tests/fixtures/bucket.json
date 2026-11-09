@@ -3,6 +3,7 @@
     "data": {
       "ZCODE_ROUTER_KEY": "zcode-router-secret-value",
       "OPENCODE_ROUTER_KEY": "opencode-router-secret-value",
+      "OPENCODE_LOCAL_ROUTER_KEY": "sandbox-router-secret-value",
       "QWEN_CODE_ROUTER_KEY": "qwen-code-router-secret-value",
       "VIKUNJA_URL": "https://vikunja.test/api/v1",
       "VIKUNJA_AI_JOBS_TOKEN": "vikunja-secret-value",

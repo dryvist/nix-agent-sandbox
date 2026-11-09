@@ -535,7 +535,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_ROUTER_KEY"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL"]}}' \
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL"]}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -1295,7 +1295,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/router-home" tools="$BATS_TEST_TMPDIR/router-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"opencode_router_key"}}' >"$home/.agent-profiles.json"
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"}}' >"$home/.agent-profiles.json"
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'

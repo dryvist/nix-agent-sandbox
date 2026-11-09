@@ -63,6 +63,29 @@ SH
   [ "$(wc -l <"$BATS_TEST_TMPDIR/configs" | tr -d ' ')" = 2 ]
 }
 
+@test "entrypoint selects the OpenCode local router key field from its profile" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/local-key-home" tools="$BATS_TEST_TMPDIR/local-key-bin"
+  local auth_dir="$BATS_TEST_TMPDIR/local-key-auth"
+  mkdir -p "$home" "$tools" "$auth_dir"
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"}}' \
+    >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/bao" <<'SH'
+test "$1" = agent
+test "${AGENT_SANDBOX_ROUTER_KEY_FIELD}" = sandbox_agent_local_router_llm_router_key
+SH
+  run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
+    AGENT_TOOL=opencode-local AGENT_MODE=start AGENT_PROMPT='route locally' BAO_ADDR=https://bao.test \
+    SANDBOX_ROLE_ID=role-id-test SANDBOX_WRAPPED_SECRET_ID=wrapped-secret-id-test \
+    AGENT_OPENBAO_AUTH_DIR="$auth_dir" bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$auth_dir/role-id" ]
+  [ ! -e "$auth_dir/wrapped-secret-id" ]
+}
+
 @test "entrypoint delegates missing AppRole inputs to OpenBao Agent" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/missing-home" tools="$BATS_TEST_TMPDIR/missing-bin"
@@ -185,7 +208,8 @@ HCL
     secret/apps/sandbox-agent router_key=stale-router-key \
     vikunja_token=vikunja-test-token zammad_token=zammad-test-token >/dev/null
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" kv put \
-    secret/apps/sandbox-agent-router sandbox_agent_router_llm_router_key=router-test-key >/dev/null
+    secret/apps/sandbox-agent-router sandbox_agent_router_llm_router_key=router-test-key \
+    sandbox_agent_local_router_llm_router_key=local-router-test-key >/dev/null
   BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" write \
     auth/approle/role/sandbox-agent-read token_policies=sandbox-read \
     token_ttl=15m token_max_ttl=15m secret_id_num_uses=1 >/dev/null
@@ -353,7 +377,7 @@ case "$AGENT_TOOL" in
     fi
     ;;
   opencode-local)
-    test "$AGENT_ROUTER_KEY" = router-test-key
+    test "$AGENT_ROUTER_KEY" = local-router-test-key
     test -z "${ZAI_API_KEY:-}"
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
@@ -393,7 +417,7 @@ SH
     agent_status=0
     agent_output=$(env BAO_ADDR="$address" "$@" "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
     if [ "$agent_status" -ne 0 ]; then
-      for value in "$root_token" "$role_id" "$wrapped_id" zai-test-key router-test-key; do
+      for value in "$root_token" "$role_id" "$wrapped_id" zai-test-key router-test-key local-router-test-key; do
         agent_output=${agent_output//"$value"/[REDACTED]}
       done
       printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g' >&2
@@ -430,7 +454,7 @@ SH
     AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]'
   issue_identity sandbox-opencode-read
   run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-local \
-    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_local_router_llm_router_key \
     AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test
   [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 7 ]
 }

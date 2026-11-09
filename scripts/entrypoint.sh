@@ -225,6 +225,7 @@ if [ "${openbao_child}" != 1 ] && \
   chmod 600 "${openbao_agent_dir}/role-id" "${openbao_agent_dir}/wrapped-secret-id"
   unset SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_ROUTER_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN
 
+  # The selected profile owns this field so OpenCode variants can use separate leaves.
   profile_key="$(jq -r --arg p "${AGENT_PROFILE:-$AGENT_TOOL}" --arg tty "${AGENT_TTY:-}" \
     'if $tty == "1" and .[$p].ttyLogin == true then "" else .[$p].sandboxRouterKeyField // "" end' \
     "${HOME}/.agent-profiles.json")"
@@ -533,7 +534,7 @@ case "${AGENT_TOOL}" in
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
   opencode | opencode-local)
-    # OpenCode uses the router's first sandbox Go model; opencode-local uses medium.
+    # The selected profile supplies the key; OpenCode uses a listed Go model and local uses medium.
     if [ "${AGENT_TOOL}" = opencode ]; then
       if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [ -z "${AGENT_ROUTER_KEY:-}" ]; then
         echo "agent-entrypoint: OpenCode requires router base URL and key." >&2

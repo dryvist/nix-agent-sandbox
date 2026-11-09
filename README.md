@@ -126,20 +126,23 @@ agent-dispatch check
 - **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`,
   `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
   job needs a credential that works without a person:
-  `opencode` and `opencode-local` use `AGENT_ROUTER_BASE_URL` and the router key
-  with the first `go-*` model id the router lists for the sandbox key for
-  opencode and router group `medium` for opencode-local. `opencode-zai` uses
-  `ZAI_SUBSCRIPTION_KEY` with
+  `opencode` and `opencode-local` use `AGENT_ROUTER_BASE_URL` and separate
+  router keys: `opencode` uses `sandbox_agent_router_llm_router_key` with the
+  first `go-*` model id available to its key, and `opencode-local` uses
+  `sandbox_agent_local_router_llm_router_key` with router group `medium`.
+  `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
   `zai-coding-plan/<ZAI_MODEL>`. `zcode` and `opencode-zai` take `ZAI_MODEL`
-  only from OpenBao `secrets-external/ai/saas/zai` and exit 65 when it is empty. `cursor-agent` is terminal-only and signs in
-  interactively. `shell` is accepted only by `fix`: it runs the task text as a
-  `bash` command and needs no model credential. `qwen-code` batch runs use
+  only from OpenBao `secrets-external/ai/saas/zai` and exit 65 when it is
+  empty. `cursor-agent` is terminal-only and signs in interactively. `shell` is
+  accepted only by `fix`: it runs the task text as a `bash` command and needs
+  no model credential. `qwen-code` batch runs use
   the router's `medium` capability with `sandbox_agent_router_llm_router_key`
   from `secret/data/apps/sandbox-agent-router`, and have no terminal session.
   Each tool runs under its own OpenBao AppRole, and `fix` runs use the read
   role. `zcode` reads only the Z.ai key at `secrets-external/data/ai/saas/zai`,
   and its container renders that key itself, so the dispatcher never delivers
-  it. ZCode sends no `dryvist-sandbox` User-Agent header. `opencode` and `opencode-local` read only the router key at
+  it. ZCode sends no `dryvist-sandbox` User-Agent header. `opencode` and
+  `opencode-local` read their profile-selected router key from
   `secret/data/apps/sandbox-agent-router` and have no tracker access. Other
   tools keep the shared `sandbox-agent-read` and `sandbox-agent-write` roles,
   which also read the Vikunja and Zammad tokens.
@@ -224,9 +227,9 @@ file and the prompt into its home directory. It contains the GitHub token for
 start jobs, the OpenBao address, the selected sandbox AppRole id and wrapped
 SecretID, the public mirror URL, service URLs, and profile values. The
 OpenBao Agent unwraps the one-use SecretID and reads the router key field
-`sandbox_agent_router_llm_router_key` from
-`secret/data/apps/sandbox-agent-router`. It reads Vikunja and Zammad tokens
-from `secret/data/apps/sandbox-agent` and creates per-tool MCP configuration.
+selected by the tool profile from `secret/data/apps/sandbox-agent-router`. It
+reads Vikunja and Zammad tokens from `secret/data/apps/sandbox-agent` and
+creates per-tool MCP configuration.
 The AppRole policy grants read access to both leaves. Its token has a
 server-side 15-minute TTL. The host supplies the Z.ai plan key from the
 external leaf only for profiles that request it. The container reads no other

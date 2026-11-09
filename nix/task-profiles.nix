@@ -65,8 +65,8 @@
   opencode-local = {
     batchCapable = true;
     env = [ ];
-    routerKeyField = "OPENCODE_ROUTER_KEY";
-    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+    routerKeyField = "OPENCODE_LOCAL_ROUTER_KEY";
+    sandboxRouterKeyField = "sandbox_agent_local_router_llm_router_key";
     trackerAccess = false;
   };
   opencode-zai = {
