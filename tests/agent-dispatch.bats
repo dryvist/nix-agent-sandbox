@@ -1295,7 +1295,7 @@ renewals() { grep -c 'POST https://bao.test/v1/auth/token/renew-self token=s.tok
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/router-home" tools="$BATS_TEST_TMPDIR/router-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"}}' >"$home/.agent-profiles.json"
+  cp "$BATS_TEST_DIRNAME/fixtures/opencode-local-profiles.json" "$home/.agent-profiles.json"
   printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
     'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
   bash_stub "$tools/id" <<'SH'

@@ -68,8 +68,7 @@ SH
   local home="$BATS_TEST_TMPDIR/local-key-home" tools="$BATS_TEST_TMPDIR/local-key-bin"
   local auth_dir="$BATS_TEST_TMPDIR/local-key-auth"
   mkdir -p "$home" "$tools" "$auth_dir"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"}}' \
-    >"$home/.agent-profiles.json"
+  cp "$BATS_TEST_DIRNAME/fixtures/opencode-local-profiles.json" "$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
