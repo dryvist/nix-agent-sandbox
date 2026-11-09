@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.19.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.18.0...v1.19.0) (2026-11-09)
+
+
+### Features
+
+* **agent:** autonomous zcode run j-2663d29f1e14b511 ([#213](https://github.com/dryvist/nix-agent-sandbox/issues/213)) ([5bc9b87](https://github.com/dryvist/nix-agent-sandbox/commit/5bc9b879d0b91f3edde697800abd9119d7dce7ca))
+* **agent:** zcode run j-2663d29f1e14b511 ([5bc9b87](https://github.com/dryvist/nix-agent-sandbox/commit/5bc9b879d0b91f3edde697800abd9119d7dce7ca))
+
 ## [1.18.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.17.0...v1.18.0) (2026-11-09)
 
 
