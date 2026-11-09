@@ -723,6 +723,36 @@ signed_push() {
   rm -rf "${tmp}"
 }
 
+# The run PR may not merge itself: an armed auto-merge merges the PR as soon
+# as checks go green, before the required independent review, and a draft is
+# not open for review at all. After the PR is created or found it is marked
+# ready and disarmed, and only then is the URL emitted; every failed guard
+# refuses success.
+settle_pr() {
+  local info url
+  if ! info="$(gh pr view "$1" --json url,isDraft,autoMergeRequest)"; then
+    echo "agent-entrypoint: PR lookup failed for $1; refusing to report success." >&2
+    return 1
+  fi
+  url="$(jq -r '.url // empty' <<<"${info}")"
+  if [ -z "${url}" ]; then
+    echo "agent-entrypoint: PR lookup returned no URL; refusing to report success." >&2
+    return 1
+  fi
+  if [ "$(jq -r '.isDraft // false' <<<"${info}")" = true ] && ! gh pr ready "${url}" >/dev/null; then
+    echo "agent-entrypoint: the PR for $1 is still a draft; refusing to report success." >&2
+    return 1
+  fi
+  # Only disarmed when the PR carries an auto-merge request; the mutation
+  # rejects a PR without one.
+  if [ "$(jq -r '(.autoMergeRequest // null) != null' <<<"${info}")" = true ] \
+    && ! gh pr merge "${url}" --disable-auto >/dev/null; then
+    echo "agent-entrypoint: auto-merge stays armed on ${url}; refusing to report success." >&2
+    return 1
+  fi
+  printf '%s\n' "${url}"
+}
+
 # Only this step writes the PR URL file agent-dispatch reads, so anything the
 # tool left at that path is removed first.
 pr_file="${workdir}/.agent-pr-url"
@@ -747,10 +777,9 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     echo "agent-entrypoint: publishing ${branch} failed." >&2
     exit 1
   fi
-  # Shell results open ready; other tools open draft.
-  pr_draft=(--draft)
-  [ "${AGENT_TOOL}" != shell ] || pr_draft=()
-  if url="$(gh pr create "${pr_draft[@]}" --head "${branch}" \
+  # Agent PRs open ready with no label; an existing PR for the branch is success.
+  pr_created=1
+  if ! url="$(gh pr create --head "${branch}" \
     --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
     --body "Autonomous run by nix-agent-sandbox.
 
@@ -765,22 +794,15 @@ Prompt:
 \`\`\`
 ${AGENT_PROMPT:-}
 \`\`\`")"; then
+    # A continued run pushes to the branch of the PR it already opened.
+    pr_created=0
+  fi
+  if url="$(settle_pr "${branch}")"; then
     printf '%s\n' "${url}" | tee "${pr_file}"
-  elif pr_info="$(gh pr view "${branch}" --json url,isDraft)"; then
-    # A continued run pushes to the branch of the PR it already opened. A non-shell PR must be a draft.
-    if [ "${AGENT_TOOL}" != shell ] && ! jq -e '.isDraft == true' <<<"${pr_info}" >/dev/null; then
-      echo "agent-entrypoint: existing PR is not a draft; refusing to report success." >&2
-      exit 1
-    fi
-    url="$(jq -r '.url // empty' <<<"${pr_info}")"
-    if [ -n "${url}" ]; then
-      printf '%s\n' "${url}" | tee "${pr_file}"
-    else
-      echo "agent-entrypoint: PR lookup returned no URL; refusing to report success." >&2
-      status=1
-    fi
   else
-    echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+    if [ "${pr_created}" = 0 ]; then
+      echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+    fi
     [ "${status}" -ne 0 ] || status=1
   fi
 fi
