@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.15.0...v1.16.0) (2026-11-09)
+
+
+### Features
+
+* **cursor-agent:** run batch jobs with the Cursor API key ([#206](https://github.com/dryvist/nix-agent-sandbox/issues/206)) ([963d6be](https://github.com/dryvist/nix-agent-sandbox/commit/963d6be926d8d32d0d4cf4eba1d1fea7e7057d22))
+
 ## [1.15.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.14.0...v1.15.0) (2026-11-09)
 
 
