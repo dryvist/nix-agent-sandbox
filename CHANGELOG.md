@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.16.0...v1.17.0) (2026-11-09)
+
+
+### Features
+
+* **entrypoint:** fetch pull request heads as origin/pr refs ([#208](https://github.com/dryvist/nix-agent-sandbox/issues/208)) ([5bbc749](https://github.com/dryvist/nix-agent-sandbox/commit/5bbc7498b1185e9374a992140152b102d24b5711))
+
 ## [1.16.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.15.0...v1.16.0) (2026-11-09)
 
 
