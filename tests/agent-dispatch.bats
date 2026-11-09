@@ -1949,6 +1949,54 @@ SH
   [ -z "$(git -C "$home/work/repo" for-each-ref --format='%(upstream:short)' "refs/heads/$branch")" ]
 }
 
+@test "the entrypoint fetches pull request heads as origin/pr refs after the clone" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin seed fetch_line pr_line head_line
+  publish_fixture pr-heads 0
+  seed="$BATS_TEST_TMPDIR/pr-heads-seed"
+  git -C "$seed" push -q origin HEAD:refs/pull/7/head
+  bash_stub "$tools/git" <<SH
+printf '%s\\n' "\$*" >>"\$STUB_DIR/git.log"
+exec "$REAL_GIT" "\$@"
+SH
+  bash_stub "$tools/zcode" <<'SH'
+exit 0
+SH
+
+  run_publish pr-heads-run
+  [ "$status" -eq 0 ]
+  fetch_line=$(grep -nFx 'fetch origin' "$STUB_DIR/git.log" | cut -d: -f1)
+  pr_line=$(grep -nFx 'fetch origin +refs/pull/*/head:refs/remotes/origin/pr/*' "$STUB_DIR/git.log" | cut -d: -f1)
+  head_line=$(grep -nFx 'remote set-head origin --auto' "$STUB_DIR/git.log" | cut -d: -f1)
+  [ "$fetch_line" -lt "$pr_line" ]
+  [ "$pr_line" -lt "$head_line" ]
+  [ "$(git -C "$home/work/repo" rev-parse refs/remotes/origin/pr/7)" = "$(git -C "$seed" rev-parse HEAD)" ]
+}
+
+@test "a failed pull request heads fetch does not fail the job" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture pr-heads-fail 0
+  bash_stub "$tools/git" <<SH
+if [ "\${2:-}" = origin ] && [ "\${3:-}" = '+refs/pull/*/head:refs/remotes/origin/pr/*' ]; then
+  echo 'pull-heads fetch refused' >&2
+  exit 1
+fi
+exec "$REAL_GIT" "\$@"
+SH
+  bash_stub "$tools/zcode" <<'SH'
+echo change >tool-file
+git add tool-file
+git commit -q -m 'tool commit'
+SH
+
+  run_publish pr-heads-fail-run
+  [ "$status" -eq 0 ]
+  [[ $output == *"failed to fetch pull request heads"* ]]
+  [[ $output == *"pull-heads fetch refused"* ]]
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
 @test "the entrypoint reports success when PR creation fails and the branch PR is ready" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home tools origin

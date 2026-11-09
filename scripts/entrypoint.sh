@@ -404,6 +404,11 @@ if [ -n "${AGENT_REPO:-}" ]; then
       echo "agent-entrypoint: failed to fetch origin before creating run branch." >&2
       exit 1
     fi
+    # Review jobs reach a pull request head by name (origin/pr/N); a failed
+    # fetch only logs and the run continues.
+    if ! git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'; then
+      echo "agent-entrypoint: failed to fetch pull request heads; continuing without origin/pr refs." >&2
+    fi
     if ! git remote set-head origin --auto; then
       echo "agent-entrypoint: failed to set origin/HEAD before creating run branch." >&2
       exit 1
