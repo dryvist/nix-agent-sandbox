@@ -87,6 +87,13 @@ require_zai_model() {
   unset ZAI_MODEL
 }
 
+require_cursor_api_key() {
+  [ -n "${CURSOR_API_KEY:-}" ] || {
+    echo "agent-entrypoint: CURSOR_API_KEY is missing; set it in OpenBao secrets-external/data/ai/saas/cursor." >&2
+    exit 65
+  }
+}
+
 if [ -f "${HOME}/.agent-env" ]; then
   chmod 600 "${HOME}/.agent-env"
   env_file_error=0
@@ -274,7 +281,7 @@ trap '
       qwen-code) rm -f "${HOME}/.qwen/settings.json" ;;
     esac
   fi
-  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY ZAI_API_KEY ZAI_MODEL VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
+  unset AGENT_ROUTER_KEY ZAI_SUBSCRIPTION_KEY ZAI_API_KEY ZAI_MODEL CURSOR_API_KEY VIKUNJA_API_TOKEN ZAMMAD_HTTP_TOKEN \
     SANDBOX_ROLE_ID SANDBOX_WRAPPED_SECRET_ID AGENT_SANDBOX_ROUTER_KEY_FIELD
 ' EXIT
 if [ "${openbao_child:-}" = 1 ]; then
@@ -336,8 +343,8 @@ if [ -n "${AGENT_PROFILE:-}" ]; then
     exit 64
   fi
   while IFS= read -r var; do
-    # require_zai_model fails closed on an empty ZAI_MODEL with its own exit 65.
-    [ "${var}" != ZAI_MODEL ] || continue
+    # Provider key checks below fail closed with their provider-specific path.
+    case "${var}" in ZAI_MODEL | CURSOR_API_KEY) continue ;; esac
     [ -n "${!var:-}" ] || {
       echo "agent-entrypoint: AGENT_PROFILE '${AGENT_PROFILE}' requires ${var}." >&2
       exit 64
@@ -603,7 +610,8 @@ case "${AGENT_TOOL}" in
     unset zai_subscription_key
     ;;
   cursor-agent)
-    cursor-agent -p --force "${AGENT_PROMPT}" || status=$?
+    require_cursor_api_key
+    cursor-agent --print --output-format text --force "${AGENT_PROMPT}" || status=$?
     ;;
   zcode-web)
     [ "${seen_key}" -eq 1 ] && [ "${seen_token}" -eq 1 ] &&

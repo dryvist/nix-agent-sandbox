@@ -80,10 +80,11 @@
   shell = {
     env = [ ];
   };
-  # Cursor has no router endpoint or batch credential. A terminal session
-  # signs in by hand.
+  # Cursor batch runs use the API key; terminal sessions sign in by
+  # hand.
   cursor-agent = {
-    env = [ ];
+    batchCapable = true;
+    env = [ "CURSOR_API_KEY" ];
     ttyLogin = true;
   };
   # Qwen Code: batch only. The entrypoint runs it on the router's `medium`
