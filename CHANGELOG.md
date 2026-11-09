@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.14.0...v1.15.0) (2026-11-09)
+
+
+### Features
+
+* **opencode-local:** use the local-only router key ([#203](https://github.com/dryvist/nix-agent-sandbox/issues/203)) ([403ec87](https://github.com/dryvist/nix-agent-sandbox/commit/403ec8724102d0f23b3a607b5268206174ad3bf5))
+
 ## [1.14.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.4...v1.14.0) (2026-11-09)
 
 
