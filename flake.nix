@@ -294,8 +294,8 @@
                   .opencode.trackerAccess == false and .["opencode-local"].trackerAccess == false and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .opencode.sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
-                  .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_ROUTER_KEY" and
-                  .["opencode-local"].sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
+                  .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_LOCAL_ROUTER_KEY" and
+                  .["opencode-local"].sandboxRouterKeyField == "sandbox_agent_local_router_llm_router_key" and
                   .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL"] and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
                   .["cursor-agent"].env == [] and .["cursor-agent"].ttyLogin == true and
