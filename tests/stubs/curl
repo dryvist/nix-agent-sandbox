@@ -89,8 +89,12 @@ case "$url" in
   */v1/auth/approle/role/*/secret-id)
     resp='{"wrap_info":{"token":"sandbox-agent-wrapped-id-value"}}'
     ;;
+  */v1/sys/wrapping/unwrap)
+    resp='{"data":{"secret_id":"sandbox-agent-secret-id-value"}}'
+    ;;
   */v1/secret/data/apps/open-llm) resp=$(cat "$STUB_DIR/bucket.json") ;;
   */v1/secrets-external/data/ai/saas/zai) resp=$(cat "$BATS_TEST_DIRNAME/fixtures/zai-external.json") ;;
+  */v1/secrets-external/data/ai/saas/cursor) resp=$(cat "$STUB_DIR/cursor-external.json") ;;
   */v1/github-agents/token)
     if [ -n "${STUB_MINT_FAIL:-}" ]; then
       resp='{"errors":["1 error occurred:\n\t* permission denied\n\n"]}' code=22

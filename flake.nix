@@ -287,7 +287,7 @@
                 EOF
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["dev", "opencode", "opencode-local", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
+                  ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["cursor-agent", "dev", "opencode", "opencode-local", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
                   .zcode.env == [] and .zcode.trackerAccess == false and
                   (.zcode | has("routerKeyField") or has("sandboxRouterKeyField") | not) and
                   ([to_entries[] | select((.key == "zcode" or .key == "opencode" or .key == "opencode-local") | not) | .value] | all(has("trackerAccess") | not)) and
@@ -298,7 +298,8 @@
                   .["opencode-local"].sandboxRouterKeyField == "sandbox_agent_local_router_llm_router_key" and
                   .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL"] and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
-                  .["cursor-agent"].env == [] and .["cursor-agent"].ttyLogin == true and
+                  .["cursor-agent"].batchCapable == true and .["cursor-agent"].env == ["CURSOR_API_KEY"] and
+                  .["cursor-agent"].ttyLogin == true and
                   .["qwen-code"].env == [] and .["qwen-code"].routerKeyField == "QWEN_CODE_ROUTER_KEY" and
                   .["qwen-code"].sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
                   (.["qwen-code"] | has("ttyLogin") | not) and

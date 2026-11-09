@@ -37,6 +37,7 @@ STATE_DIR="${AGENT_DISPATCH_STATE_DIR:-/var/lib/agent-dispatch}"
 APPROLE_DIR="${AGENT_DISPATCH_APPROLE_DIR:-/etc/agent-dispatch/approle}"
 BUCKET=secret/data/apps/open-llm
 ZAI_BUCKET=secrets-external/data/ai/saas/zai
+CURSOR_BUCKET=secrets-external/data/ai/saas/cursor
 GITHUB_API=https://api.github.com
 MAX_TEXT=16384
 JOB_MANAGER=0
@@ -201,6 +202,72 @@ bao_revoke_wrap() {
   bao_req POST sys/wrapping/revoke "$1" >/dev/null 2>&1 || true
 }
 
+sandbox_role_for() {
+  local tool=$1 mode=$2
+  case "$tool:$mode" in
+    zcode:fix) printf '%s' "${AGENT_SANDBOX_ZCODE_READ_ROLE:-sandbox-zcode-read}" ;;
+    zcode:*) printf '%s' "${AGENT_SANDBOX_ZCODE_WRITE_ROLE:-sandbox-zcode-write}" ;;
+    opencode:fix | opencode-local:fix)
+      printf '%s' "${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read}" ;;
+    opencode:* | opencode-local:*)
+      printf '%s' "${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write}" ;;
+    cursor-agent:fix) printf '%s' "${AGENT_SANDBOX_CURSOR_READ_ROLE:-sandbox-cursor-read}" ;;
+    cursor-agent:*) printf '%s' "${AGENT_SANDBOX_CURSOR_WRITE_ROLE:-sandbox-cursor-write}" ;;
+    *)
+      if [ "$mode" = fix ]; then
+        printf '%s' "${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}"
+      else
+        printf '%s' "${AGENT_SANDBOX_WRITE_ROLE:-sandbox-agent-write}"
+      fi
+      ;;
+  esac
+}
+
+# read_cursor_bucket <role> <service-token> [role-id]: authenticate as the
+# job's AppRole to read its Cursor key, then revoke the short-lived token.
+read_cursor_bucket() {
+  local role=$1 service_token=$2 role_id=${3:-} role_response wrapped_response wrap_token
+  local unwrap_response secret_id login_response role_token bucket
+  if [ -z "$role_id" ]; then
+    role_response=$(bao_req GET "auth/approle/role/$role/role-id" "$service_token") || return 1
+    role_id=$(jq -r '.data.role_id // empty' <<<"$role_response") || return 1
+    if [ -z "$role_id" ] || ! single_line "$role_id"; then return 1; fi
+  fi
+  wrapped_response=$(bao_wrap_req "$role" "$service_token") || return 1
+  wrap_token=$(jq -r '.wrap_info.token // empty' <<<"$wrapped_response") || return 1
+  if [ -z "$wrap_token" ] || ! single_line "$wrap_token"; then return 1; fi
+  unwrap_response=$(bao_req POST sys/wrapping/unwrap "$wrap_token") || {
+    bao_revoke_wrap "$wrap_token"
+    return 1
+  }
+  secret_id=$(jq -r '.data.secret_id // empty' <<<"$unwrap_response") || return 1
+  if [ -z "$secret_id" ] || ! single_line "$secret_id"; then return 1; fi
+  login_response=$(curl -sS --fail-with-body --max-time 60 -X POST \
+    --data-binary @<(ROLE_ID="$role_id" SECRET_ID="$secret_id" \
+      jq -n '{role_id: env.ROLE_ID, secret_id: env.SECRET_ID}') \
+    "${BAO_ADDR:?}/v1/auth/approle/login") || {
+    unset secret_id
+    return 1
+  }
+  unset secret_id unwrap_response wrapped_response
+  role_token=$(jq -r '.auth.client_token // empty' <<<"$login_response") || return 1
+  unset login_response
+  if [ -z "$role_token" ] || ! single_line "$role_token"; then return 1; fi
+  bucket=$(bao_req GET "$CURSOR_BUCKET" "$role_token") || {
+    bao_revoke "$role_token"
+    unset role_token
+    return 1
+  }
+  if ! jq -e '.data.data | type == "object"' <<<"$bucket" >/dev/null; then
+    bao_revoke "$role_token"
+    unset role_token
+    return 1
+  fi
+  bao_revoke "$role_token"
+  unset role_token wrap_token
+  printf '%s' "$bucket"
+}
+
 # field <name>: one value from the caller's $bucket (a KV v2 read).
 field() {
   jq -r --arg k "$1" '.data.data[$k] // empty' <<<"$bucket"
@@ -210,10 +277,15 @@ external_field() {
   jq -r --arg k "$1" '.data.data[$k] // empty' <<<"$external_bucket"
 }
 
+cursor_external_field() {
+  jq -r --arg k "$1" '.data.data[$k] // empty' <<<"$cursor_external_bucket"
+}
+
 credential_value() {
   case "$1" in
     ZAI_SUBSCRIPTION_KEY) external_field ZAI_API_KEY ;;
     ZAI_MODEL) external_field ZAI_MODEL ;;
+    CURSOR_API_KEY) cursor_external_field api_key ;;
     *) field "$1" ;;
   esac
 }
@@ -522,7 +594,7 @@ publish_fix_token() {
   local max_bytes="${AGENT_PUBLISH_MAX_BYTES:-8388608}" max_files="${AGENT_FIX_MAX_FILES:-20}"
   local tmp listing member previous path base64_file base_json new_json api_path suppression_rc changes
   local branch sha headline attempt tier signature body resp rc oid created=0 default_branch pr_url pr_number pr_repo repo
-  local tool router_key_field name value external_bucket="" need_zai=0
+  local tool router_key_field name value external_bucket="" cursor_external_bucket="" need_zai=0 need_cursor=0
   local -a credential_names=() credential_values=()
   local -a members=()
   tmp=$(mktemp -d)
@@ -587,9 +659,13 @@ publish_fix_token() {
   mapfile -t credential_names < <(jq -r --arg t "$tool" '.[$t].env[]?' <<<"$AGENT_TASK_PROFILES")
   for name in "${credential_names[@]}"; do
     case "$name" in ZAI_SUBSCRIPTION_KEY | ZAI_MODEL) need_zai=1 ;; esac
+    [ "$name" != CURSOR_API_KEY ] || need_cursor=1
   done
   if [ "$need_zai" -eq 1 ]; then
     external_bucket=$(bao_req GET "$ZAI_BUCKET" "${6:-}") || external_bucket=""
+  fi
+  if [ "$need_cursor" -eq 1 ]; then
+    cursor_external_bucket=$(read_cursor_bucket "$(sandbox_role_for "$tool" fix)" "${6:-}") || cursor_external_bucket=""
   fi
   for name in "${credential_names[@]}"; do
     value=$(credential_value "$name")
@@ -727,7 +803,7 @@ publish_fix_token() {
       return 1
     fi
   done <"$tmp/paths"
-  unset external_bucket value
+  unset external_bucket cursor_external_bucket value
   credential_values=()
   if ! fix_gitleaks "$tmp/scan"; then
     echo "guard: gitleaks" >"$rdir/reason"
@@ -1054,7 +1130,7 @@ deliver() {
       value=$(credential_value "$name")
       single_line "$value" || rc=1
       printf '%s=%s\n' "$name" "$value"
-      JOB_REDACT_VALUES+=("$value")
+      [ -z "$value" ] || JOB_REDACT_VALUES+=("$value")
     done
     if [ -n "$router_key_field" ]; then
       printf 'AGENT_ROUTER_BASE_URL=%s\n' "$AGENT_ROUTER_BASE_URL"
@@ -1074,7 +1150,7 @@ deliver() {
 # the run to a detached waiter. Prints the job JSON; fails closed.
 run_job() {
   local id=$1 run=$2 prompt=$3 rdir="$STATE_DIR/$1/runs/$2"
-  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" mint gh="" budget cid name request tracker_access
+  local tool repo mode tty tty_login cont=0 login tok lease bucket external_bucket="" cursor_external_bucket="" mint gh="" budget cid name request tracker_access
   local router_key_field="" sandbox_role_id="" sandbox_wrapped_secret_id="" sandbox_role="" role_response wrapped_response reason value
   local -a names args
   JOB_REDACT_VALUES=()
@@ -1140,6 +1216,7 @@ run_job() {
   if [ "$tty_login" = 1 ]; then names=(); fi
   for name in "${names[@]}"; do
     value=$(credential_value "$name")
+    [ "$name" != CURSOR_API_KEY ] || continue
     if [ -n "$value" ] && single_line "$value"; then :; else
       abort "$id" "$run" "profile credential is missing or invalid" "$tok"
       return 1
@@ -1207,19 +1284,7 @@ run_job() {
     gh=""
   fi
 
-  case "$tool:$mode" in
-    zcode:fix) sandbox_role=${AGENT_SANDBOX_ZCODE_READ_ROLE:-sandbox-zcode-read} ;;
-    zcode:*) sandbox_role=${AGENT_SANDBOX_ZCODE_WRITE_ROLE:-sandbox-zcode-write} ;;
-    opencode:fix | opencode-local:fix) sandbox_role=${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read} ;;
-    opencode:* | opencode-local:*) sandbox_role=${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write} ;;
-    *)
-      if [ "$mode" = fix ]; then
-        sandbox_role=${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}
-      else
-        sandbox_role=${AGENT_SANDBOX_WRITE_ROLE:-sandbox-agent-write}
-      fi
-      ;;
-  esac
+  sandbox_role=$(sandbox_role_for "$tool" "$mode")
   role_response=$(bao_req GET "auth/approle/role/$sandbox_role/role-id" "$tok") || {
     abort "$id" "$run" "sandbox role lookup failed" "$tok"
     return 1
@@ -1229,6 +1294,20 @@ run_job() {
     abort "$id" "$run" "sandbox role lookup returned no role ID" "$tok"
     return 1
   fi
+  for name in "${names[@]}"; do
+    if [ "$name" = CURSOR_API_KEY ]; then
+      cursor_external_bucket=$(read_cursor_bucket "$sandbox_role" "$tok" "$sandbox_role_id") || {
+        abort "$id" "$run" "Cursor credential read failed" "$tok"
+        return 1
+      }
+      value=$(credential_value CURSOR_API_KEY)
+      if [ -n "$value" ] && ! single_line "$value"; then
+        abort "$id" "$run" "profile credential is missing or invalid" "$tok"
+        return 1
+      fi
+      break
+    fi
+  done
   wrapped_response=$(bao_wrap_req "$sandbox_role" "$tok") || {
     abort "$id" "$run" "sandbox SecretID wrapping failed" "$tok"
     return 1
@@ -1267,7 +1346,7 @@ run_job() {
     abort "$id" "$run" "container start failed" "$tok"
     return 1
   }
-  unset bucket external_bucket value role_response wrapped_response sandbox_role_id sandbox_wrapped_secret_id
+  unset bucket external_bucket cursor_external_bucket value role_response wrapped_response sandbox_role_id sandbox_wrapped_secret_id
   echo running >"$rdir/state"
 
   if [ "$JOB_MANAGER" -eq 1 ]; then

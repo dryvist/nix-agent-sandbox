@@ -10,18 +10,25 @@ Architecture: [docs.jacobpevans.com/autonomous-agents](https://docs.jacobpevans.
 
 ## What this repo owns
 
-| Output | What it is |
-| --- | --- |
-| `packages.<linux>.agent-image` | OCI image: coding CLIs, ZCode Web/Server, Vikunja/Zammad MCP, git/gh/nix, repo-check tools, and nix-ai rendered configs. |
-| `packages.*.agent-cli` | `agent run\|shell` — dispatch via Apple `container` (macOS) or Docker, locally or on a remote Docker host via `--host`. |
-| `packages.*.agent-dispatch` | `agent-dispatch` + `dispatch-ssh`: the job dispatcher for the sandbox Docker host ([below](#host-dispatcher)). |
-| `packages.*.ci-resolver` | `ci-resolver`: reconcile failed workflow runs into check runs, dispatcher jobs, and review requests. |
-| `packages.*.zcode-job` | SSH client for the dispatcher's batch tools (`zcode` by default) with JSON output and an approved repository subset. |
-| `homeManagerModules.zcode-job` | Optional client package and configuration for a restricted SSH alias and native Web/Server URL. |
-| `lib.egressDomains` | The egress allowlist enforced by the Docker host's CONNECT proxy. |
-| `lib.taskProfiles` | Task profiles: the environment variables each `--profile` requires. |
-| `lib.repoGroups` | Named repo groups. |
-| `.github/workflows/build-image.yml` | Builds both architectures and publishes the multi-arch manifest to GHCR. |
+- `packages.<linux>.agent-image`: OCI image with coding CLIs, ZCode Web/Server,
+  Vikunja/Zammad MCP, git/gh/nix, repo checks, and nix-ai rendered configs.
+- `packages.*.agent-cli`: `agent run|shell` dispatches through Apple `container`
+  on macOS or Docker, locally or remotely with `--host`.
+- `packages.*.agent-dispatch`: `agent-dispatch` and `dispatch-ssh` run the job
+  dispatcher for the sandbox Docker host ([below](#host-dispatcher)).
+- `packages.*.ci-resolver`: `ci-resolver` reconciles failed workflow runs into
+  check runs, dispatcher jobs, and review requests.
+- `packages.*.zcode-job`: SSH client for dispatcher batch tools, with JSON
+  output and an approved repository subset.
+- `homeManagerModules.zcode-job`: Optional client package and configuration
+  for a restricted SSH alias and native Web/Server URL.
+- `lib.egressDomains`: Egress allowlist enforced by the Docker host's CONNECT
+  proxy.
+- `lib.taskProfiles`: Task profiles list the environment variables each
+  `--profile` requires.
+- `lib.repoGroups`: Named repo groups.
+- `.github/workflows/build-image.yml`: Builds both architectures and publishes
+  the multi-arch manifest to GHCR.
 
 ## Installation
 
@@ -66,10 +73,10 @@ requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
 `start --tool` selects `zcode` (default), `opencode`, `opencode-local`,
-`opencode-zai`, `cursor-agent`, or `qwen-code`. The dispatcher must report the requested tool, and each job
-reports the tool it ran under. Unapproved repositories and unknown tools fail
-before SSH. Continuations and cancellations check the existing job's tool and
-repository before sending a mutation.
+`opencode-zai`, `cursor-agent`, or `qwen-code`. The dispatcher reports the
+requested tool, and each job reports the tool it ran under. Unapproved
+repositories and unknown tools fail before SSH. Continuations and cancellations
+verify the job's tool and repository before sending a mutation.
 The dispatcher independently checks its current repository access.
 
 Requests contain the repository or job id and task text. Polls use separate
@@ -133,15 +140,18 @@ agent-dispatch check
   `opencode-zai` uses `ZAI_SUBSCRIPTION_KEY` with
   `zai-coding-plan/<ZAI_MODEL>`. `zcode` and `opencode-zai` take `ZAI_MODEL`
   only from OpenBao `secrets-external/ai/saas/zai` and exit 65 when it is
-  empty. `cursor-agent` is terminal-only and signs in interactively. `shell` is
-  accepted only by `fix`: it runs the task text as a `bash` command and needs
-  no model credential. `qwen-code` batch runs use
+  empty. `cursor-agent` batch runs use `CURSOR_API_KEY`, `--print`,
+  `--output-format text`, and `--force` for prompt-free edits. They use the
+  tool's default model; `--tty` keeps interactive sign-in. `shell` is accepted
+  only by `fix`: it runs the task text as a `bash` command and needs no model
+  credential. `qwen-code` batch runs use
   the router's `medium` capability with `sandbox_agent_router_llm_router_key`
   from `secret/data/apps/sandbox-agent-router`, and have no terminal session.
   Each tool runs under its own OpenBao AppRole, and `fix` runs use the read
   role. `zcode` reads only the Z.ai key at `secrets-external/data/ai/saas/zai`,
   and its container renders that key itself, so the dispatcher never delivers
-  it. ZCode sends no `dryvist-sandbox` User-Agent header. `opencode` and
+  it. `cursor-agent` reads its API key through its per-tool AppRole. ZCode
+  sends no `dryvist-sandbox` User-Agent header. `opencode` and
   `opencode-local` read their profile-selected router key from
   `secret/data/apps/sandbox-agent-router` and have no tracker access. Other
   tools keep the shared `sandbox-agent-read` and `sandbox-agent-write` roles,
@@ -165,13 +175,15 @@ agent-dispatch check
 - **`continue`** starts a new container on the same workspace and branch.
 - **`fix`** applies a change to the named branch at the expected 40-character
   commit. Its prompt starts with a
-  `CI-RESOLVER headline=<urlencoded> attempt=<1-9> tier=<t1|t2|t3> signature=<12 lowercase hex>`
-  line; the remaining prompt is the task. The dispatcher publishes the
-  validated change with an API-created commit. It refuses workflow edits, test
-  deletions, added suppression lines, and changes over `AGENT_FIX_MAX_FILES`
+  `CI-RESOLVER headline=<urlencoded> attempt=<1-9> tier=<t1|t2|t3>
+  signature=<12 lowercase hex>` line; the remaining prompt is the task. The
+  dispatcher publishes the validated change with an API-created commit. It
+  refuses workflow edits, test deletions, added suppression lines, and changes
+  over `AGENT_FIX_MAX_FILES`
   (default 20). If the branch did not exist, it creates it at the expected
   commit and opens a PR to the repository's default branch with no label. Tools
-  other than `shell` open that PR as a draft. `shell` results open ready. Fix jobs run once and report the created commit
+  other than `shell` open that PR as a draft; `shell` results open ready. Fix
+  jobs run once and report the created commit
   oid, or an empty `commit` field when there is no change.
 - **`cancel`** kills the container. **`refresh`** settles runs whose waiter
   has gone and removes finished jobs older than `AGENT_DISPATCH_RETENTION`.
@@ -183,14 +195,16 @@ agent-dispatch check
   The container gets a TTY and runs the tool's own interactive session with no
   prompt. A repo-less terminal is available only for `zcode`; it has no GitHub
   token, repo volume or publishing step, and clones use the public tree in
-  `GIT_MIRROR_URL`. Repo-bound sessions retain the existing publish flow. A tool whose
-  profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by hand
-  inside the session and gets no router key or provider key. A hang-up or detach kills the
-  container and the run settles as cancelled. A terminal job has no
-  `continue`.
-- **Results**: each finished run records a fixed six-line result (job, tool,
-  repo, state, PR URL, duration) in a Vikunja project. It posts the same result
-  to ntfy only when `AGENT_DISPATCH_NTFY_JOBS=1`. No model output goes into it.
+  `GIT_MIRROR_URL`. Repo-bound sessions retain the existing publish flow. A
+  tool whose profile sets `ttyLogin` (zcode, opencode, cursor-agent) signs in by
+  hand inside the session and gets no router key or provider key. A hang-up or
+  detach kills the container and the run settles as cancelled. A terminal job
+  has no `continue`.
+- **Results**: dispatcher responses include the last 60 redacted container log
+  lines, keeping the final tool error available when a run fails. Each finished
+  run also records a fixed six-line result (job, tool, repo, state, PR URL,
+  duration) in a Vikunja project and posts it to ntfy only when
+  `AGENT_DISPATCH_NTFY_JOBS=1`; that record contains no model output.
 
 The image also runs the upstream ZCode Web/Server and includes
 `zcode-web-task`. The task client reads a prompt from stdin and writes a JSON
@@ -241,17 +255,19 @@ passed as container arguments or mounts.
 | Name | Use |
 | --- | --- |
 | `BAO_ADDR` | OpenBao endpoint passed to the container |
-| `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist supplied to the dispatcher |
+| `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist |
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
-| `AGENT_DISPATCH_NTFY_TOPIC` | ntfy topic for job results and login alerts (default `ai-jobs`) |
-| `AGENT_DISPATCH_NTFY_JOBS` | Post per-job results to ntfy only when exactly `1` (default off; Nix package option `ntfyJobs`, default `false`) |
+| `AGENT_DISPATCH_NTFY_TOPIC` | Result and alert topic (`ai-jobs` default) |
+| `AGENT_DISPATCH_NTFY_JOBS` | Post results to ntfy when `1` (default off) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
 | `AGENT_FIX_MAX_CONCURRENT` | running fix jobs allowed at once (default 3) |
 | `AGENT_FIX_MAX_FILES` | files a fix job may publish (default 20) |
-| `AGENT_PUBLISH_MAX_BYTES` | encoded change size and copied fix output cap (default 8 MiB) |
-| `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL`, `AGENT_MEMORY`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | as for `agent` |
+| `AGENT_PUBLISH_MAX_BYTES` | Encoded change/fix output cap (8 MiB default) |
+| `AGENT_IMAGE`, `AGENT_NETWORK`, `AGENT_PROXY_URL` | As for `agent` |
+| `AGENT_MEMORY`, `AGENT_CPUS` | As for `agent` |
+| `AGENT_PIDS_LIMIT`, `AGENT_TIMEOUT` | As for `agent` |
 
 Profile fields read: external profile values requested by a tool, and fields
 from the router-key and tracker-token leaves used by the entrypoint.
@@ -263,13 +279,15 @@ delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
 
 | Input | Meaning |
 | --- | --- |
-| `AGENT_TOOL`, `AGENT_PROFILE`, `AGENT_REPO`, `AGENT_RUN_ID` | tool, its task profile, repo, job id |
-| `AGENT_MODE=fix`, `AGENT_BRANCH`, `AGENT_EXPECTED_SHA` | fix mode and the expected branch head |
+| `AGENT_TOOL`, `AGENT_PROFILE` | Tool and profile |
+| `AGENT_REPO`, `AGENT_RUN_ID` | Repo and job id |
+| `AGENT_MODE=fix`, `AGENT_BRANCH` | Fix mode and branch |
+| `AGENT_EXPECTED_SHA` | Expected branch head |
 | `AGENT_CONTINUE=1` | a continued run on an existing workspace |
-| `AGENT_TTY=1` | run the tool's own interactive session on the attached terminal |
-| `~/.agent-env` | Start job: GitHub token, profile values, and optional router values. Fix job: profile values and optional router values. |
+| `AGENT_TTY=1` | Run the tool's interactive session on the attached terminal |
+| `~/.agent-env` | Start GitHub/profile keys; fix profile/router keys |
 | `~/.agent-prompt` | the prompt or message |
-| `~/work/.agent-pr-url` | written by the entrypoint after the tool exits; read by the dispatcher |
+| `~/work/.agent-pr-url` | Written after exit; read by the dispatcher |
 
 ## CI resolver workbook
 
@@ -287,7 +305,7 @@ entries into that checkout's `automation/ci-workbook/`; it changes files only.
 
 | Name | Use |
 | --- | --- |
-| `CI_RESOLVER_APP_ID` | GitHub App ID for the check runs used by the resolver; required for automatic merges |
+| `CI_RESOLVER_APP_ID` | GitHub App ID for checks; needed for automatic merges |
 
 `CI_RESOLVER_MODEL_TIERS` sets the ordered, comma-separated model tiers.
 The default, `t2,t3`, tries `opencode-local` first and `opencode-zai` only after

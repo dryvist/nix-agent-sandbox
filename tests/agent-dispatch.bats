@@ -11,7 +11,8 @@ bats_require_minimum_version 1.5.0
 
 SECRETS=(role-id-value secret-id-value zai-secret-value
   zcode-router-secret-value opencode-router-secret-value cursor-router-secret-value
-  cursor-secret-value qwen-code-router-secret-value vikunja-secret-value zammad-secret-value
+  cursor-secret-value sandbox-agent-secret-id-value qwen-code-router-secret-value
+  vikunja-secret-value zammad-secret-value
   sandbox-router-secret-value sandbox-agent-role-id-value sandbox-agent-wrapped-id-value
   splunk-search-secret-value ntfy-secret-value ntfy-alert-token ghs_minted_secret s.tok)
 
@@ -24,6 +25,7 @@ setup() {
   : >"$STUB_DIR/argv.log"
   : >"$STUB_DIR/calls.log"
   cp "$BATS_TEST_DIRNAME/fixtures/bucket.json" "$STUB_DIR/"
+  cp "$BATS_TEST_DIRNAME/fixtures/cursor-external.json" "$STUB_DIR/"
   export REAL_GIT="$(command -v git)"
   unset STUB_FIX_DIR STUB_FIX_CONTAINERS STUB_FIX_RUNNING_COUNT STUB_FIX_BRANCH_EXISTS \
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
@@ -398,6 +400,61 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
   no_secret_on_a_command_line
 }
 
+@test "Cursor key reads use the job AppRole and deliver only its API key field" {
+  local env_data login_record cursor_record role_token
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  grep -qx 'CURSOR_API_KEY=cursor-secret-value' <<<"$env_data"
+  grep -q 'GET https://bao.test/v1/auth/approle/role/sandbox-cursor-write/role-id' "$STUB_DIR/calls.log"
+  login_record=$(http_rec 'POST https://bao.test/v1/auth/approle/login')
+  grep -Fq 'sandbox-agent-role-id-value' "$login_record.body"
+  role_token="s.tok$(basename "$login_record" | cut -d. -f2)"
+  cursor_record=$(http_rec 'GET https://bao.test/v1/secrets-external/data/ai/saas/cursor')
+  grep -Fxq "X-Vault-Token: $role_token" "$cursor_record.hdr"
+  grep -Fxq "curl POST https://bao.test/v1/auth/token/revoke-self token=$role_token" "$STUB_DIR/calls.log"
+  [[ $output != *cursor-secret-value* && $stderr != *cursor-secret-value* ]]
+  ! grep -Fq 'cursor-secret-value' "$STUB_DIR/argv.log"
+  no_secret_on_a_command_line
+}
+
+@test "a malformed Cursor key read revokes its token and refuses the job" {
+  local login_record role_token
+  printf '%s\n' '{"data":{"data":"not-an-object"}}' >"$STUB_DIR/cursor-external.json"
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "Cursor credential read failed" ]
+  login_record=$(http_rec 'POST https://bao.test/v1/auth/approle/login')
+  role_token="s.tok$(basename "$login_record" | cut -d. -f2)"
+  grep -Fxq "curl POST https://bao.test/v1/auth/token/revoke-self token=$role_token" "$STUB_DIR/calls.log"
+  [ ! -e "$STUB_DIR/cp.1.tar" ]
+}
+
+@test "an empty Cursor key reaches the entrypoint for its path-specific failure" {
+  local env_data
+  jq '.data.data.api_key = ""' "$STUB_DIR/cursor-external.json" >"$STUB_DIR/cursor-empty.json"
+  mv "$STUB_DIR/cursor-empty.json" "$STUB_DIR/cursor-external.json"
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  env_data=$(tar -xOf "$STUB_DIR/cp.1.tar" .agent-env)
+  grep -qx 'CURSOR_API_KEY=' <<<"$env_data"
+  no_secret_on_a_command_line
+}
+
+@test "failed Cursor runs retain the final tool error in their result" {
+  local id result
+  printf '%s\n' 'Cursor request started' 'ERROR cursor request failed' >"$STUB_DIR/container.log"
+  export STUB_DOCKER_LOG_FILE="$STUB_DIR/container.log" STUB_EXIT=37
+  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = failed ]
+  [ "$(jq -r .reason <<<"$output")" = 'exit 37' ]
+  id=$(jq -r .job <<<"$output")
+  result="$AGENT_DISPATCH_STATE_DIR/$id/runs/1/result.txt"
+  [ "$(tail -n 1 "$result")" = 'ERROR cursor request failed' ]
+  jq -e --arg line 'ERROR cursor request failed' '.output | contains($line)' <<<"$output"
+}
+
 @test "profiles without routerKeyField receive neither router variable" {
   local dispatcher env_data
   dispatcher=$(make_dispatcher '{"zcode":{"env":[],"ttyLogin":true}}')
@@ -446,7 +503,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 }
 
 @test "each tool and mode selects its own sandbox role; env overrides win" {
-  local row tool mode role
+  local row tool mode role expected_role_reads
   local -a rows=(
     "zcode start sandbox-zcode-write"
     "zcode fix sandbox-zcode-read"
@@ -456,6 +513,8 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     "opencode-local fix sandbox-opencode-read"
     "opencode-zai start sandbox-agent-write"
     "opencode-zai fix sandbox-agent-read"
+    "cursor-agent start sandbox-cursor-write"
+    "cursor-agent fix sandbox-cursor-read"
     "qwen-code start sandbox-agent-write"
   )
   export STUB_CONTENTS_404=1 STUB_FIX_BRANCH_EXISTS=1
@@ -474,7 +533,9 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     grep -q "GET https://bao.test/v1/auth/approle/role/$role/role-id" "$STUB_DIR/calls.log"
     grep -Fx "bao write -address=https://bao.test -wrap-ttl=15m -format=json -f auth/approle/role/$role/secret-id" \
       "$STUB_DIR/argv.log"
-    [ "$(grep -c 'role-id' "$STUB_DIR/calls.log")" -eq 1 ]
+    expected_role_reads=1
+    if [ "$tool" = cursor-agent ] && [ "$mode" = fix ]; then expected_role_reads=2; fi
+    [ "$(grep -c 'role-id' "$STUB_DIR/calls.log")" -eq "$expected_role_reads" ]
     rm -rf "$STUB_DIR/fix"
   done
 
@@ -492,6 +553,15 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     "$AGENT_DISPATCH_BIN/agent-dispatch" start opencode dryvist/nix-ai "do the thing"
   [ "$status" -eq 0 ]
   grep -q 'GET https://bao.test/v1/auth/approle/role/custom-opencode-write/role-id' "$STUB_DIR/calls.log"
+
+  : >"$STUB_DIR/calls.log"
+  set_fix_outputs "$(fix_add_json src/role.txt 'role content')"
+  run --separate-stderr env AGENT_SANDBOX_CURSOR_READ_ROLE=custom-cursor-read \
+    "$AGENT_DISPATCH_BIN/agent-dispatch" fix cursor-agent dryvist/nix-ai feature/ci-fix "$FIX_SHA" \
+    "$(fix_prompt "role check")"
+  [ "$status" -eq 0 ]
+  grep -q 'GET https://bao.test/v1/auth/approle/role/custom-cursor-read/role-id' "$STUB_DIR/calls.log"
+  run ! grep -q 'sandbox-cursor-read' "$STUB_DIR/calls.log"
 
   : >"$STUB_DIR/calls.log"
   set_fix_outputs "$(fix_add_json src/role.txt 'role content')"
@@ -803,14 +873,6 @@ scope_refused() {
   local dispatcher
   dispatcher=$(make_dispatcher '{"cursor-agent":{"env":[],"ttyLogin":true}}')
   run --separate-stderr "$dispatcher" start cursor-agent dryvist/nix-ai "do the thing"
-  [ "$status" -eq 64 ]
-  [[ $stderr == *"cursor-agent runs only as a terminal session"* ]]
-  [ ! -s "$STUB_DIR/argv.log" ]
-  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
-}
-
-@test "cursor-agent batch jobs do not receive a SaaS API key" {
-  run --separate-stderr dispatch start cursor-agent dryvist/nix-ai "do the thing"
   [ "$status" -eq 64 ]
   [[ $stderr == *"cursor-agent runs only as a terminal session"* ]]
   [ ! -s "$STUB_DIR/argv.log" ]
@@ -1569,48 +1631,18 @@ SH
   [ ! -e "$home/.agent-env" ]
 }
 
-@test "Cursor agent receives its native batch command form" {
+@test "cursor-agent terminal sessions run without a Cursor key" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home="$BATS_TEST_TMPDIR/tools-home" tools="$BATS_TEST_TMPDIR/agent-tools"
+  local home="$BATS_TEST_TMPDIR/cursor-key-home" tools="$BATS_TEST_TMPDIR/cursor-key-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"cursor-agent":{"env":[],"routerKeyField":"cursor_router_key"}}' \
+  printf '%s\n' '{"cursor-agent":{"batchCapable":true,"env":["CURSOR_API_KEY"],"ttyLogin":true}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
-bash_stub "$tools/cursor-agent" <<'SH'
-printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
-test "$AGENT_ROUTER_BASE_URL" = https://router.test/v1
-test "$AGENT_ROUTER_KEY" = cursor-router-test-key
-test -z "${ZAI_SUBSCRIPTION_KEY:-}"
-test -z "${CURSOR_API_KEY:-}"
-SH
-  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
-    'AGENT_ROUTER_KEY=cursor-router-test-key' >"$home/.agent-env"
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
-}
-
-@test "cursor-agent profile runs without a credential value" {
-  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home="$BATS_TEST_TMPDIR/cursor-key-home" tools="$BATS_TEST_TMPDIR/cursor-key-tools"
-  mkdir -p "$home" "$tools"
-  printf '%s\n' '{"cursor-agent":{"env":[],"ttyLogin":true}}' >"$home/.agent-profiles.json"
-  bash_stub "$tools/id" <<'SH'
-echo 1000
-SH
   bash_stub "$tools/cursor-agent" <<'SH'
-printf '%s\n' "$@" >"$STUB_DIR/cursor-argv"
 echo "${CURSOR_API_KEY:-unset}" >"$STUB_DIR/cursor-key"
 SH
-  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
-    AGENT_TOOL=cursor-agent AGENT_PROMPT='cursor prompt' bash -euo pipefail "$ENTRYPOINT"
-  [ "$status" -eq 0 ]
-  [ "$(cat "$STUB_DIR/cursor-argv")" = $'-p\n--force\ncursor prompt' ]
-  [ "$(cat "$STUB_DIR/cursor-key")" = unset ]
-
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=cursor-agent AGENT_TTY=1 bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
@@ -2540,6 +2572,51 @@ SH
     AGENT_TOOL=zcode AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 37 ]
   [[ $output == *"exited with status 37; refusing to publish"* ]]
+}
+
+@test "Cursor batch uses print text output, force mode, and preserves tool failure" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/cursor-batch-home" tools="$BATS_TEST_TMPDIR/cursor-batch-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"cursor-agent":{"batchCapable":true,"env":["CURSOR_API_KEY"],"ttyLogin":true}}' \
+    >"$home/.agent-profiles.json"
+  printf '%s\n' 'CURSOR_API_KEY=cursor-test-value' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/cursor-agent" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/cursor-agent-argv"
+echo 'ERROR cursor request failed' >&2
+exit 37
+SH
+  run --separate-stderr env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    AGENT_SANDBOX=1 AGENT_TOOL=cursor-agent AGENT_PROFILE=cursor-agent \
+    AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 37 ]
+  [ "$(cat "$STUB_DIR/cursor-agent-argv")" = $'--print\n--output-format\ntext\n--force\nReview this change' ]
+  [[ $stderr == *'ERROR cursor request failed'* ]]
+  [[ $stderr == *'cursor-agent exited with status 37; refusing to publish.'* ]]
+}
+
+@test "Cursor batch exits 65 with the OpenBao path when its key is empty" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/cursor-empty-home" tools="$BATS_TEST_TMPDIR/cursor-empty-tools"
+  mkdir -p "$home" "$tools"
+  printf '%s\n' '{"cursor-agent":{"batchCapable":true,"env":["CURSOR_API_KEY"],"ttyLogin":true}}' \
+    >"$home/.agent-profiles.json"
+  printf '%s\n' 'CURSOR_API_KEY=' >"$home/.agent-env"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/cursor-agent" <<'SH'
+printf '%s\n' "$@" >"$STUB_DIR/cursor-agent-argv"
+SH
+  run --separate-stderr env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    AGENT_SANDBOX=1 AGENT_TOOL=cursor-agent AGENT_PROFILE=cursor-agent \
+    AGENT_PROMPT='Review this change' bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 65 ]
+  [ "$stderr" = 'agent-entrypoint: CURSOR_API_KEY is missing; set it in OpenBao secrets-external/data/ai/saas/cursor.' ]
+  [ ! -e "$STUB_DIR/cursor-agent-argv" ]
 }
 
 @test "Codex entrypoint closes stdin and requires a nonempty final message" {
