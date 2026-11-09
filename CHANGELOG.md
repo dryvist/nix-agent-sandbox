@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.3...v1.13.4) (2026-11-09)
+
+
+### Bug Fixes
+
+* **entrypoint:** open ready PRs and report success when the branch PR exists ([#198](https://github.com/dryvist/nix-agent-sandbox/issues/198)) ([af8d09d](https://github.com/dryvist/nix-agent-sandbox/commit/af8d09d41bd11b97529efdd8c4dfd360c2b2cdef))
+
 ## [1.13.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.13.2...v1.13.3) (2026-11-06)
 
 
