@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.1...v1.19.2) (2026-11-11)
+
+
+### Bug Fixes
+
+* **dispatch:** accept the JacobPEvans-ai owner in the repository guard ([#216](https://github.com/dryvist/nix-agent-sandbox/issues/216)) ([04b5b9b](https://github.com/dryvist/nix-agent-sandbox/commit/04b5b9b1733de37d6451d7a8c203c3fca2d57d39))
+
 ## [1.19.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.0...v1.19.1) (2026-11-11)
 
 
