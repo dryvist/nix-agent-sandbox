@@ -214,6 +214,8 @@ let
         "Global/Emacs.gitignore"
       ]
     } > $out/etc/gitignore
+    # direnv's .envrc is committed by convention; the Python template ignores it.
+    echo '!.envrc' >> $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
     [core]
       excludesFile = /etc/gitignore
