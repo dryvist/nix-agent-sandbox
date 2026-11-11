@@ -849,11 +849,10 @@ pr_file="${workdir}/.agent-pr-url"
 rm -rf "${pr_file}"
 if [ -n "${branch}" ] && [ -n "$(git status --porcelain)" ]; then
   git add -A
+  # The prompt never enters published text: commit messages and PR bodies are public on public repos.
   git commit -m "feat(agent): ${AGENT_TOOL} run ${AGENT_RUN_ID}
 
-${AGENT_PROMPT:+Prompt: ${AGENT_PROMPT}
-
-}Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
+Assisted-by: ${AGENT_TOOL} (nix-agent-sandbox)"
 fi
 # Commits the tool made itself are published too. Before publishing, gitleaks
 # scans every new commit (redacted output). Any finding, or a scanner error
@@ -877,13 +876,7 @@ Agent-authored change.
 
 - Tool: ${AGENT_TOOL}
 - Run id: ${AGENT_RUN_ID}
-- Exit status: ${status}
-
-Prompt:
-
-\`\`\`
-${AGENT_PROMPT:-}
-\`\`\`")"; then
+- Exit status: ${status}")"; then
     # A continued run pushes to the branch of the PR it already opened.
     pr_created=0
   fi

@@ -1951,10 +1951,12 @@ git rm -q old-file
 git add tool-file
 git commit -q -m "tool commit"
 SH
-  run_publish j-1
+  run_publish j-1 AGENT_PROMPT='private brief text'
   [ "$status" -eq 0 ]
   grep -Fq 'pr create --head agent/zcode/j-1' "$STUB_DIR/pr-create.argv"
   grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-create.argv"
+  run ! grep -Fq 'private brief text' "$STUB_DIR/pr-create.argv"
+  run ! grep -Fq 'private brief text' "$STUB_DIR/commit.json"
   run ! grep -Fq 'human:review' "$STUB_DIR/pr-create.argv"
   run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
