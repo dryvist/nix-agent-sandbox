@@ -45,9 +45,10 @@ setup() {
       ln -s /nix/store result
       git add -A
       test -z "$(git status --porcelain)"
-      touch tests/test_x.py .envrc
+      mkdir -p lib build
+      touch tests/test_x.py .envrc lib/x.nix build/x.sh
       git add -A
-      test "$(git diff --cached --name-only | sort | tr "\n" " ")" = ".envrc tests/test_x.py "
+      test "$(git diff --cached --name-only | sort | tr "\n" " ")" = ".envrc build/x.sh lib/x.nix tests/test_x.py "
     '
   [ "$status" -eq 0 ]
 }

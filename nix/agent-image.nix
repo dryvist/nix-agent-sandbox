@@ -199,23 +199,21 @@ let
     nobody:x:65534:
     EOF
     echo "hosts: files dns" > $out/etc/nsswitch.conf
-    # Caches, build output and editor files never reach an agent commit: the
-    # publish step stages with `git add -A`, so they are excluded globally
-    # from the maintained github/gitignore templates.
-    cat ${
-      lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
-        "Python.gitignore"
-        "Node.gitignore"
-        "Nix.gitignore"
-        "Global/macOS.gitignore"
-        "Global/VisualStudioCode.gitignore"
-        "Global/JetBrains.gitignore"
-        "Global/Vim.gitignore"
-        "Global/Emacs.gitignore"
-      ]
+    # Caches, Nix result links and editor/OS files never reach an agent
+    # commit: the publish step stages with `git add -A`. Only templates with
+    # no generic directory names (lib/, build/, dist/, out/) are global; a
+    # repository's own build output belongs in its own .gitignore.
+    {
+      cat ${
+        lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
+          "Nix.gitignore"
+          "Global/macOS.gitignore"
+          "Global/VisualStudioCode.gitignore"
+          "Global/Vim.gitignore"
+        ]
+      }
+      printf '%s\n' __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ node_modules/
     } > $out/etc/gitignore
-    # direnv's .envrc is committed by convention; the Python template ignores it.
-    echo '!.envrc' >> $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
     [core]
       excludesFile = /etc/gitignore
