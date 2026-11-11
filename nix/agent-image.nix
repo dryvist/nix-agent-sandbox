@@ -201,18 +201,18 @@ let
     echo "hosts: files dns" > $out/etc/nsswitch.conf
     # Caches, Nix result links and editor/OS files never reach an agent
     # commit: the publish step stages with `git add -A`. Only templates with
-    # no generic directory names (lib/, build/, dist/, out/) are global; a
-    # repository's own build output belongs in its own .gitignore.
+    # no generic names are global; a repository's own build output belongs in
+    # its own .gitignore.
     {
       cat ${
         lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
-          "Nix.gitignore"
           "Global/macOS.gitignore"
           "Global/VisualStudioCode.gitignore"
-          "Global/Vim.gitignore"
         ]
       }
-      printf '%s\n' __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ node_modules/
+      # Root-anchored Nix links and editor swap files: unanchored names would hide source paths.
+      printf '%s\n' __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ node_modules/ \
+        /result '/result-*' .direnv/ '*.swp' '*.swo'
     } > $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
     [core]
