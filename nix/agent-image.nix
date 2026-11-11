@@ -43,7 +43,6 @@
   renderAutonomous,
   repoCheckToolchain,
   zcodeWeb,
-  gitignoreTemplates,
 }:
 
 let
@@ -200,19 +199,11 @@ let
     EOF
     echo "hosts: files dns" > $out/etc/nsswitch.conf
     # Caches, Nix result links and editor/OS files never reach an agent
-    # commit: the publish step stages with `git add -A`. Only templates with
-    # no generic names are global; a repository's own build output belongs in
-    # its own .gitignore.
-    {
-      cat ${
-        lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
-          "Global/macOS.gitignore"
-        ]
-      }
-      # Root-anchored Nix links and editor swap files: unanchored names would hide source paths.
-      printf '%s\n' __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ node_modules/ \
-        /result '/result-*' .direnv/ '*.swp' '*.swo'
-    } > $out/etc/gitignore
+    # commit: the publish step stages with `git add -A`. An explicit list with
+    # no generic names; a repository's own build output belongs in its own
+    # .gitignore.
+    printf '%s\n' .DS_Store __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ \
+      node_modules/ /result '/result-*' .direnv/ '*.swp' '*.swo' > $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
     [core]
       excludesFile = /etc/gitignore

@@ -920,23 +920,6 @@
         "type": "github"
       }
     },
-    "gitignoreTemplates": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1793480874,
-        "narHash": "sha256-uVnHEaFix6MHTDPr5M9+UNNcN3t4ZcBmniLzUtEU3Xk=",
-        "owner": "github",
-        "repo": "gitignore",
-        "rev": "80c8f6d08a318643d19a21be55e8e0f0322088c0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "github",
-        "repo": "gitignore",
-        "rev": "80c8f6d08a318643d19a21be55e8e0f0322088c0",
-        "type": "github"
-      }
-    },
     "herdr-hail-src": {
       "flake": false,
       "locked": {
@@ -1785,7 +1768,6 @@
     },
     "root": {
       "inputs": {
-        "gitignoreTemplates": "gitignoreTemplates",
         "llm-agents": "llm-agents",
         "nix-ai": "nix-ai",
         "nixpkgs": "nixpkgs_2",
