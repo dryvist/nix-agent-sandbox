@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.2...v1.19.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **zcode-web:** take the model from ZAI_MODEL through one shared module ([#219](https://github.com/dryvist/nix-agent-sandbox/issues/219)) ([d3ec040](https://github.com/dryvist/nix-agent-sandbox/commit/d3ec0400121ff8d0a6fa807306fb209be2ea815e))
+
 ## [1.19.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.1...v1.19.2) (2026-11-11)
 
 
