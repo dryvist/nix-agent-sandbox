@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.19.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.3...v1.19.4) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-image:** anchor Nix result links in the global excludes ([a5e57e0](https://github.com/dryvist/nix-agent-sandbox/commit/a5e57e01700b5d95621a811e71973a6839281d98))
+* **agent-image:** drop the editor template from the global excludes ([44f64be](https://github.com/dryvist/nix-agent-sandbox/commit/44f64beec16c29ad733627deb0990d1ff03cb1b9))
+* **agent-image:** exclude caches and build output globally in git ([cf34617](https://github.com/dryvist/nix-agent-sandbox/commit/cf34617cfcd6007110336cbc80aef4394118abf9))
+* **agent-image:** exclude caches and build output globally in git ([#221](https://github.com/dryvist/nix-agent-sandbox/issues/221)) ([6f5626c](https://github.com/dryvist/nix-agent-sandbox/commit/6f5626c759216a97689d779c71712846513d93f9))
+* **agent-image:** keep .envrc stageable under the global excludes ([be20093](https://github.com/dryvist/nix-agent-sandbox/commit/be20093f6c69c4d3d810913f0cf6586fbcfafc6f))
+* **agent-image:** limit global excludes to caches and editor files ([b55a473](https://github.com/dryvist/nix-agent-sandbox/commit/b55a47312593112049c11cd794d731abc70cf5c7))
+* **agent-image:** point git at the image system gitconfig ([a90ed22](https://github.com/dryvist/nix-agent-sandbox/commit/a90ed22fdc4a36aec49facd4d1d93a19cc3dd85d))
+
 ## [1.19.3](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.2...v1.19.3) (2026-11-11)
 
 
