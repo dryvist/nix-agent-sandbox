@@ -266,6 +266,8 @@ dockerTools.streamLayeredImage {
       "SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "NIX_SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "GIT_SSL_CAINFO=${cacert}/etc/ssl/certs/ca-bundle.crt"
+      # nixpkgs git reads its system config from its own store path; point it at the image's.
+      "GIT_CONFIG_SYSTEM=/etc/gitconfig"
       # This is the bundled provider catalog consumed alongside ZCode's
       # personal provider config (see nix-ai modules/zcode/web.nix).
       "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${zcodeWeb}/lib/zcode/apps/zcode-cli/packages/cli/dist/provider/zcode-builtin.json"
