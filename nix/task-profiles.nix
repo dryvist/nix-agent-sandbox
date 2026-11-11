@@ -99,6 +99,7 @@
     batchCapable = true;
     env = [
       "ZAI_SUBSCRIPTION_KEY"
+      "ZAI_MODEL"
       "AGENT_WEB_TOKEN"
     ];
   };

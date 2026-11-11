@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpath, mkdir, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { getZaiModel } from "./zcode-model.mjs";
 
 function fail(message) {
   console.error(`zcode-web-task: ${message}`);
@@ -18,21 +19,33 @@ const workspaceName = operation === "resume" ? args[2] : args[1];
 const clientPath = process.env.ZCODE_WEB_CLIENT;
 const port = process.env.PORT || "8080";
 let token = process.env.ZCODE_SERVER_AUTH_TOKEN || process.env.AGENT_WEB_TOKEN;
-if (!token) {
-  const envFile = process.env.AGENT_SERVICE_ENV_FILE || "/run/agent-service.env";
-  const values = new Map();
-  const content = await readFile(envFile, "utf8").catch(() => "");
-  for (const line of content.split(/\r?\n/)) {
-    if (!line) continue;
-    const separator = line.indexOf("=");
-    if (separator < 1) fail("the authenticated ZCode Web service is unavailable");
-    const name = line.slice(0, separator);
-    if (!["AGENT_WEB_TOKEN", "ZAI_SUBSCRIPTION_KEY"].includes(name) || values.has(name)) {
-      fail("the authenticated ZCode Web service is unavailable");
-    }
-    values.set(name, line.slice(separator + 1));
+const envFile = process.env.AGENT_SERVICE_ENV_FILE || "/run/agent-service.env";
+const values = new Map();
+const content = await readFile(envFile, "utf8").catch(() => "");
+for (const line of content.split(/\r?\n/)) {
+  if (!line) continue;
+  const separator = line.indexOf("=");
+  if (separator < 1) fail("the authenticated ZCode Web service is unavailable");
+  const name = line.slice(0, separator);
+  const value = line.slice(separator + 1);
+  if (
+    !["AGENT_WEB_TOKEN", "ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL"].includes(name) ||
+    values.has(name) ||
+    !value
+  ) {
+    fail("the authenticated ZCode Web service is unavailable");
   }
-  token = values.get("AGENT_WEB_TOKEN");
+  values.set(name, value);
+}
+token ||= values.get("AGENT_WEB_TOKEN");
+if (!process.env.ZAI_MODEL && values.has("ZAI_MODEL")) {
+  process.env.ZAI_MODEL = values.get("ZAI_MODEL");
+}
+let modelId;
+try {
+  modelId = getZaiModel();
+} catch (error) {
+  fail(error.message);
 }
 if (!token || !clientPath) fail("the authenticated ZCode Web service is unavailable");
 
@@ -68,7 +81,6 @@ try {
   const provider = view.providers.find(
     (item) => item.templateId === "zai-api" && item.providerName === "nix-agent-sandbox",
   );
-  const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3";
   const model = provider?.models.find((item) => item.modelId === modelId);
   const reasoning = model?.config?.optionSpecs?.reasoningLevel?.values;
   if (!provider || !model || !Array.isArray(reasoning) || reasoning.length === 0) {
@@ -80,6 +92,7 @@ try {
     options: { reasoningLevel: reasoning.at(-1) },
   };
 
+  console.log(`model=${modelId}`);
   if (operation === "start") {
     const created = await taskService.createTask({
       workspacePath,

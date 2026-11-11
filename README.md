@@ -213,8 +213,12 @@ The image also runs the upstream ZCode Web/Server and includes
 `created` event with the native task id before sending it, followed by a
 terminal event. Its `start <workspace-name>` and `resume <task-id>
 <workspace-name>` commands use the same persistent workspace and task store as
-the Web UI. A controller's own cancellation or timeout state takes precedence
-over a native task's terminal outcome.
+the Web UI. The service environment file (by default
+`/run/agent-service.env`) contains `ZAI_SUBSCRIPTION_KEY`, `ZAI_MODEL`, and
+`AGENT_WEB_TOKEN`; the supervisor and task client read the model from this
+shared file. The entrypoint loads it for the supervisor, and the task client
+loads it directly. A controller's own cancellation or timeout state takes
+precedence over a native task's terminal outcome.
 
 `dispatch-ssh` is the forced command for an `authorized_keys` entry. It
 reads `SSH_ORIGINAL_COMMAND` and accepts only the seven verbs. `tty <tool>` is

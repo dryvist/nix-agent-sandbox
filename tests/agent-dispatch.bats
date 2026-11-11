@@ -1432,6 +1432,8 @@ SH
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/zcode-argv")" = $'--prompt\nfix the test\n--mode\nyolo' ]
   [ "$(cat "$STUB_DIR/zcode-configured")" = 'zai-batch-value override-model-value' ]
+  [ "$(grep -c '^model=' <<<"$output")" -eq 1 ]
+  [[ "$output" == *$'model=override-model-value'* ]]
   [ -d "$home/.zcode" ]
 }
 
@@ -1653,8 +1655,9 @@ SH
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/service-home" tools="$BATS_TEST_TMPDIR/service-tools"
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"zcode-web":{"env":["ZAI_SUBSCRIPTION_KEY","AGENT_WEB_TOKEN"]}}' >"$home/.agent-profiles.json"
-  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'AGENT_WEB_TOKEN=token-test-value' >"$home/service.env"
+  printf '%s\n' '{"zcode-web":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL","AGENT_WEB_TOKEN"]}}' >"$home/.agent-profiles.json"
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'ZAI_MODEL=placeholder-web-model-id' \
+    'AGENT_WEB_TOKEN=token-test-value' >"$home/service.env"
   bash_stub "$tools/id" <<'SH'
 echo 1000
 SH
@@ -1662,7 +1665,7 @@ SH
 printf '%s\n' "$ZAI_API_KEY" >"$STUB_DIR/configured-key"
 SH
   bash_stub "$tools/zcode-web-supervisor" <<'SH'
-printf '%s\n' "$ZCODE_SERVER_AUTH_TOKEN" "$ZCODE_SERVER_HOST" "$PORT" "$ZCODE_DATA_BASE_DIR" >"$STUB_DIR/server-env"
+printf '%s\n' "$ZCODE_SERVER_AUTH_TOKEN" "$ZCODE_SERVER_HOST" "$PORT" "$ZCODE_DATA_BASE_DIR" "$ZAI_MODEL" >"$STUB_DIR/server-env"
 SH
   run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode-web AGENT_SERVICE_ENV_FILE="$home/service.env" AGENT_PORT=8080 \
@@ -1670,7 +1673,7 @@ SH
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/configured-key")" = zai-test-value ]
   local expected
-  expected=$(printf 'token-test-value\n0.0.0.0\n8080\n%s\n' "$home/.zcode")
+  expected=$(printf 'token-test-value\n0.0.0.0\n8080\n%s\nplaceholder-web-model-id\n' "$home/.zcode")
   [ "$(cat "$STUB_DIR/server-env")" = "${expected%$'\n'}" ]
 
   printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'AGENT_WEB_TOKEN=token-test-value' 'GH_TOKEN=unexpected' \
@@ -1680,6 +1683,22 @@ SH
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 64 ]
   [[ $output == *"unsupported name in ZCode service environment file"* ]]
+
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'ZAI_MODEL=first-model' \
+    'ZAI_MODEL=second-model' 'AGENT_WEB_TOKEN=token-test-value' >"$home/service.env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode-web AGENT_SERVICE_ENV_FILE="$home/service.env" \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"duplicate ZAI_MODEL"* ]]
+
+  printf '%s\n' 'ZAI_SUBSCRIPTION_KEY=zai-test-value' 'ZAI_MODEL=' \
+    'AGENT_WEB_TOKEN=token-test-value' >"$home/service.env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=zcode-web AGENT_SERVICE_ENV_FILE="$home/service.env" \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 64 ]
+  [[ $output == *"ZAI_MODEL must not be empty"* ]]
 }
 
 @test "a terminal session runs the tool with no prompt and, for login tools, no router key" {
