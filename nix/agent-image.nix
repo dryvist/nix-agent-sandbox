@@ -203,7 +203,7 @@ let
     # no generic names; a repository's own build output belongs in its own
     # .gitignore.
     printf '%s\n' .DS_Store __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ \
-      node_modules/ /result '/result-*' .direnv/ '*.swp' '*.swo' > $out/etc/gitignore
+      node_modules/ /result .direnv/ '*.swp' '*.swo' > $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
     [core]
       excludesFile = /etc/gitignore
