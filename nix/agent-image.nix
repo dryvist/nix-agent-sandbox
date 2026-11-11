@@ -43,6 +43,7 @@
   renderAutonomous,
   repoCheckToolchain,
   zcodeWeb,
+  gitignoreTemplates,
 }:
 
 let
@@ -198,7 +199,24 @@ let
     nobody:x:65534:
     EOF
     echo "hosts: files dns" > $out/etc/nsswitch.conf
+    # Caches, build output and editor files never reach an agent commit: the
+    # publish step stages with `git add -A`, so they are excluded globally
+    # from the maintained github/gitignore templates.
+    cat ${
+      lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
+        "Python.gitignore"
+        "Node.gitignore"
+        "Nix.gitignore"
+        "Global/macOS.gitignore"
+        "Global/VisualStudioCode.gitignore"
+        "Global/JetBrains.gitignore"
+        "Global/Vim.gitignore"
+        "Global/Emacs.gitignore"
+      ]
+    } > $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
+    [core]
+      excludesFile = /etc/gitignore
     [pull]
       rebase = true
     [rebase]

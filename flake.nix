@@ -31,6 +31,11 @@
       url = "github:basher83/Zammad-MCP/v1.2.0";
       flake = false;
     };
+    # Maintained ignore templates for the image's global git excludes file.
+    gitignoreTemplates = {
+      url = "github:github/gitignore/80c8f6d08a318643d19a21be55e8e0f0322088c0";
+      flake = false;
+    };
   };
 
   outputs =
@@ -43,6 +48,7 @@
       pyproject-build-systems,
       uv2nix,
       zammadMcpSrc,
+      gitignoreTemplates,
     }:
     let
       inherit (nixpkgs) lib;
@@ -122,6 +128,7 @@
               inherit (pkgs) opencode;
               cursorAgent = llm-agents.packages.${system}.cursor-agent;
               qwenCode = llm-agents.packages.${system}.qwen-code;
+              inherit gitignoreTemplates;
             };
         }
       );
