@@ -47,6 +47,8 @@
 
 let
   homeDir = "/home/agent";
+  # Keep the shared module beside both importing scripts in one store path.
+  scripts = ../scripts;
 
   zcodeWebSupervisor = writeShellApplication {
     name = "zcode-web-supervisor";
@@ -56,7 +58,7 @@ let
     ];
     text = ''
       export ZCODE_WEB_CLIENT=${lib.escapeShellArg "${zcodeWeb}/share/zcode-web/client.mjs"}
-      exec node ${../scripts/zcode-web-supervisor.mjs}
+      exec node ${scripts}/zcode-web-supervisor.mjs
     '';
   };
 
@@ -68,7 +70,7 @@ let
     ];
     text = ''
       export ZCODE_WEB_CLIENT=${lib.escapeShellArg "${zcodeWeb}/share/zcode-web/client.mjs"}
-      exec node ${../scripts/zcode-web-task.mjs} "$@"
+      exec node ${scripts}/zcode-web-task.mjs "$@"
     '';
   };
 

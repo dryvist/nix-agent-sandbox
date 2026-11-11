@@ -76,13 +76,19 @@ agent_env_name_allowed() {
     "${HOME}/.agent-profiles.json" >/dev/null 2>&1
 }
 
-# Z.ai models come only from OpenBao ZAI_MODEL (secrets-external/ai/saas/zai);
-# the router never lists GLM, so there is no fallback.
+# Z.ai model ids come from OpenBao or the mounted service environment; the
+# router never lists GLM, so there is no fallback.
 require_zai_model() {
   [ -n "${ZAI_MODEL:-}" ] || {
-    echo "agent-entrypoint: ZAI_MODEL is missing; set it in OpenBao secrets-external/ai/saas/zai." >&2
+    echo "agent-entrypoint: ZAI_MODEL is missing; set it in OpenBao secrets-external/ai/saas/zai or the ZCode service environment file." >&2
     exit 65
   }
+  case "${ZAI_MODEL}" in
+    *$'\n'* | *$'\r'*)
+      echo "agent-entrypoint: ZAI_MODEL must be a single line." >&2
+      exit 65
+      ;;
+  esac
   zai_model=${ZAI_MODEL}
   unset ZAI_MODEL
 }
@@ -174,6 +180,7 @@ case "${AGENT_TOOL}" in
       exit 64
     }
     seen_key=0
+    seen_model=0
     seen_token=0
     while IFS= read -r line || [ -n "${line}" ]; do
       [ -n "${line}" ] || continue
@@ -185,6 +192,12 @@ case "${AGENT_TOOL}" in
           [ "${seen_key}" -eq 0 ] || { echo "agent-entrypoint: duplicate ZAI_SUBSCRIPTION_KEY." >&2; exit 64; }
           seen_key=1
           ZAI_SUBSCRIPTION_KEY="${value}"
+          ;;
+        ZAI_MODEL)
+          [ "${seen_model}" -eq 0 ] || { echo "agent-entrypoint: duplicate ZAI_MODEL." >&2; exit 64; }
+          seen_model=1
+          [ -n "${value}" ] || { echo "agent-entrypoint: ZAI_MODEL must not be empty." >&2; exit 64; }
+          ZAI_MODEL="${value}"
           ;;
         AGENT_WEB_TOKEN)
           [ "${seen_token}" -eq 0 ] || { echo "agent-entrypoint: duplicate AGENT_WEB_TOKEN." >&2; exit 64; }
@@ -595,6 +608,7 @@ case "${AGENT_TOOL}" in
     export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
     mkdir -p "${ZCODE_DATA_BASE_DIR}"
     require_zai_model
+    printf 'model=%s\n' "${zai_model}"
     ZAI_MODEL="${zai_model}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
     unset ZAI_API_KEY ZAI_MODEL
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
@@ -662,6 +676,7 @@ case "${AGENT_TOOL}" in
     ;;
   opencode-zai)
     require_zai_model
+    printf 'model=%s\n' "${zai_model}"
     zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
     unset ZAI_SUBSCRIPTION_KEY
     ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto --print-logs --log-level warn \
@@ -678,13 +693,14 @@ case "${AGENT_TOOL}" in
       echo "agent-entrypoint: ZCode service credentials must contain nonempty ZAI_SUBSCRIPTION_KEY and AGENT_WEB_TOKEN." >&2
       exit 64
     }
+    require_zai_model
     export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-${HOME}/.zcode}"
     mkdir -p "${ZCODE_DATA_BASE_DIR}"
     ZAI_API_KEY="${ZAI_SUBSCRIPTION_KEY}" zcode-configure-key || exit $?
     export ZCODE_SERVER_AUTH_TOKEN="${AGENT_WEB_TOKEN}"
     export ZCODE_SERVER_HOST="${AGENT_SERVER_HOST:-0.0.0.0}"
     export PORT="${AGENT_PORT:-8080}"
-    exec zcode-web-supervisor
+    ZAI_MODEL="${zai_model}" exec zcode-web-supervisor
     ;;
   *)
     echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|shell|cursor-agent|zcode-web)" >&2

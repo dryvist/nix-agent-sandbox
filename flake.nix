@@ -224,9 +224,15 @@
                   bats
                   coreutils
                   jq
+                  nodejs
                 ];
               }
               ''
+                mkdir -p tests
+                cp ${./tests/zcode-web-model.test.mjs} tests/zcode-web-model.test.mjs
+                cp -r ${./scripts} scripts
+                chmod -R u+w tests scripts
+                node --test tests/zcode-web-model.test.mjs
                 ZCODE_JOB_BIN=${client}/bin ZCODE_JOB_SCRIPTS=${./scripts} \
                   bats ${./tests/zcode-job.bats}
                 touch $out
@@ -276,7 +282,7 @@
           sandbox-contract =
             pkgs.runCommand "sandbox-contract-tests"
               {
-                nativeBuildInputs = [ pkgs.jq ];
+                nativeBuildInputs = [ pkgs.jq pkgs.nodejs_24 ];
               }
               ''
                 cat > profiles.json <<'EOF'
@@ -285,6 +291,14 @@
                 cat > egress.json <<'EOF'
                 ${builtins.toJSON (import ./nix/egress-domains.nix)}
                 EOF
+                task_status=0
+                task_output=$(node ${../scripts}/zcode-web-task.mjs 2>&1) || task_status=$?
+                test "$task_status" -eq 64
+                test "$task_output" = "zcode-web-task: usage: zcode-web-task start <workspace-name> | resume <task-id> <workspace-name>"
+                supervisor_status=0
+                supervisor_output=$(env -u ZAI_MODEL node ${../scripts}/zcode-web-supervisor.mjs 2>&1) || supervisor_status=$?
+                test "$supervisor_status" -eq 65
+                test "$supervisor_output" = "zcode-web-supervisor: ZAI_MODEL is missing"
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
                   ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["cursor-agent", "dev", "opencode", "opencode-local", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
@@ -306,7 +320,7 @@
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
                   ([.["opencode-local"], .["opencode-zai"]] | all(has("ttyLogin") | not)) and
-                  .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "AGENT_WEB_TOKEN"]
+                  .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '
                   .zai == ["api.z.ai", "cdn-zcode.z.ai", "chat.z.ai", "zcode.z.ai"] and

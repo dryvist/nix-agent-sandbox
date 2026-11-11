@@ -42,7 +42,7 @@ elif [[ $event == pull_request ]]; then
       scripts/ci-resolver.py|tests/test_ci_resolver.py)
         add_target ci-resolver
         ;;
-      nix/zcode-job.nix|scripts/zcode-job.sh|scripts/zcode-web-task.mjs|scripts/zcode-web-supervisor.mjs|tests/zcode-job.bats|tests/ssh-stub.sh)
+      nix/zcode-job.nix|scripts/zcode-job.sh|scripts/zcode-model.mjs|scripts/zcode-web-task.mjs|scripts/zcode-web-supervisor.mjs|tests/zcode-job.bats|tests/zcode-web-model.test.mjs|tests/ssh-stub.sh)
         add_target zcode-job
         ;;
       nix/zcode-job-module.nix)

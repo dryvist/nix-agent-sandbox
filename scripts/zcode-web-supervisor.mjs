@@ -1,10 +1,18 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { getZaiModel } from "./zcode-model.mjs";
 
 const token = process.env.ZCODE_SERVER_AUTH_TOKEN;
 const apiKey = process.env.ZAI_SUBSCRIPTION_KEY;
 const port = process.env.PORT || "8080";
 const clientPath = process.env.ZCODE_WEB_CLIENT;
+let modelId;
+try {
+  modelId = getZaiModel();
+} catch (error) {
+  console.error(`zcode-web-supervisor: ${error.message}`);
+  process.exit(65);
+}
 const server = spawn("zcode-web", [], { stdio: "inherit", env: process.env });
 const serverExit = new Promise((resolve) => server.once("exit", resolve));
 let stopping = false;
@@ -70,7 +78,6 @@ try {
     const configured = modelView.providers.find(
       (item) => item.templateId === "zai-api" && item.providerName === "nix-agent-sandbox",
     );
-    const modelId = process.env.ZCODE_DEFAULT_MODEL || "GLM-5.3";
     if (!configured?.models.some((model) => model.modelId === modelId)) throw new Error();
   } finally {
     socket?.close();
