@@ -88,7 +88,7 @@ repo_scope_guard() {
   local -a denied_owners
   owner_lc=${owner_lc,,}
   case "$owner_lc" in
-    dryvist | jacobpevans | jacobpevans-personal) ;;
+    dryvist | jacobpevans | jacobpevans-ai | jacobpevans-personal) ;;
     *) echo "repository owner refused"; return ;;
   esac
   if [[ ! ${AGENT_REPO_DENYLIST:-} =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(,[A-Za-z0-9][A-Za-z0-9-]{0,38})*$ ]]; then

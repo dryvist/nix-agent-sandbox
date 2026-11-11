@@ -792,7 +792,7 @@ scope_refused() {
 
 @test "the other configured owners pass the server-side owner guard" {
   local repo
-  for repo in JacobPEvans/example JacobPEvans-personal/example; do
+  for repo in JacobPEvans/example JacobPEvans-ai/example JacobPEvans-personal/example; do
     STUB_SCOPE_REPO="$repo" run --separate-stderr dispatch start zcode "$repo" Review
     [ "$status" -eq 0 ]
     [ "$(jq -r .repo <<<"$output")" = "$repo" ]
