@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.0...v1.19.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **entrypoint:** keep the prompt out of the run commit and pull request ([#215](https://github.com/dryvist/nix-agent-sandbox/issues/215)) ([642d6f3](https://github.com/dryvist/nix-agent-sandbox/commit/642d6f37272892ef3d907dd52bb0d39c7e3703bb))
+
 ## [1.19.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.18.0...v1.19.0) (2026-11-09)
 
 
