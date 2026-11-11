@@ -207,7 +207,6 @@ let
       cat ${
         lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
           "Global/macOS.gitignore"
-          "Global/VisualStudioCode.gitignore"
         ]
       }
       # Root-anchored Nix links and editor swap files: unanchored names would hide source paths.
