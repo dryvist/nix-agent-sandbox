@@ -43,6 +43,7 @@
   renderAutonomous,
   repoCheckToolchain,
   zcodeWeb,
+  gitignoreTemplates,
 }:
 
 let
@@ -198,7 +199,23 @@ let
     nobody:x:65534:
     EOF
     echo "hosts: files dns" > $out/etc/nsswitch.conf
+    # Caches, Nix result links and editor/OS files never reach an agent
+    # commit: the publish step stages with `git add -A`. Only templates with
+    # no generic names are global; a repository's own build output belongs in
+    # its own .gitignore.
+    {
+      cat ${
+        lib.concatMapStringsSep " " (f: "${gitignoreTemplates}/${f}") [
+          "Global/macOS.gitignore"
+        ]
+      }
+      # Root-anchored Nix links and editor swap files: unanchored names would hide source paths.
+      printf '%s\n' __pycache__/ '*.py[cod]' .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ node_modules/ \
+        /result '/result-*' .direnv/ '*.swp' '*.swo'
+    } > $out/etc/gitignore
     cat > $out/etc/gitconfig <<'EOF'
+    [core]
+      excludesFile = /etc/gitignore
     [pull]
       rebase = true
     [rebase]
@@ -248,6 +265,8 @@ dockerTools.streamLayeredImage {
       "SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "NIX_SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
       "GIT_SSL_CAINFO=${cacert}/etc/ssl/certs/ca-bundle.crt"
+      # nixpkgs git reads its system config from its own store path; point it at the image's.
+      "GIT_CONFIG_SYSTEM=/etc/gitconfig"
       # This is the bundled provider catalog consumed alongside ZCode's
       # personal provider config (see nix-ai modules/zcode/web.nix).
       "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${zcodeWeb}/lib/zcode/apps/zcode-cli/packages/cli/dist/provider/zcode-builtin.json"

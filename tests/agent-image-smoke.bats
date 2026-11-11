@@ -34,6 +34,25 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "a job that only leaves caches and build output stages nothing" {
+  run docker run --rm --network none --user 1000:1000 --entrypoint /bin/bash "$SANDBOX_IMAGE_UNDER_TEST" \
+    -euo pipefail -c '
+      test "$(git config --system core.excludesFile)" = /etc/gitignore
+      cd "$(mktemp -d)"
+      git init -q
+      mkdir -p tests/__pycache__ node_modules/pkg
+      touch tests/__pycache__/test_x.cpython-314.pyc node_modules/pkg/index.js .DS_Store
+      ln -s /nix/store result
+      git add -A
+      test -z "$(git status --porcelain)"
+      mkdir -p lib build src/tags
+      touch tests/test_x.py .envrc lib/x.nix build/x.sh src/result-parser.ts src/tags/index.ts
+      git add -A
+      test "$(git diff --cached --name-only | sort | tr "\n" " ")" = ".envrc build/x.sh lib/x.nix src/result-parser.ts src/tags/index.ts tests/test_x.py "
+    '
+  [ "$status" -eq 0 ]
+}
+
 @test "image environment contains no credential field or OpenBao address" {
   docker image inspect --format '{{json .Config.Env}}' "$SANDBOX_IMAGE_UNDER_TEST" |
     jq -e '
