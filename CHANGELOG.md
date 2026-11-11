@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.4...v1.19.5) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-image:** use an explicit global excludes list ([#223](https://github.com/dryvist/nix-agent-sandbox/issues/223)) ([2afcb53](https://github.com/dryvist/nix-agent-sandbox/commit/2afcb53f83c94ec6b6a56d6fc92dfdcb12dfa0e3))
+
 ## [1.19.4](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.3...v1.19.4) (2026-11-11)
 
 
