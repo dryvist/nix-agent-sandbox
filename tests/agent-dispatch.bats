@@ -2925,3 +2925,75 @@ SH
   [ "$runs" -ge 2 ]
   [ "$(grep -c 'opencode run --auto --print-logs --log-level warn' "$entrypoint")" -eq "$runs" ]
 }
+
+# run_nocommit_entrypoint: the non-terminal claude path on the clone that
+# publish_fixture provides; reads $home and $tools from the calling test.
+run_nocommit_entrypoint() {
+  run --separate-stderr env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" \
+    AGENT_SANDBOX=1 AGENT_TOOL=claude AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID=run-nocommit \
+    AGENT_PROMPT='review the change' bash -euo pipefail "$ENTRYPOINT"
+}
+
+@test "a run with no commits ends 0 when the tool exits 128 with git's empty-bundle refusal on a clean tree" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture nocommit-clean 0
+  bash_stub "$tools/claude" <<'SH'
+echo 'review: looks fine'
+echo 'fatal: Refusing to create empty bundle.' >&2
+exit 128
+SH
+  run_nocommit_entrypoint
+  [ "$status" -eq 0 ]
+  [[ $output == *'review: looks fine'* ]]
+  [[ $stderr == *$'fatal: Refusing to create empty bundle.\nagent-entrypoint: no commits; nothing to publish.' ]]
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+}
+
+@test "a run with no commits keeps status 128 when the tree has an uncommitted change" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture nocommit-dirty 0
+  bash_stub "$tools/claude" <<'SH'
+echo draft >review-draft.txt
+echo 'fatal: Refusing to create empty bundle.' >&2
+exit 128
+SH
+  run_nocommit_entrypoint
+  [ "$status" -eq 128 ]
+  [[ $stderr == *'fatal: Refusing to create empty bundle.'* ]]
+  [[ $stderr == *'claude exited with status 128; refusing to publish.'* ]]
+  [[ $stderr != *'no commits; nothing to publish.'* ]]
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+}
+
+@test "a run with no commits keeps status 128 for any other git failure" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture nocommit-other 0
+  bash_stub "$tools/claude" <<'SH'
+echo "fatal: bad revision 'HEAD'." >&2
+exit 128
+SH
+  run_nocommit_entrypoint
+  [ "$status" -eq 128 ]
+  [[ $stderr == *"fatal: bad revision 'HEAD'."* ]]
+  [[ $stderr == *'claude exited with status 128; refusing to publish.'* ]]
+  [[ $stderr != *'no commits; nothing to publish.'* ]]
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+}
+
+@test "a run with no commits and tool exit 0 ends 0 without publishing" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture nocommit-zero 0
+  bash_stub "$tools/claude" <<'SH'
+echo 'review: looks fine'
+SH
+  run_nocommit_entrypoint
+  [ "$status" -eq 0 ]
+  [[ $output == *'review: looks fine'* ]]
+  [[ $stderr != *'no commits; nothing to publish.'* ]]
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+  [ ! -e "$STUB_DIR/gitleaks-argv" ]
+}

@@ -551,9 +551,13 @@ if [ "${AGENT_TTY:-}" = 1 ]; then
       ;;
   esac
 else
+tool_stderr="$(mktemp)" || {
+  echo "agent-entrypoint: could not create the tool stderr file." >&2
+  exit 1
+}
 case "${AGENT_TOOL}" in
   claude)
-    claude -p --dangerously-skip-permissions "${AGENT_PROMPT}" || status=$?
+    claude -p --dangerously-skip-permissions "${AGENT_PROMPT}" 2>"${tool_stderr}" || status=$?
     ;;
   codex)
     # approval_policy=never + sandbox_mode=danger-full-access come from the
@@ -584,7 +588,7 @@ case "${AGENT_TOOL}" in
     qwen_router_key=${AGENT_ROUTER_KEY}
     unset AGENT_ROUTER_KEY
     OPENAI_API_KEY="${qwen_router_key}" qwen --auth-type openai --model "${AGENT_MODEL}" \
-      --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo || status=$?
+      --openai-base-url "${AGENT_ROUTER_BASE_URL}" --prompt "${AGENT_PROMPT}" --yolo 2>"${tool_stderr}" || status=$?
     unset qwen_router_key
     ;;
   zcode)
@@ -597,7 +601,7 @@ case "${AGENT_TOOL}" in
     require_zai_model
     ZAI_MODEL="${zai_model}" ZAI_API_KEY="${ZAI_API_KEY}" zcode-configure-key || exit $?
     unset ZAI_API_KEY ZAI_MODEL
-    zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
+    zcode --prompt "${AGENT_PROMPT}" --mode yolo 2>"${tool_stderr}" || status=$?
     ;;
   opencode | opencode-local)
     # The selected profile supplies the key; OpenCode uses a listed Go model and local uses medium.
@@ -654,23 +658,23 @@ case "${AGENT_TOOL}" in
       chmod 600 "${opencode_config}"
       export OPENCODE_CONFIG="${opencode_config}"
     fi
-    opencode run --auto --print-logs --log-level warn --model "agent-router/${opencode_model}" "${AGENT_PROMPT}" || status=$?
+    opencode run --auto --print-logs --log-level warn --model "agent-router/${opencode_model}" "${AGENT_PROMPT}" 2>"${tool_stderr}" || status=$?
     unset AGENT_ROUTER_KEY
     ;;
   shell)
-    bash -euo pipefail -c "${AGENT_PROMPT}" || status=$?
+    bash -euo pipefail -c "${AGENT_PROMPT}" 2>"${tool_stderr}" || status=$?
     ;;
   opencode-zai)
     require_zai_model
     zai_subscription_key=${ZAI_SUBSCRIPTION_KEY}
     unset ZAI_SUBSCRIPTION_KEY
     ZHIPU_API_KEY="${zai_subscription_key}" opencode run --auto --print-logs --log-level warn \
-      --model "zai-coding-plan/${zai_model}" "${AGENT_PROMPT}" || status=$?
+      --model "zai-coding-plan/${zai_model}" "${AGENT_PROMPT}" 2>"${tool_stderr}" || status=$?
     unset zai_subscription_key
     ;;
   cursor-agent)
     require_cursor_api_key
-    cursor-agent --print --output-format text --force "${AGENT_PROMPT}" || status=$?
+    cursor-agent --print --output-format text --force "${AGENT_PROMPT}" 2>"${tool_stderr}" || status=$?
     ;;
   zcode-web)
     [ "${seen_key}" -eq 1 ] && [ "${seen_token}" -eq 1 ] &&
@@ -691,6 +695,17 @@ case "${AGENT_TOOL}" in
     exit 64
     ;;
 esac
+# The tool's stderr is replayed here after it exits. A run that made no commit,
+# left the tree clean, and whose tool exited 128 with git's empty-bundle refusal
+# has nothing to publish, so it ends 0 instead of failing.
+cat "${tool_stderr}" >&2
+if [ -n "${branch}" ] && [ "${status}" -eq 128 ] &&
+  [ "$(git rev-parse HEAD)" = "${base}" ] && [ -z "$(git status --porcelain)" ] &&
+  grep -qxF 'fatal: Refusing to create empty bundle.' "${tool_stderr}"; then
+  status=0
+  echo "agent-entrypoint: no commits; nothing to publish." >&2
+fi
+rm -f "${tool_stderr}"
 fi
 
 if [ "${AGENT_MODE}" = fix ]; then
