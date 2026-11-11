@@ -292,11 +292,11 @@
                 ${builtins.toJSON (import ./nix/egress-domains.nix)}
                 EOF
                 task_status=0
-                task_output=$(node ${../scripts}/zcode-web-task.mjs 2>&1) || task_status=$?
+                task_output=$(node ${./scripts}/zcode-web-task.mjs 2>&1) || task_status=$?
                 test "$task_status" -eq 64
                 test "$task_output" = "zcode-web-task: usage: zcode-web-task start <workspace-name> | resume <task-id> <workspace-name>"
                 supervisor_status=0
-                supervisor_output=$(env -u ZAI_MODEL node ${../scripts}/zcode-web-supervisor.mjs 2>&1) || supervisor_status=$?
+                supervisor_output=$(env -u ZAI_MODEL node ${./scripts}/zcode-web-supervisor.mjs 2>&1) || supervisor_status=$?
                 test "$supervisor_status" -eq 65
                 test "$supervisor_output" = "zcode-web-supervisor: ZAI_MODEL is missing"
                 jq -e '
