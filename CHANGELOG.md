@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.5...v1.20.0) (2026-11-12)
+
+
+### Features
+
+* **agent:** add the opencode-qwen sandbox tool ([#225](https://github.com/dryvist/nix-agent-sandbox/issues/225)) ([f40a3a5](https://github.com/dryvist/nix-agent-sandbox/commit/f40a3a5099a37a52fb865f94cb34106185ec0080))
+
 ## [1.19.5](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.4...v1.19.5) (2026-11-11)
 
 
