@@ -76,6 +76,12 @@
       "ZAI_MODEL"
     ];
   };
+  opencode-qwen = {
+    batchCapable = true;
+    env = [ ];
+    routerKeyField = "OPENCODE_ROUTER_KEY";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+  };
   # Runs the prompt as a bash command; fix jobs only, no model credential.
   shell = {
     env = [ ];

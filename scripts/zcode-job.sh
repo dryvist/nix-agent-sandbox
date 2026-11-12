@@ -11,7 +11,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
     '       zcode-job live|repos' \
     'start and continue wait up to ZCODE_JOB_WAIT seconds (default 240, range 1..290).' \
     'Set ZCODE_JOB_JSON=1 for the original immediate JSON response.' \
-    'tools: zcode (default), opencode, opencode-local, opencode-zai, cursor-agent, qwen-code'
+    'tools: zcode (default), opencode, opencode-local, opencode-zai, opencode-qwen, cursor-agent, qwen-code'
   exit 0
 fi
 
@@ -29,7 +29,7 @@ fail() {
 # suite fails when the two lists differ.
 tool_allowed() {
   case "$1" in
-    zcode | opencode | opencode-local | opencode-zai | cursor-agent | qwen-code) ;;
+    zcode | opencode | opencode-local | opencode-zai | opencode-qwen | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }

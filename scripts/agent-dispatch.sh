@@ -57,7 +57,7 @@ usage:
   agent-dispatch refresh
   agent-dispatch check
 
-tools: zcode, opencode, opencode-local, opencode-zai, cursor-agent, qwen-code
+tools: zcode, opencode, opencode-local, opencode-zai, opencode-qwen, cursor-agent, qwen-code
 fix-only tool: shell (runs the prompt as a bash command)
 EOF
   exit 64
@@ -71,7 +71,7 @@ refuse() {
 # --- Argument validation (the only validator; dispatch-ssh relies on it) ---
 valid_tool() {
   case "$1" in
-    zcode | opencode | opencode-local | opencode-zai | cursor-agent | qwen-code) ;;
+    zcode | opencode | opencode-local | opencode-zai | opencode-qwen | cursor-agent | qwen-code) ;;
     *) return 1 ;;
   esac
 }
@@ -211,6 +211,10 @@ sandbox_role_for() {
       printf '%s' "${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read}" ;;
     opencode:* | opencode-local:*)
       printf '%s' "${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write}" ;;
+    opencode-zai:fix | opencode-qwen:fix)
+      printf '%s' "${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}" ;;
+    opencode-zai:* | opencode-qwen:*)
+      printf '%s' "${AGENT_SANDBOX_WRITE_ROLE:-sandbox-agent-write}" ;;
     cursor-agent:fix) printf '%s' "${AGENT_SANDBOX_CURSOR_READ_ROLE:-sandbox-cursor-read}" ;;
     cursor-agent:*) printf '%s' "${AGENT_SANDBOX_CURSOR_WRITE_ROLE:-sandbox-cursor-write}" ;;
     *)
