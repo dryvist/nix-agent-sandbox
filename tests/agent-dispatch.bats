@@ -469,7 +469,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 
 @test "each routed profile receives the router endpoint and wrapped sandbox identity" {
   local tool n=0 env_data
-  for tool in opencode opencode-local qwen-code; do
+  for tool in opencode opencode-local opencode-qwen qwen-code; do
     n=$((n + 1))
     run --separate-stderr dispatch start "$tool" dryvist/nix-ai "do the thing"
     [ "$status" -eq 0 ]
@@ -477,7 +477,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
     grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
     [[ ! $env_data =~ AGENT_ROUTER_KEY|ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
-    if [ "$tool" = qwen-code ]; then
+    if [ "$tool" = qwen-code ] || [ "$tool" = opencode-qwen ]; then
       grep -qx 'VIKUNJA_URL=https://vikunja.test/api/v1' <<<"$env_data"
       grep -qx 'ZAMMAD_URL=https://zammad.test/api/v1' <<<"$env_data"
     else
@@ -511,6 +511,8 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     "opencode fix sandbox-opencode-read"
     "opencode-local start sandbox-opencode-write"
     "opencode-local fix sandbox-opencode-read"
+    "opencode-qwen start sandbox-agent-write"
+    "opencode-qwen fix sandbox-agent-read"
     "opencode-zai start sandbox-agent-write"
     "opencode-zai fix sandbox-agent-read"
     "cursor-agent start sandbox-cursor-write"
@@ -603,9 +605,9 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
 
 @test "OpenCode batch profiles select models and profile credentials" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
-  local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools"
+  local home="$BATS_TEST_TMPDIR/opencode-fix-home" tools="$BATS_TEST_TMPDIR/opencode-fix-tools" provider_config
   mkdir -p "$home" "$tools"
-  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL"]}}' \
+  printf '%s\n' '{"opencode-local":{"env":[],"routerKeyField":"OPENCODE_LOCAL_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_local_router_llm_router_key"},"opencode-qwen":{"env":[],"routerKeyField":"OPENCODE_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_router_llm_router_key"},"opencode-zai":{"env":["ZAI_SUBSCRIPTION_KEY","ZAI_MODEL"]}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -621,7 +623,7 @@ SH
     AGENT_TOOL=opencode-local AGENT_RUN_ID=j-test AGENT_PROMPT='router prompt' bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nagent-router/medium\nrouter prompt' ]
-  local provider_config="$home/.config/opencode/opencode.json"
+  provider_config="$home/.config/opencode/opencode.json"
   [ -f "$provider_config" ]
   [ "$(ls -l "$provider_config" | cut -c2-10)" = rw------- ]
   [ "$(cat "$STUB_DIR/opencode-fix-config")" = "$provider_config" ]
@@ -646,6 +648,25 @@ SH
   [ "$status" -eq 0 ]
   [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nzai-coding-plan/openbao-model\nzai prompt' ]
   [ "$(cat "$STUB_DIR/opencode-fix-zai-key")" = zai-plan-key ]
+
+  printf '%s\n' 'AGENT_ROUTER_BASE_URL=https://router.test/v1' \
+    'AGENT_ROUTER_KEY=router-test-key' >"$home/.agent-env"
+  run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$STUB_DIR" AGENT_SANDBOX=1 \
+    AGENT_TOOL=opencode-qwen AGENT_RUN_ID=j-qwen-test AGENT_PROMPT='qwen router prompt' \
+    bash -euo pipefail "$ENTRYPOINT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DIR/opencode-fix-argv")" = $'run\n--auto\n--print-logs\n--log-level\nwarn\n--model\nagent-router/qwen4-max-preview\nqwen router prompt' ]
+  provider_config="$home/.config/opencode/opencode.json"
+  [ "$(cat "$STUB_DIR/opencode-fix-config")" = "$provider_config" ]
+  jq -e '
+    .provider == {"agent-router": {
+      npm: "@ai-sdk/openai-compatible", name: "Agent Router",
+      options: {baseURL: "https://router.test/v1", apiKey: "router-test-key",
+        headers: {"User-Agent": "dryvist-sandbox", "x-opencode-session": "j-qwen-test"}},
+      models: {"qwen4-max-preview": {name: "qwen4-max-preview"}}
+    }} and
+    (has("model") | not)
+  ' "$provider_config" >/dev/null
 }
 
 @test "the GitHub token is minted for one repo with contents and pull_requests only" {
@@ -987,6 +1008,17 @@ pr: $pr" ]
 @test "a private repository is refused after the mint and its token is revoked" {
   export STUB_REPO_PRIVATE=1
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r .reason <<<"$output")" = "private or unknown repository refused: dryvist/nix-ai" ]
+  run ! grep -q '^docker' "$STUB_DIR/calls.log"
+  http_rec "DELETE https://api.github.com/installation/token" >/dev/null
+  grep -qx 'Authorization: Bearer ghs_minted_secret' "$(http_rec "GET https://api.github.com/repos/dryvist/nix-ai").hdr"
+  no_secret_on_a_command_line
+}
+
+@test "opencode-qwen refuses a private repository before creating a container" {
+  export STUB_REPO_PRIVATE=1
+  run --separate-stderr dispatch start opencode-qwen dryvist/nix-ai "do the thing"
   [ "$status" -eq 1 ]
   [ "$(jq -r .reason <<<"$output")" = "private or unknown repository refused: dryvist/nix-ai" ]
   run ! grep -q '^docker' "$STUB_DIR/calls.log"

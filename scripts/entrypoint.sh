@@ -4,7 +4,7 @@
 # Contract (all via environment):
 #   AGENT_SANDBOX=1   set by the image itself; refusal guard below
 #   AGENT_PROMPT      required (unless AGENT_SHELL=1): the task
-#   AGENT_TOOL        claude | codex | qwen | qwen-code | zcode | opencode | cursor-agent |
+#   AGENT_TOOL        claude | codex | qwen | qwen-code | zcode | opencode | opencode-qwen | cursor-agent |
 #                     zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
 #   GIT_MIRROR_URL    public mirror URL for a repo-less zcode terminal
@@ -40,7 +40,7 @@ fi
 
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 case "${AGENT_TOOL}" in
-  qwen | qwen-code | zcode | opencode | opencode-local | opencode-zai | shell | cursor-agent)
+  qwen | qwen-code | zcode | opencode | opencode-local | opencode-zai | opencode-qwen | shell | cursor-agent)
     if [ -n "${AGENT_PROFILE:-}" ] && [ "${AGENT_PROFILE}" != "${AGENT_TOOL}" ]; then
       echo "agent-entrypoint: routed tool '${AGENT_TOOL}' requires its matching task profile." >&2
       exit 64
@@ -164,6 +164,7 @@ case "${AGENT_TOOL}" in
   opencode) AGENT_PROFILE="${AGENT_PROFILE:-opencode}" ;;
   opencode-local) AGENT_PROFILE="${AGENT_PROFILE:-opencode-local}" ;;
   opencode-zai) AGENT_PROFILE="${AGENT_PROFILE:-opencode-zai}" ;;
+  opencode-qwen) AGENT_PROFILE="${AGENT_PROFILE:-opencode-qwen}" ;;
   shell)
     AGENT_PROFILE="${AGENT_PROFILE:-shell}"
     [ "${AGENT_MODE}" = fix ] || {
@@ -613,8 +614,9 @@ case "${AGENT_TOOL}" in
     unset ZAI_API_KEY ZAI_MODEL
     zcode --prompt "${AGENT_PROMPT}" --mode yolo || status=$?
     ;;
-  opencode | opencode-local)
-    # The selected profile supplies the key; OpenCode uses a listed Go model and local uses medium.
+  opencode | opencode-local | opencode-qwen)
+    # The selected profile supplies the key; OpenCode uses a listed Go model,
+    # local uses medium, and opencode-qwen uses its fixed router alias.
     if [ "${AGENT_TOOL}" = opencode ]; then
       if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [ -z "${AGENT_ROUTER_KEY:-}" ]; then
         echo "agent-entrypoint: OpenCode requires router base URL and key." >&2
@@ -650,6 +652,12 @@ case "${AGENT_TOOL}" in
         exit 65
       fi
       echo "agent-entrypoint: opencode model ${opencode_model} (router order)" >&2
+    elif [ "${AGENT_TOOL}" = opencode-qwen ]; then
+      if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [ -z "${AGENT_ROUTER_KEY:-}" ]; then
+        echo "agent-entrypoint: opencode-qwen requires router base URL and key." >&2
+        exit 64
+      fi
+      opencode_model=qwen4-max-preview
     else
       opencode_model=medium
     fi
@@ -703,7 +711,7 @@ case "${AGENT_TOOL}" in
     ZAI_MODEL="${zai_model}" exec zcode-web-supervisor
     ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|shell|cursor-agent|zcode-web)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|opencode-qwen|shell|cursor-agent|zcode-web)" >&2
     exit 64
     ;;
 esac

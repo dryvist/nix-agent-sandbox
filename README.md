@@ -73,7 +73,7 @@ requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
 `start --tool` selects `zcode` (default), `opencode`, `opencode-local`,
-`opencode-zai`, `cursor-agent`, or `qwen-code`. The dispatcher reports the
+`opencode-zai`, `opencode-qwen`, `cursor-agent`, or `qwen-code`. The dispatcher reports the
 requested tool, and each job reports the tool it ran under. Unapproved
 repositories and unknown tools fail before SSH. Continuations and cancellations
 verify the job's tool and repository before sending a mutation.
@@ -130,7 +130,7 @@ agent-dispatch refresh
 agent-dispatch check
 ```
 
-- **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`,
+- **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`, `opencode-qwen`,
   `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
   job needs a credential that works without a person:
   `opencode` and `opencode-local` use `AGENT_ROUTER_BASE_URL` and separate
@@ -150,7 +150,9 @@ agent-dispatch check
   Each tool runs under its own OpenBao AppRole, and `fix` runs use the read
   role. `zcode` reads only the Z.ai key at `secrets-external/data/ai/saas/zai`,
   and its container renders that key itself, so the dispatcher never delivers
-  it. `cursor-agent` reads its API key through its per-tool AppRole. ZCode
+  it. `opencode-qwen` runs the router alias `qwen4-max-preview` and is accepted
+  only for public repositories. `cursor-agent` reads its API key through its
+  per-tool AppRole. ZCode
   sends no `dryvist-sandbox` User-Agent header. `opencode` and
   `opencode-local` read their profile-selected router key from
   `secret/data/apps/sandbox-agent-router` and have no tracker access. Other
@@ -317,8 +319,10 @@ entries into that checkout's `automation/ci-workbook/`; it changes files only.
 
 `CI_RESOLVER_MODEL_TIERS` sets the ordered, comma-separated model tiers.
 The default, `t2,t3`, tries `opencode-local` first and `opencode-zai` only after
-`t2` fails for the same signature. Set `t2` for local fixes only. Other orders
-are rejected. Private repositories use `t2` only.
+`t2` fails for the same signature. Set `t2,t3,t4` to enable `opencode-qwen`
+after both existing model tiers fail; `t4` is skipped for private repositories.
+Set `t2` for local fixes only. Other orders are rejected. Private repositories
+use `t2` only.
 
 ## Safety model
 

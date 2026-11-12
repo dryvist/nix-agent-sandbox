@@ -311,6 +311,16 @@ class ResolverTests(unittest.TestCase):
         result["signature"] = "different"
         self.assertEqual(self.resolver.decide_tier(result, REPO, "main")[0], "t2")
 
+    def test_opt_in_qwen_tier_follows_zai_and_is_public_only(self):
+        self.env["CI_RESOLVER_MODEL_TIERS"] = "t2,t3,t4"
+        self.resolver = resolver_module.Resolver(self.gh, env=self.env, dispatcher=self.dispatcher, now=lambda: NOW)
+        result = resolver_module.classify_data({"conclusion": "failure"}, [self.failed_job()], [], [], REPO)
+        self.gh.compare_commits[REPO] = [{"commit": {"message": "fix\n\nCI-Resolver-Attempt: 2\nCI-Resolver-Tier: t3\nCI-Resolver-Signature: %s" % result["signature"]}}]
+        self.assertEqual(self.resolver.decide_tier(result, REPO, "main")[0], "t4")
+        self.resolver.process_group(self.group())
+        self.assertEqual(self.dispatched[0][0:2], ["fix", "opencode-qwen"])
+        self.assertEqual(self.resolver.tier_order({"private": True}), ["t1", "t2"])
+
     def test_local_only_escalates_repeated_signature_and_forced_cloud(self):
         self.env["CI_RESOLVER_MODEL_TIERS"] = "t2"
         self.resolver = resolver_module.Resolver(self.gh, env=self.env, dispatcher=self.dispatcher, now=lambda: NOW)
@@ -343,7 +353,7 @@ class ResolverTests(unittest.TestCase):
     def test_model_tier_setting_parses_whitespace_and_rejects_invalid_orders(self):
         self.env["CI_RESOLVER_MODEL_TIERS"] = " t2 , t3 "
         self.assertEqual(resolver_module.Resolver(self.gh, env=self.env).model_tiers, ["t2", "t3"])
-        for value in ("", "t3", "t3,t2", "t2,t2", "t2,t4", "t2,"):
+        for value in ("", "t3", "t3,t2", "t2,t2", "t2,t4", "t2,t3,t4,t4", "t2,"):
             with self.subTest(value=value):
                 self.env["CI_RESOLVER_MODEL_TIERS"] = value
                 with self.assertRaisesRegex(ValueError, "CI_RESOLVER_MODEL_TIERS"):

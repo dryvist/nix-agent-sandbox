@@ -2,11 +2,12 @@
 {{- $tracker := eq (env "AGENT_TRACKER_ACCESS") "true" -}}
 {{- $model := "" -}}
 {{- if eq (env "AGENT_TOOL") "opencode-local" }}{{ $model = "medium" }}{{ end -}}
+{{- if eq (env "AGENT_TOOL") "opencode-qwen" }}{{ $model = "qwen4-max-preview" }}{{ end -}}
 {{- $context_tokens := env "AGENT_OPENCODE_CONTEXT_TOKENS" -}}
 {{- $output_tokens := env "AGENT_OPENCODE_OUTPUT_TOKENS" -}}
 {{- $limit := "" -}}
 {{- if and (eq (env "AGENT_TOOL") "opencode-local") (regexMatch "^[1-9][0-9]*$" $context_tokens) }}{{ if not (regexMatch "^[1-9][0-9]*$" $output_tokens) }}{{ $output_tokens = "8192" }}{{ end }}{{ $limit = printf `,"limit":{"context":%s,"output":%s}` $context_tokens $output_tokens }}{{ end -}}
-{{- if or (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") -}}
+{{- if or (eq (env "AGENT_TOOL") "opencode") (eq (env "AGENT_TOOL") "opencode-local") (eq (env "AGENT_TOOL") "opencode-zai") (eq (env "AGENT_TOOL") "opencode-qwen") -}}
 {
   {{- if $router_field }}
   {{- if $model }}

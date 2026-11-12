@@ -322,8 +322,8 @@ class Resolver:
         self.entries = load_workbook(self.env.get("CI_RESOLVER_WORKBOOK_DIR", ""))
         self.shadow = self.env.get("CI_RESOLVER_SHADOW", "0") == "1"
         self.model_tiers = [tier.strip() for tier in self.env.get("CI_RESOLVER_MODEL_TIERS", "t2,t3").split(",")]
-        if self.model_tiers not in (["t2"], ["t2", "t3"]):
-            raise ValueError("CI_RESOLVER_MODEL_TIERS must be t2 or t2,t3")
+        if self.model_tiers not in (["t2"], ["t2", "t3"], ["t2", "t3", "t4"]):
+            raise ValueError("CI_RESOLVER_MODEL_TIERS must be t2, t2,t3, or t2,t3,t4")
         self.repo_cache = {}
         self.pr_cache = {}
 
@@ -573,11 +573,11 @@ class Resolver:
         latest = fixes[-1] if fixes else ""
         tier = trailer(latest, "CI-Resolver-Tier")
         sig = trailer(latest, "CI-Resolver-Signature")
-        model_attempts = sum(1 for message in fixes if trailer(message, "CI-Resolver-Tier") in ("t2", "t3"))
+        model_attempts = sum(1 for message in fixes if trailer(message, "CI-Resolver-Tier") in ("t2", "t3", "t4"))
         return {"fixes": fixes, "last_tier": tier, "last_sig": sig, "model_attempts": model_attempts}
 
     def tier_order(self, repo_data):
-        return ["t1"] + [tier for tier in self.model_tiers if tier != "t3" or not repo_data.get("private")]
+        return ["t1"] + [tier for tier in self.model_tiers if tier not in ("t3", "t4") or not repo_data.get("private")]
 
     def next_tier(self, repo_data, previous):
         order = self.tier_order(repo_data)
@@ -673,12 +673,12 @@ class Resolver:
         if not branch:
             self.escalate(group, check, meta, "No open same-repository PR for the failing branch.", classification)
             return
-        if tier in ("t2", "t3") and any(pr.get("auto_merge") for pr in group["prs"]):
+        if tier in ("t2", "t3", "t4") and any(pr.get("auto_merge") for pr in group["prs"]):
             self.escalate(group, check, meta, "The PR has auto-merge enabled; a model fix would merge unreviewed.", classification)
             return
         attempt = len(history["fixes"]) + 1
         prompt = self.build_prompt(group, classification, tier, attempt, branch)
-        tool = {"t1": "shell", "t2": "opencode-local", "t3": "opencode-zai"}[tier]
+        tool = {"t1": "shell", "t2": "opencode-local", "t3": "opencode-zai", "t4": "opencode-qwen"}[tier]
         meta.update({"branch": branch, "tier": tier, "attempt": attempt, "signature": classification["signature"], "signature_text": classification["signature_text"], "repo": group["repo"], "sha": group["sha"], "run_id": group["run"]["id"], "classification": classification["class"], "entry_id": (classification.get("entry") or {}).get("id"), "state": "dispatched"})
         code, result = self.run_dispatcher(["fix", tool, group["repo"], branch, group["sha"], prompt])
         if code == 64:
@@ -731,7 +731,7 @@ class Resolver:
             self.complete_neutral(group, check, "abandoned: branch moved", meta)
             return
         if state in ("succeeded", "success", "completed", "failed", "failure", "timeout", "timed_out", "no-change", "cancelled"):
-            if meta.get("tier") not in ("t1", "t2", "t3"):
+            if meta.get("tier") not in ("t1", "t2", "t3", "t4"):
                 self.complete_neutral(group, check, reason, meta)
                 return
             next_tier = self.next_tier(self.repo(group["repo"]), meta["tier"])

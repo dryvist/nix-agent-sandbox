@@ -113,6 +113,7 @@ sanitized_git_env=$'GIT_TERMINAL_PROMPT=0\nGIT_ASKPASS=/bin/false\nGIT_CONFIG_GL
   expected=$(tools "$ZCODE_JOB_SCRIPTS/agent-dispatch.sh" valid_tool)
   [ -n "$expected" ]
   [ "$(tools "$ZCODE_JOB_SCRIPTS/zcode-job.sh" tool_allowed)" = "$expected" ]
+  [[ $expected == *$'\nopencode-qwen\n'* ]]
 }
 
 @test "repo outside the installation subset is refused before SSH" {
@@ -360,6 +361,14 @@ sanitized_git_env=$'GIT_TERMINAL_PROMPT=0\nGIT_ASKPASS=/bin/false\nGIT_CONFIG_GL
 @test "start refuses a repository that is not verifiably public" {
   set_git_read 128 "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
   run client start dryvist/example Review
+  [ "$status" -eq 64 ]
+  jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
+  no_ssh
+}
+
+@test "opencode-qwen refuses a repository that is not verifiably public" {
+  set_git_read 128 "fatal: repository not found"
+  run client start --tool opencode-qwen dryvist/example Review
   [ "$status" -eq 64 ]
   jq -e '.error == "repository is not verifiably public: dryvist/example"' <<<"$output"
   no_ssh
