@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.22.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.21.0...v1.22.0) (2026-11-14)
+
+
+### Features
+
+* **agent:** zcode run j-3994bfecc2281085 ([db4653e](https://github.com/dryvist/nix-agent-sandbox/commit/db4653e8d66e5b152720f2af086a20c38f73cfbc))
+
+
+### Bug Fixes
+
+* **zcode-job:** report the dispatcher refusal reason ([#233](https://github.com/dryvist/nix-agent-sandbox/issues/233)) ([db4653e](https://github.com/dryvist/nix-agent-sandbox/commit/db4653e8d66e5b152720f2af086a20c38f73cfbc))
+
 ## [1.21.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.20.0...v1.21.0) (2026-11-14)
 
 
