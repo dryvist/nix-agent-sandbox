@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.22.0...v1.22.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **dispatch:** read the result tail boundary byte by offset ([#235](https://github.com/dryvist/nix-agent-sandbox/issues/235)) ([361ca34](https://github.com/dryvist/nix-agent-sandbox/commit/361ca34c1ad40e20b832aad4aca059e1395d50e1))
+
 ## [1.22.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.21.0...v1.22.0) (2026-11-14)
 
 
