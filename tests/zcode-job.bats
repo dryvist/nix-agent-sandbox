@@ -236,6 +236,44 @@ sanitized_git_env=$'GIT_TERMINAL_PROMPT=0\nGIT_ASKPASS=/bin/false\nGIT_CONFIG_GL
   jq -e '.error == "Invalid dispatcher JSON"' <<<"$output"
 }
 
+@test "a refused continue reports the dispatcher's own reason" {
+  export STUB_SSH_EXIT=64 STUB_SSH_FAIL_ON=continue
+  printf '%s\n' 'agent-dispatch: job token is unavailable; start a new job' >"$STUB_DIR/ssh-stderr"
+  run --separate-stderr client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  jq -e '.error == "dispatcher refused" and
+    .reason == "job token is unavailable; start a new job"' <<<"$output"
+  [[ -z "$stderr" ]]
+  [ "$(cat "$STUB_DIR/ssh-commands")" = "$(printf 'status %s\ncontinue %s Add tests' "$JOB" "$JOB")" ]
+  unset ZCODE_JOB_JSON
+  run --separate-stderr client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  jq -e '.error == "dispatcher refused" and
+    .reason == "job token is unavailable; start a new job"' <<<"$output"
+  [ "$stderr" = "agent-dispatch: job token is unavailable; start a new job" ]
+}
+
+@test "a failure without a refusal line keeps the transport error" {
+  export STUB_SSH_EXIT=255
+  printf '%s\n' 'ssh: connection timed out' >"$STUB_DIR/ssh-stderr"
+  run --separate-stderr client status "$JOB"
+  [ "$status" -eq 255 ]
+  jq -e '.error == "Dispatcher SSH request failed"' <<<"$output"
+  [ "$stderr" = "ssh: connection timed out" ]
+}
+
+@test "a refusal reason with quotes and backslashes stays valid JSON" {
+  local filler
+  filler=$(printf 'a%.0s' $(seq 1 320))
+  export STUB_SSH_EXIT=64 STUB_SSH_FAIL_ON=continue
+  printf '%s\n' "agent-dispatch: bad \"quote\" and \\ flag ${filler} TAIL" >"$STUB_DIR/ssh-stderr"
+  run client continue "$JOB" 'Add tests'
+  [ "$status" -eq 64 ]
+  jq -e --arg prefix 'bad "quote" and \ flag ' \
+    '.error == "dispatcher refused" and (.reason | length) == 300 and
+    (.reason | startswith($prefix))' <<<"$output"
+}
+
 @test "wrong job, tool, repository or PR is rejected" {
   cp "$STUB_DIR/response.json" "$STUB_DIR/original.json"
   for mutation in '.job = "j-ffffffffffffffff"' '.tool = "claude"' \
