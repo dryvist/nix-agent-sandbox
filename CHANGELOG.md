@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.21.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.20.0...v1.21.0) (2026-11-14)
+
+
+### Features
+
+* **agent:** zcode run j-fe603027fb23d65f ([0f15e33](https://github.com/dryvist/nix-agent-sandbox/commit/0f15e3348fa0d9d4cc7025622874614c8e893eaa))
+
+
+### Bug Fixes
+
+* **agent:** start qwen-code with a profile that has no tracker or incident tokens ([#231](https://github.com/dryvist/nix-agent-sandbox/issues/231)) ([0f15e33](https://github.com/dryvist/nix-agent-sandbox/commit/0f15e3348fa0d9d4cc7025622874614c8e893eaa))
+
 ## [1.20.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.19.5...v1.20.0) (2026-11-12)
 
 
