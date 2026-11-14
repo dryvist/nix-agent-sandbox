@@ -10,7 +10,8 @@ write_result_tail() {
   chmod 600 "$tail_file"
   size=$(wc -c <"$tail_file")
   if ((size > 16384)); then
-    boundary=$(tail -c 16385 "$tail_file" | head -c 1 | od -An -t x1 | tr -d '[:space:]')
+    # One byte by offset: a reader that stops early would SIGPIPE its writer under pipefail.
+    boundary=$(dd if="$tail_file" bs=1 skip=$((size - 16385)) count=1 2>/dev/null | od -An -t x1 | tr -d '[:space:]')
     if [ "$boundary" = 0a ]; then
       tail -c 16384 "$tail_file" | redact_log_values >"$rdir/result.txt"
     else
