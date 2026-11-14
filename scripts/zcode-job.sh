@@ -93,15 +93,46 @@ verb="${1:-}"
 id=""
 
 request() {
-  local rc returned_tool
+  local rc returned_tool stderr_file matched line reason
+  stderr_file=$(mktemp)
   if response=$(timeout "${request_timeout:-300}" "$ZCODE_JOB_SSH" -T -n -o BatchMode=yes -o ConnectTimeout=10 \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
       -o ForwardAgent=no -o ClearAllForwardings=yes -o PermitLocalCommand=no \
-      -o RemoteCommand=none -o 'SendEnv=-*' -- "$host" "$1"); then
+      -o RemoteCommand=none -o 'SendEnv=-*' -- "$host" "$1" 2>"$stderr_file"); then
     rc=0
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
   else
     rc=$?
-    if [ "$rc" -eq 124 ] && [ "${submitted:-0}" = 1 ]; then fail timeout 1; fi
+    if [ "$rc" -eq 124 ] && [ "${submitted:-0}" = 1 ]; then
+      cat "$stderr_file" >&2
+      rm -f "$stderr_file"
+      fail timeout 1
+    fi
+    matched=""
+    if [ -z "$response" ]; then
+      # A refusal is the dispatcher's own agent-dispatch line on stderr with
+      # no response; only that first line is reported, never the rest.
+      while IFS= read -r line; do
+        if [[ $line == 'agent-dispatch:'* ]]; then matched=$line; break; fi
+      done <"$stderr_file"
+    fi
+    if [ -n "$matched" ]; then
+      rm -f "$stderr_file"
+      reason=${matched#agent-dispatch:}
+      reason=${reason# }
+      if [ "${ZCODE_JOB_JSON:-0}" != 1 ]; then
+        printf '%s\n' "$matched" >&2
+        if [ "${submitted:-0}" = 1 ] && [ -n "${id:-}" ]; then
+          printf 'FAIL|%s|%s\n' "$id" "$(printf '%s' "${reason:0:300}" | tr -d '\r\n')"
+          exit 1
+        fi
+      fi
+      jq -cn --arg reason "$reason" '{error: "dispatcher refused", reason: ($reason | .[0:300])}'
+      exit "$rc"
+    fi
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
     [ -n "$response" ] || fail "Dispatcher SSH request failed" "$rc"
   fi
   response=$(jq -ces 'select(length == 1 and (.[0] | type == "object")) | .[0]' \
