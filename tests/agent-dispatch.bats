@@ -477,7 +477,7 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     grep -qx 'AGENT_ROUTER_BASE_URL=https://router.test/v1' <<<"$env_data"
     grep -qx 'SANDBOX_WRAPPED_SECRET_ID=sandbox-agent-wrapped-id-value' <<<"$env_data"
     [[ ! $env_data =~ AGENT_ROUTER_KEY|ZAI_SUBSCRIPTION_KEY|CURSOR_API_KEY ]]
-    if [ "$tool" = qwen-code ] || [ "$tool" = opencode-qwen ]; then
+    if [ "$tool" = qwen-code ]; then
       grep -qx 'VIKUNJA_URL=https://vikunja.test/api/v1' <<<"$env_data"
       grep -qx 'ZAMMAD_URL=https://zammad.test/api/v1' <<<"$env_data"
     else
@@ -511,8 +511,8 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     "opencode fix sandbox-opencode-read"
     "opencode-local start sandbox-opencode-write"
     "opencode-local fix sandbox-opencode-read"
-    "opencode-qwen start sandbox-agent-write"
-    "opencode-qwen fix sandbox-agent-read"
+    "opencode-qwen start sandbox-opencode-write"
+    "opencode-qwen fix sandbox-opencode-read"
     "opencode-zai start sandbox-agent-write"
     "opencode-zai fix sandbox-agent-read"
     "cursor-agent start sandbox-cursor-write"

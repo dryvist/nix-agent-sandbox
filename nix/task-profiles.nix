@@ -46,8 +46,9 @@
       "AGENT_MODEL"
     ];
   };
-  # zcode and opencode run under their own OpenBao roles, which cannot read
-  # tracker tokens, so neither profile grants tracker access.
+  # zcode and the OpenCode router tools (opencode, opencode-local,
+  # opencode-qwen) run under their own OpenBao roles, which cannot read
+  # tracker tokens, so none of these profiles grants tracker access.
   zcode = {
     batchCapable = true;
     env = [ ];
@@ -81,6 +82,7 @@
     env = [ ];
     routerKeyField = "OPENCODE_ROUTER_KEY";
     sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+    trackerAccess = false;
   };
   # Runs the prompt as a bash command; fix jobs only, no model credential.
   shell = {
