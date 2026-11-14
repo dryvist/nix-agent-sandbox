@@ -161,6 +161,12 @@ let
     "etc/openbao-agent/write-opencode.hcl" =
       lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
         (builtins.readFile ../templates/bao-agent/write-opencode.hcl);
+    "etc/openbao-agent/read-qwen.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/read-qwen.hcl);
+    "etc/openbao-agent/write-qwen.hcl" =
+      lib.replaceStrings [ "@AGENT_ENTRYPOINT@" ] [ "${entrypoint}/bin/agent-entrypoint" ]
+        (builtins.readFile ../templates/bao-agent/write-qwen.hcl);
     "etc/openbao-agent/templates/zai-key.ctmpl" =
       builtins.readFile ../templates/bao-agent/zai-key.ctmpl;
     "etc/openbao-agent/templates/zai-model.ctmpl" =
@@ -179,6 +185,8 @@ let
       builtins.readFile ../templates/bao-agent/zcode-mcp-public.ctmpl;
     "etc/openbao-agent/templates/qwen-mcp.ctmpl" =
       builtins.readFile ../templates/bao-agent/qwen-mcp.ctmpl;
+    "etc/openbao-agent/templates/qwen-mcp-public.ctmpl" =
+      builtins.readFile ../templates/bao-agent/qwen-mcp-public.ctmpl;
   };
 
   zcodeInstructions = writeTextDir "${lib.removePrefix "/" homeDir}/.zcode/AGENTS.md" (
