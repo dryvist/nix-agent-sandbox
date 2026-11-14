@@ -153,7 +153,7 @@ SH
   local home="$BATS_TEST_TMPDIR/public-home" tools="$BATS_TEST_TMPDIR/public-bin"
   local auth_dir="$BATS_TEST_TMPDIR/public-auth" mode expected_config
   mkdir -p "$home" "$tools" "$auth_dir"
-  printf '%s\n' '{"qwen-code":{"env":[],"sandboxRouterKeyField":"sandbox_agent_router_llm_router_key","trackerAccess":false,"ttyLogin":true}}' \
+  printf '%s\n' '{"cursor-agent":{"env":[],"trackerAccess":false,"ttyLogin":true}}' \
     >"$home/.agent-profiles.json"
   bash_stub "$tools/id" <<'SH'
 echo 1000
@@ -169,7 +169,7 @@ SH
       expected_config=write-public
     fi
     run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
-      AGENT_TOOL=qwen-code AGENT_PROFILE=qwen-code AGENT_MODE="$mode" AGENT_PROMPT='Inspect the repository' \
+      AGENT_TOOL=cursor-agent AGENT_PROFILE=cursor-agent AGENT_MODE="$mode" AGENT_PROMPT='Inspect the repository' \
       BAO_ADDR=https://bao.test SANDBOX_ROLE_ID=role-id-test \
       SANDBOX_WRAPPED_SECRET_ID=wrapped-secret-id-test AGENT_OPENBAO_AUTH_DIR="$auth_dir" \
       EXPECTED_CONFIG="$expected_config" AGENT_REPO=example/repo AGENT_BRANCH=task \
@@ -178,12 +178,58 @@ SH
     [ "$status" -eq 0 ]
   done
   run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
-    AGENT_TOOL=qwen-code AGENT_PROFILE=qwen-code AGENT_MODE=start AGENT_TTY=1 \
+    AGENT_TOOL=cursor-agent AGENT_PROFILE=cursor-agent AGENT_MODE=start AGENT_TTY=1 \
     AGENT_PROMPT='Inspect the repository' BAO_ADDR=https://bao.test \
     SANDBOX_ROLE_ID=role-id-test SANDBOX_WRAPPED_SECRET_ID=wrapped-secret-id-test \
     AGENT_OPENBAO_AUTH_DIR="$auth_dir" EXPECTED_CONFIG=write \
     bash -euo pipefail "$ENTRYPOINT"
   [ "$status" -eq 0 ]
+}
+
+@test "entrypoint selects qwen-code configs that render no tracker or incident tokens" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home="$BATS_TEST_TMPDIR/qwen-home" tools="$BATS_TEST_TMPDIR/qwen-bin"
+  local auth_dir="$BATS_TEST_TMPDIR/qwen-auth" mode expected_config selected
+  mkdir -p "$home" "$tools" "$auth_dir"
+  printf '%s\n' '{"qwen-code":{"env":[],"routerKeyField":"QWEN_CODE_ROUTER_KEY","sandboxRouterKeyField":"sandbox_agent_router_llm_router_key"}}' \
+    >"$home/.agent-profiles.json"
+  bash_stub "$tools/id" <<'SH'
+echo 1000
+SH
+  bash_stub "$tools/bao" <<'SH'
+set -euo pipefail
+test "$1" = agent
+test "$2" = "-config=/etc/openbao-agent/${EXPECTED_CONFIG}.hcl"
+test "${AGENT_SANDBOX_ROUTER_KEY_FIELD}" = sandbox_agent_router_llm_router_key
+printf '%s\n' "$EXPECTED_CONFIG" >>"$STUB_DIR/qwen-configs"
+SH
+  for mode in start fix; do
+    if [ "$mode" = fix ]; then
+      expected_config=read-qwen
+    else
+      expected_config=write-qwen
+    fi
+    run env -i PATH="$tools:$PATH" HOME="$home" STUB_DIR="$BATS_TEST_TMPDIR" \
+      AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 AGENT_TOOL=qwen-code \
+      AGENT_PROFILE=qwen-code AGENT_MODE="$mode" AGENT_PROMPT='Inspect the repository' \
+      BAO_ADDR=https://bao.test SANDBOX_ROLE_ID=role-id-test \
+      SANDBOX_WRAPPED_SECRET_ID=wrapped-secret-id-test AGENT_OPENBAO_AUTH_DIR="$auth_dir" \
+      EXPECTED_CONFIG="$expected_config" AGENT_REPO=example/repo AGENT_BRANCH=task \
+      AGENT_EXPECTED_SHA=0000000000000000000000000000000000000000 \
+      bash -euo pipefail "$ENTRYPOINT"
+    [ "$status" -eq 0 ]
+  done
+  grep -Fxq read-qwen "$BATS_TEST_TMPDIR/qwen-configs"
+  grep -Fxq write-qwen "$BATS_TEST_TMPDIR/qwen-configs"
+  for expected_config in read-qwen write-qwen; do
+    selected="$BATS_TEST_TMPDIR/${expected_config}.hcl"
+    sed "s#/dev/shm/agent-openbao#${auth_dir}#g" \
+      "$PWD/templates/bao-agent/${expected_config}.hcl" >"$selected"
+    ! grep -Eq 'vikunja-token\.ctmpl|zammad-token\.ctmpl' "$selected"
+    grep -Fq 'templates/router-key.ctmpl' "$selected"
+    grep -Fq 'templates/qwen-mcp-public.ctmpl' "$selected"
+  done
+  ! grep -Eqi 'vikunja|zammad' "$PWD/templates/bao-agent/qwen-mcp-public.ctmpl"
 }
 
 @test "entrypoint refuses a malformed trackerAccess value" {
@@ -214,7 +260,7 @@ SH
 
   local worktree="$PWD" auth_dir="$BATS_TEST_TMPDIR/auth"
   local port address role_id wrapped_id root_token=agent-test-root-token
-  local config="$BATS_TEST_TMPDIR/agent.hcl" public_config="$BATS_TEST_TMPDIR/agent-public.hcl"
+  local config="$BATS_TEST_TMPDIR/agent.hcl" qwen_config="$BATS_TEST_TMPDIR/agent-qwen.hcl"
   local child="$BATS_TEST_TMPDIR/verify-env"
   local agent_output agent_status value
   mkdir -p "$auth_dir"
@@ -285,6 +331,13 @@ case "$AGENT_TOOL" in
       .mcp.zammad.environment.ZAMMAD_HTTP_TOKEN == "{env:ZAMMAD_HTTP_TOKEN}"
     ' >/dev/null
     ;;
+  qwen-code)
+    test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"
+    test -z "${VIKUNJA_API_TOKEN:-}"
+    test -z "${ZAMMAD_HTTP_TOKEN:-}"
+    printf '%s' "$QWEN_MCP_CONFIG" | jq -e '.mcpServers == {} and
+      (tostring | test("vikunja|zammad"; "i") | not)' >/dev/null
+    ;;
 esac
 SH
   chmod 700 "$child"
@@ -297,7 +350,7 @@ SH
     -e "s#@AGENT_ENTRYPOINT@#${child}#" \
     -e "s#/dev/shm/agent-openbao#${auth_dir}#g" \
     -e "s#/etc/openbao-agent/templates#${worktree}/templates/bao-agent#g" \
-    "$worktree/templates/bao-agent/read-public.hcl" >"$public_config"
+    "$worktree/templates/bao-agent/read-qwen.hcl" >"$qwen_config"
 
   agent_status=0
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=opencode-zai AGENT_TRACKER_ACCESS=true \
@@ -327,9 +380,10 @@ SH
   agent_status=0
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=qwen-code \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key BAO_TEST_ROUTER_KEY=router-test-key \
-    "$BAO_BIN" agent -config="$public_config" 2>&1) || agent_status=$?
+    "$BAO_BIN" agent -config="$qwen_config" 2>&1) || agent_status=$?
   if [ "$agent_status" -ne 0 ]; then
-    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key; do
+    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key \
+      vikunja-test-token zammad-test-token; do
       agent_output=${agent_output//"$value"/[REDACTED]}
     done
     printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g'
