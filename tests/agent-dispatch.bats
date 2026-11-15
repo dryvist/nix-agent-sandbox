@@ -513,6 +513,8 @@ FIX_SHA=0123456789abcdef0123456789abcdef01234567
     "opencode-local fix sandbox-opencode-read"
     "opencode-qwen start sandbox-opencode-write"
     "opencode-qwen fix sandbox-opencode-read"
+    "claude-router start sandbox-opencode-write"
+    "claude-router fix sandbox-opencode-read"
     "opencode-zai start sandbox-agent-write"
     "opencode-zai fix sandbox-agent-read"
     "cursor-agent start sandbox-cursor-write"

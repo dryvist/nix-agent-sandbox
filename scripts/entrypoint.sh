@@ -4,8 +4,8 @@
 # Contract (all via environment):
 #   AGENT_SANDBOX=1   set by the image itself; refusal guard below
 #   AGENT_PROMPT      required (unless AGENT_SHELL=1): the task
-#   AGENT_TOOL        claude | codex | qwen | qwen-code | zcode | opencode | opencode-qwen | cursor-agent |
-#                     zcode-web (default: claude)
+#   AGENT_TOOL        claude | claude-router | codex | qwen | qwen-code | zcode | opencode | opencode-qwen |
+#                     cursor-agent | zcode-web (default: claude)
 #   AGENT_REPO        optional owner/name to clone, branch, and PR against
 #   GIT_MIRROR_URL    public mirror URL for a repo-less zcode terminal
 #   AGENT_RUN_ID      stable run id; required for opencode, otherwise optional (default: timestamp)
@@ -40,7 +40,7 @@ fi
 
 AGENT_TOOL="${AGENT_TOOL:-claude}"
 case "${AGENT_TOOL}" in
-  qwen | qwen-code | zcode | opencode | opencode-local | opencode-zai | opencode-qwen | shell | cursor-agent)
+  qwen | qwen-code | zcode | opencode | opencode-local | opencode-zai | opencode-qwen | claude-router | shell | cursor-agent)
     if [ -n "${AGENT_PROFILE:-}" ] && [ "${AGENT_PROFILE}" != "${AGENT_TOOL}" ]; then
       echo "agent-entrypoint: routed tool '${AGENT_TOOL}' requires its matching task profile." >&2
       exit 64
@@ -165,6 +165,7 @@ case "${AGENT_TOOL}" in
   opencode-local) AGENT_PROFILE="${AGENT_PROFILE:-opencode-local}" ;;
   opencode-zai) AGENT_PROFILE="${AGENT_PROFILE:-opencode-zai}" ;;
   opencode-qwen) AGENT_PROFILE="${AGENT_PROFILE:-opencode-qwen}" ;;
+  claude-router) AGENT_PROFILE="${AGENT_PROFILE:-claude-router}" ;;
   shell)
     AGENT_PROFILE="${AGENT_PROFILE:-shell}"
     [ "${AGENT_MODE}" = fix ] || {
@@ -260,7 +261,7 @@ if [ "${openbao_child}" != 1 ] && \
   fi
   case "${AGENT_TOOL}" in
     zcode) openbao_agent_config="${openbao_agent_config%.hcl}-zcode.hcl" ;;
-    opencode | opencode-local | opencode-qwen) openbao_agent_config="${openbao_agent_config%.hcl}-opencode.hcl" ;;
+    opencode | opencode-local | opencode-qwen | claude-router) openbao_agent_config="${openbao_agent_config%.hcl}-opencode.hcl" ;;
     qwen-code) openbao_agent_config="${openbao_agent_config%.hcl}-qwen.hcl" ;;
     *)
       if [ "${tracker_access}" = false ]; then
@@ -570,6 +571,44 @@ case "${AGENT_TOOL}" in
   claude)
     claude -p --dangerously-skip-permissions "${AGENT_PROMPT}" || status=$?
     ;;
+  claude-router)
+    # Headless Claude Code against the router: CLAUDE_ROUTER_MODEL (default
+    # medium) names the router's capability and is pinned to every model
+    # variable; the router picks the model per request. The container is the
+    # sandbox, so bypassPermissions is used here only.
+    if [ -z "${AGENT_ROUTER_BASE_URL:-}" ] || [ -z "${AGENT_ROUTER_KEY:-}" ]; then
+      echo "agent-entrypoint: claude-router requires router base URL and key." >&2
+      exit 64
+    fi
+    claude_model="${CLAUDE_ROUTER_MODEL:-medium}"
+    claude_base_url="${AGENT_ROUTER_BASE_URL%/v1}"
+    claude_router_key="${AGENT_ROUTER_KEY}"
+    claude_json="$(ANTHROPIC_BASE_URL="${claude_base_url}" \
+      ANTHROPIC_AUTH_TOKEN="${claude_router_key}" \
+      ANTHROPIC_API_KEY='' \
+      CLAUDE_CODE_OAUTH_TOKEN='' \
+      ANTHROPIC_CUSTOM_HEADERS='' \
+      ANTHROPIC_MODEL="${claude_model}" \
+      ANTHROPIC_DEFAULT_OPUS_MODEL="${claude_model}" \
+      ANTHROPIC_DEFAULT_SONNET_MODEL="${claude_model}" \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL="${claude_model}" \
+      CLAUDE_CODE_SUBAGENT_MODEL="${claude_model}" \
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS="${CLAUDE_ROUTER_CONTEXT_TOKENS:-80000}" \
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000 \
+      claude -p --bare --exclude-dynamic-system-prompt-sections \
+      --no-session-persistence --output-format json --max-turns 80 \
+      --permission-mode bypassPermissions \
+      <<<"${AGENT_PROMPT}")" || status=$?
+    unset claude_router_key
+    if [ "${status}" -eq 0 ]; then
+      if ! jq -e 'type == "object" and .is_error == false' <<<"${claude_json}" >/dev/null; then
+        status=1
+      else
+        jq -j '.result // empty' <<<"${claude_json}"
+      fi
+    fi
+    ;;
   codex)
     # approval_policy=never + sandbox_mode=danger-full-access come from the
     # baked config.toml; the container is the sandbox. --skip-git-repo-check
@@ -712,7 +751,7 @@ case "${AGENT_TOOL}" in
     ZAI_MODEL="${zai_model}" exec zcode-web-supervisor
     ;;
   *)
-    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|opencode-qwen|shell|cursor-agent|zcode-web)" >&2
+    echo "agent-entrypoint: unknown AGENT_TOOL '${AGENT_TOOL}' (claude|claude-router|codex|qwen|qwen-code|zcode|opencode|opencode-local|opencode-zai|opencode-qwen|shell|cursor-agent|zcode-web)" >&2
     exit 64
     ;;
 esac

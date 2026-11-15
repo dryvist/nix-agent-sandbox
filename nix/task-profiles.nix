@@ -84,6 +84,17 @@
     sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
     trackerAccess = false;
   };
+  # Claude Code headless against the router: the router picks the model per
+  # request, and the entrypoint pins CLAUDE_ROUTER_MODEL (default medium) to
+  # every model variable. Batch only, under the public role, so no tracker,
+  # incident or search credential.
+  claude-router = {
+    batchCapable = true;
+    env = [ ];
+    routerKeyField = "OPENCODE_ROUTER_KEY";
+    sandboxRouterKeyField = "sandbox_agent_router_llm_router_key";
+    trackerAccess = false;
+  };
   # Runs the prompt as a bash command; fix jobs only, no model credential.
   shell = {
     env = [ ];
