@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.23.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.22.1...v1.23.0) (2026-11-15)
+
+
+### Features
+
+* **agent:** zcode run j-18dc61c934bfedf8 ([9b03dde](https://github.com/dryvist/nix-agent-sandbox/commit/9b03dde3b37dd00b0fddac9748f34d229e751999))
+
+
+### Bug Fixes
+
+* **agent:** run opencode-qwen under the OpenCode roles without tracker access ([#237](https://github.com/dryvist/nix-agent-sandbox/issues/237)) ([9b03dde](https://github.com/dryvist/nix-agent-sandbox/commit/9b03dde3b37dd00b0fddac9748f34d229e751999))
+
 ## [1.22.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.22.0...v1.22.1) (2026-11-14)
 
 
