@@ -301,12 +301,13 @@
                 test "$supervisor_output" = "zcode-web-supervisor: ZAI_MODEL is missing"
                 jq -e '
                   .zai.env == ["ZAI_SUBSCRIPTION_KEY"] and
-                  ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["cursor-agent", "dev", "opencode", "opencode-local", "opencode-qwen", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
+                  ([to_entries[] | select(.value.batchCapable == true) | .key] | sort) == ["claude-router", "cursor-agent", "dev", "opencode", "opencode-local", "opencode-qwen", "opencode-zai", "qwen", "qwen-code", "zai", "zcode", "zcode-web"] and
                   .zcode.env == [] and .zcode.trackerAccess == false and
                   (.zcode | has("routerKeyField") or has("sandboxRouterKeyField") | not) and
-                  ([to_entries[] | select((.key == "zcode" or .key == "opencode" or .key == "opencode-local" or .key == "opencode-qwen") | not) | .value] | all(has("trackerAccess") | not)) and
+                  ([to_entries[] | select((.key == "zcode" or .key == "opencode" or .key == "opencode-local" or .key == "opencode-qwen" or .key == "claude-router") | not) | .value] | all(has("trackerAccess") | not)) and
                   .opencode.trackerAccess == false and .["opencode-local"].trackerAccess == false and
                   .["opencode-qwen"].trackerAccess == false and
+                  .["claude-router"].trackerAccess == false and
                   .opencode.env == [] and .opencode.routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .opencode.sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
                   .["opencode-local"].env == [] and .["opencode-local"].routerKeyField == "OPENCODE_LOCAL_ROUTER_KEY" and
@@ -314,6 +315,8 @@
                   .["opencode-zai"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL"] and
                   .["opencode-qwen"].env == [] and .["opencode-qwen"].routerKeyField == "OPENCODE_ROUTER_KEY" and
                   .["opencode-qwen"].sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
+                  .["claude-router"].env == [] and .["claude-router"].routerKeyField == "OPENCODE_ROUTER_KEY" and
+                  .["claude-router"].sandboxRouterKeyField == "sandbox_agent_router_llm_router_key" and
                   .shell.env == [] and (.shell | has("routerKeyField") or has("ttyLogin") | not) and
                   .["cursor-agent"].batchCapable == true and .["cursor-agent"].env == ["CURSOR_API_KEY"] and
                   .["cursor-agent"].ttyLogin == true and
@@ -322,7 +325,7 @@
                   (.["qwen-code"] | has("ttyLogin") | not) and
                   (.["cursor-agent"] | has("routerKeyField") | not) and
                   ([.zcode, .opencode, .["cursor-agent"]] | all(.ttyLogin == true)) and
-                  ([.["opencode-local"], .["opencode-zai"], .["opencode-qwen"]] | all(has("ttyLogin") | not)) and
+                  ([.["opencode-local"], .["opencode-zai"], .["opencode-qwen"], .["claude-router"]] | all(has("ttyLogin") | not)) and
                   .["zcode-web"].env == ["ZAI_SUBSCRIPTION_KEY", "ZAI_MODEL", "AGENT_WEB_TOKEN"]
                 ' profiles.json >/dev/null
                 jq -e '

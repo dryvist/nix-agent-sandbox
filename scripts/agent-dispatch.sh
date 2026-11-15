@@ -57,7 +57,7 @@ usage:
   agent-dispatch refresh
   agent-dispatch check
 
-tools: zcode, opencode, opencode-local, opencode-zai, opencode-qwen, cursor-agent, qwen-code
+tools: zcode, opencode, opencode-local, opencode-zai, opencode-qwen, cursor-agent, qwen-code, claude-router
 fix-only tool: shell (runs the prompt as a bash command)
 EOF
   exit 64
@@ -71,7 +71,7 @@ refuse() {
 # --- Argument validation (the only validator; dispatch-ssh relies on it) ---
 valid_tool() {
   case "$1" in
-    zcode | opencode | opencode-local | opencode-zai | opencode-qwen | cursor-agent | qwen-code) ;;
+    zcode | opencode | opencode-local | opencode-zai | opencode-qwen | cursor-agent | qwen-code | claude-router) ;;
     *) return 1 ;;
   esac
 }
@@ -207,9 +207,9 @@ sandbox_role_for() {
   case "$tool:$mode" in
     zcode:fix) printf '%s' "${AGENT_SANDBOX_ZCODE_READ_ROLE:-sandbox-zcode-read}" ;;
     zcode:*) printf '%s' "${AGENT_SANDBOX_ZCODE_WRITE_ROLE:-sandbox-zcode-write}" ;;
-    opencode:fix | opencode-local:fix | opencode-qwen:fix)
+    opencode:fix | opencode-local:fix | opencode-qwen:fix | claude-router:fix)
       printf '%s' "${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read}" ;;
-    opencode:* | opencode-local:* | opencode-qwen:*)
+    opencode:* | opencode-local:* | opencode-qwen:* | claude-router:*)
       printf '%s' "${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write}" ;;
     opencode-zai:fix)
       printf '%s' "${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}" ;;

@@ -73,7 +73,7 @@ requires a terminal job and includes the
 fixed six-line `job`, `tool`, `repo`, `state`, `pr`, and `duration` result.
 `live` returns the configured SSO URL; `repos` returns the approved subset.
 `start --tool` selects `zcode` (default), `opencode`, `opencode-local`,
-`opencode-zai`, `opencode-qwen`, `cursor-agent`, or `qwen-code`. The dispatcher reports the
+`opencode-zai`, `opencode-qwen`, `cursor-agent`, `qwen-code`, or `claude-router`. The dispatcher reports the
 requested tool, and each job reports the tool it ran under. Unapproved
 repositories and unknown tools fail before SSH. Continuations and cancellations
 verify the job's tool and repository before sending a mutation.
@@ -131,7 +131,7 @@ agent-dispatch check
 ```
 
 - **Tools**: `zcode`, `opencode`, `opencode-local`, `opencode-zai`, `opencode-qwen`,
-  `cursor-agent`, `qwen-code`. Job ids are `j-` plus 16 hex digits. A batch
+  `cursor-agent`, `qwen-code`, `claude-router`. Job ids are `j-` plus 16 hex digits. A batch
   job needs a credential that works without a person:
   `opencode` and `opencode-local` use `AGENT_ROUTER_BASE_URL` and separate
   router keys: `opencode` uses `sandbox_agent_router_llm_router_key` with the
@@ -147,6 +147,9 @@ agent-dispatch check
   credential. `qwen-code` batch runs use
   the router's `medium` capability with `sandbox_agent_router_llm_router_key`
   from `secret/data/apps/sandbox-agent-router`, and have no terminal session.
+  `claude-router` batch runs drive the Claude Code CLI headless against the
+  router's `medium` capability with the same key; the router picks the model
+  per request and it has no terminal session.
   Each tool runs under its own OpenBao AppRole, and `fix` runs use the read
   role. `zcode` reads only the Z.ai key at `secrets-external/data/ai/saas/zai`,
   and its container renders that key itself, so the dispatcher never delivers
