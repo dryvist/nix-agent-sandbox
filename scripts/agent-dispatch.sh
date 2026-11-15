@@ -207,13 +207,13 @@ sandbox_role_for() {
   case "$tool:$mode" in
     zcode:fix) printf '%s' "${AGENT_SANDBOX_ZCODE_READ_ROLE:-sandbox-zcode-read}" ;;
     zcode:*) printf '%s' "${AGENT_SANDBOX_ZCODE_WRITE_ROLE:-sandbox-zcode-write}" ;;
-    opencode:fix | opencode-local:fix)
+    opencode:fix | opencode-local:fix | opencode-qwen:fix)
       printf '%s' "${AGENT_SANDBOX_OPENCODE_READ_ROLE:-sandbox-opencode-read}" ;;
-    opencode:* | opencode-local:*)
+    opencode:* | opencode-local:* | opencode-qwen:*)
       printf '%s' "${AGENT_SANDBOX_OPENCODE_WRITE_ROLE:-sandbox-opencode-write}" ;;
-    opencode-zai:fix | opencode-qwen:fix)
+    opencode-zai:fix)
       printf '%s' "${AGENT_SANDBOX_READ_ROLE:-sandbox-agent-read}" ;;
-    opencode-zai:* | opencode-qwen:*)
+    opencode-zai:*)
       printf '%s' "${AGENT_SANDBOX_WRITE_ROLE:-sandbox-agent-write}" ;;
     cursor-agent:fix) printf '%s' "${AGENT_SANDBOX_CURSOR_READ_ROLE:-sandbox-cursor-read}" ;;
     cursor-agent:*) printf '%s' "${AGENT_SANDBOX_CURSOR_WRITE_ROLE:-sandbox-cursor-write}" ;;

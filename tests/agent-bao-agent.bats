@@ -85,7 +85,7 @@ SH
   [ ! -e "$auth_dir/wrapped-secret-id" ]
 }
 
-@test "entrypoint selects the base AppRole config and router key field for opencode-qwen" {
+@test "entrypoint selects the OpenCode AppRole configs and router key field for opencode-qwen" {
   : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
   local home="$BATS_TEST_TMPDIR/opencode-qwen-home" tools="$BATS_TEST_TMPDIR/opencode-qwen-bin"
   local auth_dir="$BATS_TEST_TMPDIR/opencode-qwen-auth" mode expected_config
@@ -103,9 +103,9 @@ test "${AGENT_SANDBOX_ROUTER_KEY_FIELD}" = sandbox_agent_router_llm_router_key
 SH
   for mode in start fix; do
     if [ "$mode" = fix ]; then
-      expected_config=read
+      expected_config=read-opencode
     else
-      expected_config=write
+      expected_config=write-opencode
     fi
     run env -i PATH="$tools:$PATH" HOME="$home" AGENT_SANDBOX=1 AGENT_DISPATCHED_JOB=1 \
       AGENT_TOOL=opencode-qwen AGENT_PROFILE=opencode-qwen AGENT_MODE="$mode" \
@@ -319,18 +319,6 @@ case "$AGENT_TOOL" in
       .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}"
     ' >/dev/null
     ;;
-  opencode-qwen)
-    test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"
-    test "$VIKUNJA_API_TOKEN" = "$BAO_TEST_VIKUNJA_TOKEN"
-    test "$ZAMMAD_HTTP_TOKEN" = "$BAO_TEST_ZAMMAD_TOKEN"
-    printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
-      .model == "agent-router/qwen4-max-preview" and
-      .provider["agent-router"].models == {"qwen4-max-preview": {name: "qwen4-max-preview"}} and
-      .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}" and
-      .mcp.vikunja.environment.VIKUNJA_API_TOKEN == "{env:VIKUNJA_API_TOKEN}" and
-      .mcp.zammad.environment.ZAMMAD_HTTP_TOKEN == "{env:ZAMMAD_HTTP_TOKEN}"
-    ' >/dev/null
-    ;;
   qwen-code)
     test "$AGENT_ROUTER_KEY" = "$BAO_TEST_ROUTER_KEY"
     test -z "${VIKUNJA_API_TOKEN:-}"
@@ -381,30 +369,6 @@ SH
   agent_output=$(BAO_ADDR="$address" AGENT_TOOL=qwen-code \
     AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key BAO_TEST_ROUTER_KEY=router-test-key \
     "$BAO_BIN" agent -config="$qwen_config" 2>&1) || agent_status=$?
-  if [ "$agent_status" -ne 0 ]; then
-    for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key \
-      vikunja-test-token zammad-test-token; do
-      agent_output=${agent_output//"$value"/[REDACTED]}
-    done
-    printf '%s\n' "$agent_output" | sed -E 's/[[:alnum:]_-]{16,}/[REDACTED]/g'
-    return "$agent_status"
-  fi
-  [ ! -e "$auth_dir/wrapped-secret-id" ]
-
-  wrapped_id=$(BAO_ADDR="$address" BAO_TOKEN="$root_token" "$BAO_BIN" \
-    write -wrap-ttl=2m -f -format=json \
-    auth/approle/role/sandbox-agent-read/secret-id | jq -er '.wrap_info.token')
-  printf '%s' "$role_id" >"$auth_dir/role-id"
-  printf '%s' "$wrapped_id" >"$auth_dir/wrapped-secret-id"
-  chmod 600 "$auth_dir/role-id" "$auth_dir/wrapped-secret-id"
-  agent_status=0
-  agent_output=$(BAO_ADDR="$address" AGENT_TOOL=opencode-qwen AGENT_TRACKER_ACCESS=true \
-    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key AGENT_RUN_ID=j-qwen-test \
-    AGENT_MCP_VIKUNJA_COMMAND=/bin/vikunja-mcp \
-    AGENT_MCP_ZAMMAD_COMMAND=/bin/sandbox-zammad-mcp AGENT_MCP_ZAMMAD_ARGS='[]' \
-    BAO_TEST_ROUTER_KEY=router-test-key BAO_TEST_VIKUNJA_TOKEN=vikunja-test-token \
-    BAO_TEST_ZAMMAD_TOKEN=zammad-test-token \
-    "$BAO_BIN" agent -config="$config" 2>&1) || agent_status=$?
   if [ "$agent_status" -ne 0 ]; then
     for value in "$root_token" "$role_id" "$wrapped_id" router-test-key stale-router-key \
       vikunja-test-token zammad-test-token; do
@@ -519,6 +483,18 @@ case "$AGENT_TOOL" in
       ' >/dev/null
     fi
     ;;
+  opencode-qwen)
+    test "$AGENT_ROUTER_KEY" = router-test-key
+    test -z "${ZAI_API_KEY:-}"
+    test -z "${VIKUNJA_API_TOKEN:-}"
+    test -z "${ZAMMAD_HTTP_TOKEN:-}"
+    printf '%s' "$OPENCODE_CONFIG_CONTENT" | jq -e '
+      .model == "agent-router/qwen4-max-preview" and
+      .provider["agent-router"].models == {"qwen4-max-preview": {name: "qwen4-max-preview"}} and
+      .provider["agent-router"].options.apiKey == "{env:AGENT_ROUTER_KEY}" and
+      (has("mcp") | not)
+    ' >/dev/null
+    ;;
 esac
 printf '%s\n' "$AGENT_TOOL" >>"$BATS_TEST_TMPDIR/tool-children"
 SH
@@ -605,7 +581,11 @@ SH
     AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test \
     AGENT_OPENCODE_CONTEXT_TOKENS=huge \
     EXPECTED_CONFIG_FILE="$worktree/tests/fixtures/opencode-local-config.json"
-  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 10 ]
+  issue_identity sandbox-opencode-read
+  run_agent "$BATS_TEST_TMPDIR/read-opencode.hcl" AGENT_TOOL=opencode-qwen \
+    AGENT_SANDBOX_ROUTER_KEY_FIELD=sandbox_agent_router_llm_router_key \
+    AGENT_TRACKER_ACCESS=false AGENT_RUN_ID=j-test
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/tool-children" | tr -d ' ')" = 11 ]
 }
 
 @test "ZCode MCP configuration is private and removed after a dispatched job" {

@@ -153,11 +153,11 @@ agent-dispatch check
   it. `opencode-qwen` runs the router alias `qwen4-max-preview` and is accepted
   only for public repositories. `cursor-agent` reads its API key through its
   per-tool AppRole. ZCode
-  sends no `dryvist-sandbox` User-Agent header. `opencode` and
-  `opencode-local` read their profile-selected router key from
-  `secret/data/apps/sandbox-agent-router` and have no tracker access. Other
-  tools keep the shared `sandbox-agent-read` and `sandbox-agent-write` roles,
-  which also read the Vikunja and Zammad tokens.
+  sends no `dryvist-sandbox` User-Agent header. `opencode`,
+  `opencode-local`, and `opencode-qwen` read their profile-selected router
+  key from `secret/data/apps/sandbox-agent-router` and have no tracker
+  access. Other tools keep the shared `sandbox-agent-read` and
+  `sandbox-agent-write` roles, which also read the Vikunja and Zammad tokens.
 - **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
   `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
   in `AGENT_REPO_DENYLIST`. The default branch must be public and have an

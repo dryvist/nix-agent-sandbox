@@ -260,7 +260,7 @@ if [ "${openbao_child}" != 1 ] && \
   fi
   case "${AGENT_TOOL}" in
     zcode) openbao_agent_config="${openbao_agent_config%.hcl}-zcode.hcl" ;;
-    opencode | opencode-local) openbao_agent_config="${openbao_agent_config%.hcl}-opencode.hcl" ;;
+    opencode | opencode-local | opencode-qwen) openbao_agent_config="${openbao_agent_config%.hcl}-opencode.hcl" ;;
     qwen-code) openbao_agent_config="${openbao_agent_config%.hcl}-qwen.hcl" ;;
     *)
       if [ "${tracker_access}" = false ]; then
