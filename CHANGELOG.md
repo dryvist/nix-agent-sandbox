@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.23.0...v1.24.0) (2026-11-15)
+
+
+### Features
+
+* **tools:** add a router-backed Claude Code batch tool ([#241](https://github.com/dryvist/nix-agent-sandbox/issues/241)) ([77f93b7](https://github.com/dryvist/nix-agent-sandbox/commit/77f93b7ba3c7257a7ae680c9293bbd04aa7ca380))
+
 ## [1.23.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.22.1...v1.23.0) (2026-11-15)
 
 
