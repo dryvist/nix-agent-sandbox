@@ -161,13 +161,14 @@ agent-dispatch check
   key from `secret/data/apps/sandbox-agent-router` and have no tracker
   access. Other tools keep the shared `sandbox-agent-read` and
   `sandbox-agent-write` roles, which also read the Vikunja and Zammad tokens.
-- **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
-  `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
-  in `AGENT_REPO_DENYLIST`. The default branch must be public and have an
-  active ruleset that requires a pull request. After the mint, the dispatcher
-  checks both with the job's token. It refuses any other repository and
-  revokes that token. Classic branch protection is not readable with the job
-  token and does not count.
+- **Repositories**: the host supplies the comma-separated owner allowlist in
+  `AGENT_REPO_ALLOWLIST` and the owner denylist in `AGENT_REPO_DENYLIST`; an
+  owner is accepted only when it is listed on the allowlist, case
+  insensitively, and not listed on the denylist. The default branch must be
+  public and have an active ruleset that requires a pull request. After the
+  mint, the dispatcher checks both with the job's token. It refuses any other
+  repository and revokes that token. Classic branch protection is not
+  readable with the job token and does not count.
 - **Output**: the container publishes `agent/<tool>/<job-id>` and opens a ready
   PR with no label. Every branch requires signed commits, so the run's tree reaches
   GitHub as one commit created through the Git Data REST API, which GitHub signs
@@ -266,6 +267,7 @@ passed as container arguments or mounts.
 | Name | Use |
 | --- | --- |
 | `BAO_ADDR` | OpenBao endpoint passed to the container |
+| `AGENT_REPO_ALLOWLIST` | Comma-separated repository owner allowlist |
 | `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist |
 | `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | Result and alert topic (`ai-jobs` default) |

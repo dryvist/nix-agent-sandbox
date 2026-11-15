@@ -50,6 +50,7 @@ setup() {
   export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
   export AGENT_DISPATCH_VIKUNJA_PROJECT=55
+  export AGENT_REPO_ALLOWLIST=dryvist,jacobpevans,jacobpevans-ai,jacobpevans-personal
   export AGENT_REPO_DENYLIST=blocked-owner
   # Most cases use a per-job ntfy marker as the setsid stub's completion signal.
   export AGENT_DISPATCH_NTFY_JOBS=1
@@ -793,6 +794,7 @@ scope_refused() {
 @test "owner allowlist and private denylist apply before terminal and batch jobs" {
   local command
   local -a args
+  export AGENT_REPO_ALLOWLIST=blocked-owner,another-blocked
   export AGENT_REPO_DENYLIST=blocked-owner,another-blocked
   for command in \
     "start zcode unapproved/example Review" \
@@ -833,6 +835,42 @@ scope_refused() {
   [[ $stderr == *"repository denylist is missing or invalid"* ]]
   [ ! -s "$STUB_DIR/argv.log" ]
   [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "repository jobs fail closed when the allowlist is absent or malformed" {
+  unset AGENT_REPO_ALLOWLIST
+  run --separate-stderr dispatch start zcode example-org/example Review
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository allowlist is missing or invalid"* ]]
+  export AGENT_REPO_ALLOWLIST=example-org,,another-example-org
+  run --separate-stderr dispatch start --tty zcode example-org/example
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository allowlist is missing or invalid"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
+}
+
+@test "allowlisted owners pass, unlisted owners are refused, and the denylist still applies" {
+  export AGENT_REPO_ALLOWLIST=example-org,another-example-org
+  STUB_SCOPE_REPO=example-org/example run --separate-stderr \
+    dispatch start zcode example-org/example Review
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .repo <<<"$output")" = "example-org/example" ]
+  STUB_SCOPE_REPO=Example-Org/example run --separate-stderr \
+    dispatch start zcode Example-Org/example Review
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .repo <<<"$output")" = "Example-Org/example" ]
+  run --separate-stderr dispatch start zcode other-example-org/example Review
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner refused"* ]]
+  STUB_SCOPE_REPO=another-example-org/example run --separate-stderr \
+    dispatch start zcode another-example-org/example Review
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .repo <<<"$output")" = "another-example-org/example" ]
+  export AGENT_REPO_DENYLIST=another-example-org
+  run --separate-stderr dispatch start zcode another-example-org/example Review
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner refused"* ]]
 }
 
 @test "a token that covers another repo, another owner or more repos fails closed" {
