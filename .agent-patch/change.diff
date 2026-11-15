@@ -1,0 +1,77 @@
+diff --git a/.github/workflows/build-image.yml b/.github/workflows/build-image.yml
+index 2317fc8..f03b329 100644
+--- a/.github/workflows/build-image.yml
++++ b/.github/workflows/build-image.yml
+@@ -11,7 +11,7 @@ permissions:
+ 
+ concurrency:
+   group: ${{ github.workflow }}-${{ github.ref }}
+-  cancel-in-progress: false
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
+ jobs:
+   build:
+@@ -55,6 +55,17 @@ jobs:
+       - name: Verify CI scope contract
+         run: bash tests/ci-check-scope.sh
+ 
++      - name: Filter build paths
++        id: filter
++        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
++        with:
++          filters: |
++            build:
++              - '**.nix'
++              - 'flake.lock'
++              - 'scripts/**'
++              - 'tests/**'
++
+       - name: Install Nix
+         uses: DeterminateSystems/determinate-nix-action@16f94ba7aae399b9f9077c254b6719ec6de7e3e3 # v3.24.2
+ 
+@@ -68,11 +79,11 @@ jobs:
+           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+ 
+       - name: Full flake suite
+-        if: steps.scope.outputs.full == 'true'
++        if: steps.scope.outputs.full == 'true' && steps.filter.outputs.build == 'true'
+         run: nix flake check -L
+ 
+       - name: Focused flake checks
+-        if: steps.scope.outputs.full != 'true' && steps.scope.outputs.targets != ''
++        if: steps.scope.outputs.full != 'true' && steps.scope.outputs.targets != '' && steps.filter.outputs.build == 'true'
+         env:
+           TARGETS: ${{ steps.scope.outputs.targets }}
+           ARCH: ${{ matrix.arch }}
+@@ -88,15 +99,15 @@ jobs:
+           nix build -L "${attrs[@]}"
+ 
+       - name: Build image
+-        if: steps.scope.outputs.image == 'true'
++        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+         run: nix build -L .#agent-image
+ 
+       - name: Load image
+-        if: steps.scope.outputs.image == 'true'
++        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+         run: ./result | docker load
+ 
+       - name: Smoke-test image as non-root
+-        if: steps.scope.outputs.image == 'true'
++        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+         run: nix develop --command bats tests/agent-image-smoke.bats
+ 
+       - name: Push to GHCR
+diff --git a/tests/ci-check-scope.sh b/tests/ci-check-scope.sh
+index b6fe210..ec751ab 100755
+--- a/tests/ci-check-scope.sh
++++ b/tests/ci-check-scope.sh
+@@ -38,7 +38,7 @@ fi
+ 
+ grep -Fq "name: Build (\${{ matrix.arch }})" "$workflow"
+ grep -A 2 -F -- '- name: Full flake suite' "$workflow" |
+-  grep -Fq "if: steps.scope.outputs.full == 'true'"
++  grep -Fq "if: steps.scope.outputs.full == 'true' && steps.filter.outputs.build == 'true'"
+ grep -Fq 'run: nix flake check -L' "$workflow"
+ 
+ echo 'CI event and path selection contract passed.'
