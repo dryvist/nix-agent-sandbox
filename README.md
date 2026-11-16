@@ -212,6 +212,13 @@ agent-dispatch check
   run posts a fixed six-line result (job, tool, repo, state, PR URL, duration)
   to ntfy only when `AGENT_DISPATCH_NTFY_JOBS=1`; that record contains no model
   output. The dispatcher files no tracker task for a run.
+- **Kept work**: when a repo job ends, in any state, the dispatcher reads the
+  work tree against `origin/HEAD` in a container with no network and the job
+  volume read-only. A diff is saved as `patches/<job>-<run>.patch` in the state
+  directory, and the job JSON carries `changes` (`files`, `lines`, `patch`;
+  `unknown` when the volume cannot be read; `over_cap` when the diff exceeds
+  the cap and is dropped). Each finished run appends one JSON line, without
+  model output, to `jobs.jsonl` in the state directory.
 
 The image also runs the upstream ZCode Web/Server and includes
 `zcode-web-task`. The task client reads a prompt from stdin and writes a JSON
@@ -272,6 +279,8 @@ passed as container arguments or mounts.
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
 | `AGENT_DISPATCH_STATE_DIR` | job state (default `/var/lib/agent-dispatch`) |
 | `AGENT_DISPATCH_RETENTION` | seconds a finished job is kept (default 86400) |
+| `AGENT_PATCH_RETENTION` | seconds a saved patch is kept (default 1209600) |
+| `AGENT_PATCH_MAX_BYTES` | size cap of a saved patch (8 MiB default) |
 | `AGENT_FIX_MAX_CONCURRENT` | running fix jobs allowed at once (default 3) |
 | `AGENT_FIX_MAX_FILES` | files a fix job may publish (default 20) |
 | `AGENT_PUBLISH_MAX_BYTES` | Encoded change/fix output cap (8 MiB default) |

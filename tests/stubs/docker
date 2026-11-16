@@ -60,7 +60,14 @@ case "$1" in
     if [ -n "${STUB_DOCKER_STDERR_FILE:-}" ]; then tail -n "$3" "$STUB_DOCKER_STDERR_FILE" >&2; fi
     ;;
   run)
-    # Only the publisher's gitleaks scan calls `docker run`.
+    # The work-tree reader: no network, the job volume read-only.
+    if [[ " $* " == *" --network none "* && " $* " == *" --entrypoint sh "* ]]; then
+      [[ " $* " == *" --read-only "* && " $* " =~ \ agent-job-j-[0-9a-f]+:/w:ro\  ]] || exit 125
+      if [ -n "${STUB_WORK_FAIL:-}" ]; then exit 1; fi
+      cat "${STUB_WORK_DIFF:-/dev/null}"
+      exit 0
+    fi
+    # Otherwise only the publisher's gitleaks scan calls `docker run`.
     [[ " $* " == *" --network none "* && " $* " == *" --entrypoint gitleaks "* ]] || exit 125
     for arg in "$@"; do
       if [[ $arg == *:/scan:ro ]]; then
