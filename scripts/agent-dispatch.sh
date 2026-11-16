@@ -451,6 +451,7 @@ notify_login_refused() {
 notify() {
   local id=$1 run=$2 tok=$3 lines title pr bucket url token rc=0
   local topic="${AGENT_DISPATCH_NTFY_TOPIC:-ai-jobs}"
+  [ "${AGENT_DISPATCH_NTFY_JOBS:-}" = 1 ] || return 0
   lines=$(result_lines "$id" "$run")
   title="ai-job $id $(cat "$STATE_DIR/$id/runs/$run/state")"
   pr=$(cat "$STATE_DIR/$id/pr_url" 2>/dev/null || true)
@@ -459,28 +460,13 @@ notify() {
     return 1
   }
 
-  url=$(field VIKUNJA_URL)
-  token=$(field VIKUNJA_AI_JOBS_TOKEN)
-  if [[ ${AGENT_DISPATCH_VIKUNJA_PROJECT:-} =~ ^[0-9]+$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
-    curl -sS --fail-with-body --max-time 30 -o /dev/null -X PUT \
-      -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$token") \
-      --data-binary @<(jq -n --arg t "$title" --arg d "<p>${lines//$'\n'/<br>}</p>" \
-        '{title: $t, description: $d}') \
-      "$url/projects/$AGENT_DISPATCH_VIKUNJA_PROJECT/tasks" || rc=1
+  url=$(field NTFY_URL)
+  token=$(field NTFY_AI_JOBS_TOKEN)
+  if [[ $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
+    post_ntfy "$url" "$topic" "$token" "$title" "$lines" "$pr" || rc=1
   else
-    echo "agent-dispatch: $id: Vikunja result skipped: project, URL or token missing" >&2
+    echo "agent-dispatch: $id: ntfy result skipped: topic, URL or token missing" >&2
     rc=1
-  fi
-
-  if [ "${AGENT_DISPATCH_NTFY_JOBS:-}" = 1 ]; then
-    url=$(field NTFY_URL)
-    token=$(field NTFY_AI_JOBS_TOKEN)
-    if [[ $topic =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -n "$url" ] && [ -n "$token" ]; then
-      post_ntfy "$url" "$topic" "$token" "$title" "$lines" "$pr" || rc=1
-    else
-      echo "agent-dispatch: $id: ntfy result skipped: topic, URL or token missing" >&2
-      rc=1
-    fi
   fi
   return "$rc"
 }
