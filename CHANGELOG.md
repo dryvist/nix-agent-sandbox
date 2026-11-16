@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.1...v1.24.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* **dispatch:** stop filing a tracker task per finished run ([#246](https://github.com/dryvist/nix-agent-sandbox/issues/246)) ([323df12](https://github.com/dryvist/nix-agent-sandbox/commit/323df120a12095dc21e7fffd0af14601c3cbd909))
+
 ## [1.24.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.0...v1.24.1) (2026-11-16)
 
 
