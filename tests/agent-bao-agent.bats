@@ -324,6 +324,7 @@ case "$AGENT_TOOL" in
     test -z "${VIKUNJA_API_TOKEN:-}"
     test -z "${ZAMMAD_HTTP_TOKEN:-}"
     printf '%s' "$QWEN_MCP_CONFIG" | jq -e '.mcpServers == {} and
+      .memory.enableManagedAutoMemory == false and .memory.enableManagedAutoDream == false and
       (tostring | test("vikunja|zammad"; "i") | not)' >/dev/null
     ;;
 esac
