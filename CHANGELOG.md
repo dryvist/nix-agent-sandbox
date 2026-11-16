@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.0...v1.24.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **zcode-job:** call the system ssh on darwin ([#244](https://github.com/dryvist/nix-agent-sandbox/issues/244)) ([64fbef0](https://github.com/dryvist/nix-agent-sandbox/commit/64fbef03d85557b0d54e82aea8a789b42c72b5ef))
+
 ## [1.24.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.23.0...v1.24.0) (2026-11-15)
 
 
