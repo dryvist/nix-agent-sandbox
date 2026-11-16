@@ -49,7 +49,6 @@ setup() {
   export ZAMMAD_URL=https://zammad.test/api/v1
   export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
-  export AGENT_DISPATCH_VIKUNJA_PROJECT=55
   export AGENT_REPO_DENYLIST=blocked-owner
   # Most cases use a per-job ntfy marker as the setsid stub's completion signal.
   export AGENT_DISPATCH_NTFY_JOBS=1
@@ -950,15 +949,12 @@ pr: $pr" ]
   grep -qx "Title: ai-job $id succeeded" "$rec.hdr"
   grep -qx "Click: $pr" "$rec.hdr"
 
-  rec=$(http_rec "PUT https://vikunja.test/api/v1/projects/55/tasks")
-  grep -qx 'Authorization: Bearer vikunja-secret-value' "$rec.hdr"
-  [ "$(jq -r .title "$rec.body")" = "ai-job $id succeeded" ]
-  [[ $(jq -r .description "$rec.body") == "<p>job: $id<br>tool: zcode<br>repo: dryvist/nix-ai<br>state: succeeded<br>pr: $pr<br>duration: "*"s</p>" ]]
+  run ! grep -q 'vikunja.test' "$STUB_DIR/calls.log"
   no_secret_on_a_command_line
 }
 
 @test "per-job ntfy is disabled by default without changing the job result" {
-  local id rec i waiter rdir state notify_log ntfy_posts revoked
+  local id i waiter rdir state notify_log ntfy_posts revoked
   export STUB_KEEP_WAITER=1
   unset AGENT_DISPATCH_NTFY_JOBS
   run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
@@ -967,14 +963,10 @@ pr: $pr" ]
   rdir="$AGENT_DISPATCH_STATE_DIR/$id/runs/1"
   for ((i = 0; i < 500; i++)); do
     state=$(cat "$rdir/state" 2>/dev/null || echo running)
-    if [ "$state" != running ] &&
-      grep -q 'PUT https://vikunja.test/api/v1/projects/55/tasks' "$STUB_DIR/calls.log"; then
-      break
-    fi
+    [ "$state" != running ] && break
     sleep 0.02
   done
   state=$(cat "$rdir/state" 2>/dev/null || echo missing)
-  rec=$(http_rec "PUT https://vikunja.test/api/v1/projects/55/tasks" 2>/dev/null || true)
   notify_log=$(cat "$AGENT_DISPATCH_STATE_DIR/$id/dispatch.log" 2>/dev/null || true)
   ntfy_posts=$(grep -c 'POST https://ntfy.test/ai-jobs' "$STUB_DIR/calls.log" || true)
   waiter=$(cat "$STUB_DIR/waiter.pid" 2>/dev/null || true)
@@ -990,7 +982,7 @@ pr: $pr" ]
   [ "$state" = succeeded ]
   [ "$ntfy_posts" -eq 0 ]
   [[ $notify_log != *"ntfy result skipped"* && $notify_log != *"result notification incomplete"* ]]
-  [ "$(jq -r .title "$rec.body")" = "ai-job $id succeeded" ]
+  run ! grep -q 'vikunja.test' "$STUB_DIR/calls.log"
   [ "$revoked" -ge 1 ]
 }
 

@@ -209,9 +209,9 @@ agent-dispatch check
   has no `continue`.
 - **Results**: dispatcher responses include the last 60 redacted container log
   lines, keeping the final tool error available when a run fails. Each finished
-  run also records a fixed six-line result (job, tool, repo, state, PR URL,
-  duration) in a Vikunja project and posts it to ntfy only when
-  `AGENT_DISPATCH_NTFY_JOBS=1`; that record contains no model output.
+  run posts a fixed six-line result (job, tool, repo, state, PR URL, duration)
+  to ntfy only when `AGENT_DISPATCH_NTFY_JOBS=1`; that record contains no model
+  output. The dispatcher files no tracker task for a run.
 
 The image also runs the upstream ZCode Web/Server and includes
 `zcode-web-task`. The task client reads a prompt from stdin and writes a JSON
@@ -267,7 +267,6 @@ passed as container arguments or mounts.
 | --- | --- |
 | `BAO_ADDR` | OpenBao endpoint passed to the container |
 | `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist |
-| `AGENT_DISPATCH_VIKUNJA_PROJECT` | Vikunja project id for results |
 | `AGENT_DISPATCH_NTFY_TOPIC` | Result and alert topic (`ai-jobs` default) |
 | `AGENT_DISPATCH_NTFY_JOBS` | Post results to ntfy when `1` (default off) |
 | `AGENT_ROUTER_BASE_URL` | Router endpoint for profiles with a router key |
@@ -283,8 +282,7 @@ passed as container arguments or mounts.
 Profile fields read: external profile values requested by a tool, and fields
 from the router-key and tracker-token leaves used by the entrypoint.
 Result
-delivery uses `VIKUNJA_URL`, `VIKUNJA_AI_JOBS_TOKEN`, `NTFY_URL` and
-`NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.
+delivery uses `NTFY_URL` and `NTFY_AI_JOBS_TOKEN`. The host provides `docker`, `curl` and `setsid`.
 
 ### Container inputs
 
