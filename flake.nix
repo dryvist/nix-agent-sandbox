@@ -216,7 +216,7 @@
                 runtimeInputs = [ pkgs.jq ];
                 text = builtins.readFile ./tests/ssh-stub.sh;
               };
-              client = self.packages.${system}.zcode-job.override { openssh = sshStub; };
+              client = self.packages.${system}.zcode-job.override { sshBin = "${sshStub}/bin/ssh"; };
             in
             pkgs.runCommand "zcode-job-tests"
               {
@@ -237,6 +237,17 @@
                   bats ${./tests/zcode-job.bats}
                 touch $out
               '';
+          # The wrapper calls the system ssh on darwin and the Nix openssh elsewhere.
+          zcode-job-ssh =
+            let
+              darwin = self.packages.${system}.zcode-job.override { isDarwin = true; };
+              linux = self.packages.${system}.zcode-job.override { isDarwin = false; };
+            in
+            pkgs.runCommand "zcode-job-ssh-tests" { } ''
+              grep -qx 'ZCODE_JOB_SSH=/usr/bin/ssh' ${darwin}/bin/zcode-job
+              grep -qx 'ZCODE_JOB_SSH=${pkgs.openssh}/bin/ssh' ${linux}/bin/zcode-job
+              touch $out
+            '';
           zcode-job-module =
             let
               allowedRepos =
