@@ -2970,3 +2970,56 @@ SH
   [ "$runs" -ge 2 ]
   [ "$(grep -c 'opencode run --auto --print-logs --log-level warn' "$entrypoint")" -eq "$runs" ]
 }
+
+@test "a failed job keeps its changes as a patch and one record line" {
+  local id patch
+  printf '%s\n' 'diff --git a/x.txt b/x.txt' '--- a/x.txt' '+++ b/x.txt' '@@ -1 +1,2 @@' ' keep' '+added' \
+    'diff --git a/new.txt b/new.txt' '--- /dev/null' '+++ b/new.txt' '@@ -0,0 +1 @@' '+fresh' >"$STUB_DIR/work.diff"
+  export STUB_WORK_DIFF="$STUB_DIR/work.diff" STUB_EXIT=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state <<<"$output")" = failed ]
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -c .changes <<<"$output")" = "{\"files\":2,\"lines\":2,\"patch\":\"$id-1.patch\"}" ]
+  patch="$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch"
+  cmp "$patch" "$STUB_DIR/work.diff"
+  [ "$(stat -c %a "$patch")" = 600 ]
+  [ "$(grep -c '' "$AGENT_DISPATCH_STATE_DIR/jobs.jsonl")" -eq 1 ]
+  [ "$(jq -r '[.job, .state, .changes.files, has("output")] | @tsv' "$AGENT_DISPATCH_STATE_DIR/jobs.jsonl")" = \
+    "$id"$'\t'"failed"$'\t'"2"$'\t'"false" ]
+  no_secret_on_a_command_line
+}
+
+@test "no changes leaves no patch; an unreadable work tree is recorded as unknown" {
+  local id
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -c .changes <<<"$output")" = '{"files":0,"lines":0,"patch":""}' ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+
+  export STUB_WORK_FAIL=1 STUB_EXIT=1
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  id=$(jq -r .job <<<"$output")
+  [ "$(jq -c .changes <<<"$output")" = '{"unknown":true}' ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+}
+
+@test "a patch over the size cap is dropped and flagged; old patches are pruned on their own clock" {
+  local id
+  printf '%s\n' 'diff --git a/x.txt b/x.txt' '+0123456789012345678901234567890123456789' >"$STUB_DIR/work.diff"
+  export STUB_WORK_DIFF="$STUB_DIR/work.diff" AGENT_PATCH_MAX_BYTES=40
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  id=$(jq -r .job <<<"$output")
+  jq -e '.changes.over_cap == true and ((.changes.patch // "") == "")' <<<"$output"
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+
+  unset AGENT_PATCH_MAX_BYTES
+  run --separate-stderr dispatch start zcode dryvist/nix-ai "do the thing"
+  id=$(jq -r .job <<<"$output")
+  [ -f "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+  AGENT_DISPATCH_RETENTION=0 dispatch refresh >/dev/null
+  [ ! -d "$AGENT_DISPATCH_STATE_DIR/$id" ]
+  [ -f "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+  AGENT_PATCH_RETENTION=0 dispatch refresh >/dev/null
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR/patches/$id-1.patch" ]
+}

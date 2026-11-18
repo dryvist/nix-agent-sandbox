@@ -412,9 +412,11 @@ job_json() {
     --arg reason "$(cat "$rdir/reason" 2>/dev/null || true)" \
     --arg pr "$(cat "$dir/pr_url" 2>/dev/null || true)" \
     --arg commit "$commit" \
+    --argjson changes "$(cat "$rdir/changes.json" 2>/dev/null || echo null)" \
     --rawfile output "$output_file" \
     --argjson runs "$run" --argjson duration "$((ended - started))" \
-    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit, output: $output}' \
+    '. + {state: $state, reason: $reason, pr: $pr, runs: $runs, duration: $duration, commit: $commit,
+      changes: $changes, output: $output}' \
     "$dir/job.json"
 }
 
@@ -961,6 +963,51 @@ publish_fix() {
   return "$rc"
 }
 
+# save_work <id> <run>: keep what a repo job changed, in every end state.
+# Git reads the untrusted work tree in a container with no network and a
+# read-only volume; nothing from it runs on the host. Writes
+# $rdir/changes.json: {files, lines, patch}, or {unknown: true} when the
+# volume cannot be read. The patch lives in $STATE_DIR/patches and outlasts
+# the job state (AGENT_PATCH_RETENTION).
+save_work() {
+  local id=$1 rdir="$STATE_DIR/$1/runs/$2" name="$1-$2.patch" max="${AGENT_PATCH_MAX_BYTES:-8388608}" size counts
+  local patch="$STATE_DIR/patches/$name"
+  mkdir -p "$STATE_DIR/patches"
+  chmod 700 "$STATE_DIR/patches"
+  local rc=0
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges -e GIT_OPTIONAL_LOCKS=0 \
+    -v "agent-job-$id:/w:ro" --entrypoint sh "$IMAGE" -c '
+      cd /w || exit 1
+      g() { git -c safe.directory=/w -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+      g rev-parse --verify -q origin/HEAD >/dev/null || exit 1
+      g diff --no-ext-diff --no-textconv --binary origin/HEAD || exit 1
+      g ls-files -o --exclude-standard -z |
+        while IFS= read -r -d "" f; do g diff --no-ext-diff --no-textconv --binary --no-index /dev/null "$f"; done
+      exit 0' 2>/dev/null | head -c "$((max + 1))" >"$patch" || rc=$?
+  # 141: head closed the pipe at the size cap.
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 141 ]; then
+    rm -f "$patch"
+    echo '{"unknown": true}' >"$rdir/changes.json"
+    return 0
+  fi
+  chmod 600 "$patch"
+  size=$(stat -c %s "$patch")
+  counts=$(jq -Rn '[inputs] | {files: (map(select(startswith("diff --git "))) | length),
+    lines: (map(select(test("^[+-]") and (test("^(\\+\\+\\+|---) ") | not))) | length)}' "$patch" 2>/dev/null) ||
+    counts='{"unknown": true}'
+  if [ "$size" -eq 0 ]; then
+    rm -f "$patch"
+    name=""
+  elif [ "$size" -gt "$max" ]; then
+    # Over the cap: keep the counts of what was read, drop the cut patch.
+    rm -f "$patch"
+    name=""
+    counts=$(jq -c '. + {over_cap: true}' <<<"$counts")
+  fi
+  jq -c --arg patch "$name" '. + {patch: $patch}' <<<"$counts" >"$rdir/changes.json"
+}
+
 # finalize <id> <run>: settle a run's terminal state once, remove its
 # container (the volume stays for `continue`), and post the result.
 redact_log_values() {
@@ -1021,11 +1068,15 @@ finalize() {
       : >"$rdir/log"
     fi
     chmod 600 "$rdir/log"
+    if [ -n "$(job_get "$id" .repo)" ]; then save_work "$id" "$run"; fi
     docker rm -f "$cid" >/dev/null 2>&1 || true
   fi
   write_result_tail "$rdir"
   rm -f "$rdir/redact-values"
   date +%s >"$rdir/ended"
+  # One line per finished run, for log collection. No model output. Written
+  # before the state file, which is the signal that the run has settled.
+  job_json "$id" | jq -c --arg state "$state" 'del(.output) | .state = $state' >>"$STATE_DIR/jobs.jsonl" || true
   echo "$state" >"$rdir/state"
   if [ -n "$tok" ]; then
     notify "$id" "$run" "$tok" || echo "agent-dispatch: $id: result notification incomplete" >&2
@@ -1713,6 +1764,10 @@ cmd_refresh() {
   local now dir id rdir cid status ended manager_pid i keep="${AGENT_DISPATCH_RETENTION:-86400}"
   local -a settled=() pruned=()
   now=$(date +%s)
+  for dir in "$STATE_DIR"/patches/*.patch; do
+    [ -f "$dir" ] || continue
+    if [ $((now - $(stat -c %Y "$dir"))) -ge "${AGENT_PATCH_RETENTION:-1209600}" ]; then rm -f "$dir"; fi
+  done
   for dir in "$STATE_DIR"/j-*; do
     id=${dir##*/}
     if ! valid_job "$id" || [ ! -f "$dir/job.json" ]; then continue; fi
