@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.25.0...v1.26.0) (2026-11-18)
+
+
+### Features
+
+* **agent:** autonomous opencode-qwen run j-52484a66b79ade47 ([#250](https://github.com/dryvist/nix-agent-sandbox/issues/250)) ([ed95165](https://github.com/dryvist/nix-agent-sandbox/commit/ed95165376e6196a9df5f95bdf5e5f251948d47c))
+
 ## [1.25.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.2...v1.25.0) (2026-11-18)
 
 
