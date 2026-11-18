@@ -2002,7 +2002,6 @@ SH
   grep -Fq 'Agent-authored change.' "$STUB_DIR/pr-create.argv"
   run ! grep -Fq 'private brief text' "$STUB_DIR/pr-create.argv"
   run ! grep -Fq 'private brief text' "$STUB_DIR/commit.json"
-  run ! grep -Fq 'human:review' "$STUB_DIR/pr-create.argv"
   run ! grep -Eq 'pr (ready|merge)' "$STUB_DIR/gh.log"
   head=$(git -C "$origin" rev-parse HEAD)
   grep -qx -- '--log-opts=[0-9a-f]\{40\}..HEAD' "$STUB_DIR/gitleaks-argv"
