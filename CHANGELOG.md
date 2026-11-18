@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.25.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.2...v1.25.0) (2026-11-18)
+
+
+### Features
+
+* **dispatch:** keep the work of failed and cancelled jobs ([fad34f6](https://github.com/dryvist/nix-agent-sandbox/commit/fad34f60a585a244a5734d394b7019eae0fa80e8))
+* **dispatch:** keep the work of failed and cancelled jobs ([#248](https://github.com/dryvist/nix-agent-sandbox/issues/248)) ([eddc13e](https://github.com/dryvist/nix-agent-sandbox/commit/eddc13e63d98e5b0b7e1737f9d1d3cca7d5ca1ce))
+
 ## [1.24.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.24.1...v1.24.2) (2026-11-16)
 
 
