@@ -84,13 +84,21 @@ valid_repo() {
 }
 
 repo_scope_guard() {
-  local owner_lc=${1%%/*} denied
-  local -a denied_owners
+  local owner_lc=${1%%/*} allowed denied listed=false
+  local -a allowed_owners denied_owners
   owner_lc=${owner_lc,,}
-  case "$owner_lc" in
-    dryvist | jacobpevans | jacobpevans-ai | jacobpevans-personal) ;;
-    *) echo "repository owner refused"; return ;;
-  esac
+  if [[ ! ${AGENT_REPO_ALLOWLIST:-} =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(,[A-Za-z0-9][A-Za-z0-9-]{0,38})*$ ]]; then
+    echo "repository owner allowlist is missing or invalid"
+    return
+  fi
+  IFS=, read -r -a allowed_owners <<<"$AGENT_REPO_ALLOWLIST"
+  for allowed in "${allowed_owners[@]}"; do
+    [ "$owner_lc" != "${allowed,,}" ] || listed=true
+  done
+  [ "$listed" = true ] || {
+    echo "repository owner refused"
+    return
+  }
   if [[ ! ${AGENT_REPO_DENYLIST:-} =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(,[A-Za-z0-9][A-Za-z0-9-]{0,38})*$ ]]; then
     echo "repository denylist is missing or invalid"
     return

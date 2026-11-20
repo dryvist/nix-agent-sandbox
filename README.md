@@ -161,9 +161,9 @@ agent-dispatch check
   key from `secret/data/apps/sandbox-agent-router` and have no tracker
   access. Other tools keep the shared `sandbox-agent-read` and
   `sandbox-agent-write` roles, which also read the Vikunja and Zammad tokens.
-- **Repositories**: owners are limited to `dryvist`, `JacobPEvans`, and
-  `JacobPEvans-personal`; the host supplies the comma-separated owner denylist
-  in `AGENT_REPO_DENYLIST`. The default branch must be public and have an
+- **Repositories**: owners are limited to the comma-separated owner allowlist
+  the host supplies in `AGENT_REPO_ALLOWLIST`, minus the owner denylist in
+  `AGENT_REPO_DENYLIST`. A missing or malformed list refuses every job. The default branch must be public and have an
   active ruleset that requires a pull request. After the mint, the dispatcher
   checks both with the job's token. It refuses any other repository and
   revokes that token. Classic branch protection is not readable with the job
@@ -273,6 +273,7 @@ passed as container arguments or mounts.
 | Name | Use |
 | --- | --- |
 | `BAO_ADDR` | OpenBao endpoint passed to the container |
+| `AGENT_REPO_ALLOWLIST` | Comma-separated repository owner allowlist |
 | `AGENT_REPO_DENYLIST` | Comma-separated repository owner denylist |
 | `AGENT_DISPATCH_NTFY_TOPIC` | Result and alert topic (`ai-jobs` default) |
 | `AGENT_DISPATCH_NTFY_JOBS` | Post results to ntfy when `1` (default off) |

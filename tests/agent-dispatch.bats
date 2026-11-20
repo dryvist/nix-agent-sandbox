@@ -49,6 +49,7 @@ setup() {
   export ZAMMAD_URL=https://zammad.test/api/v1
   export AGENT_DISPATCH_NTFY_ALERT_URL=https://ntfy.test
   export AGENT_DISPATCH_NTFY_ALERT_TOKEN=ntfy-alert-token
+  export AGENT_REPO_ALLOWLIST=dryvist,JacobPEvans,JacobPEvans-ai,JacobPEvans-personal,jpe-ai-agents,blocked-owner,another-blocked
   export AGENT_REPO_DENYLIST=blocked-owner
   # Most cases use a per-job ntfy marker as the setsid stub's completion signal.
   export AGENT_DISPATCH_NTFY_JOBS=1
@@ -814,11 +815,24 @@ scope_refused() {
 
 @test "the other configured owners pass the server-side owner guard" {
   local repo
-  for repo in JacobPEvans/example JacobPEvans-ai/example JacobPEvans-personal/example; do
+  for repo in JacobPEvans/example JacobPEvans-ai/example JacobPEvans-personal/example jpe-ai-agents/example; do
     STUB_SCOPE_REPO="$repo" run --separate-stderr dispatch start zcode "$repo" Review
     [ "$status" -eq 0 ]
     [ "$(jq -r .repo <<<"$output")" = "$repo" ]
   done
+}
+
+@test "repository jobs fail closed when the owner allowlist is absent or malformed" {
+  unset AGENT_REPO_ALLOWLIST
+  run --separate-stderr dispatch start zcode dryvist/nix-ai Review
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner allowlist is missing or invalid"* ]]
+  export AGENT_REPO_ALLOWLIST=dryvist,,JacobPEvans
+  run --separate-stderr dispatch start --tty zcode dryvist/nix-ai
+  [ "$status" -eq 64 ]
+  [[ $stderr == *"repository owner allowlist is missing or invalid"* ]]
+  [ ! -s "$STUB_DIR/argv.log" ]
+  [ ! -e "$AGENT_DISPATCH_STATE_DIR" ]
 }
 
 @test "repository jobs fail closed when the denylist is absent or malformed" {
