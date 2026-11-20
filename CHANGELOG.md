@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.26.0...v1.27.0) (2026-11-20)
+
+
+### Features
+
+* **dispatch:** read repository owners from AGENT_REPO_ALLOWLIST ([#253](https://github.com/dryvist/nix-agent-sandbox/issues/253)) ([0dc48f8](https://github.com/dryvist/nix-agent-sandbox/commit/0dc48f897d2977e740963692c5903978b518a58a))
+
 ## [1.26.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.25.0...v1.26.0) (2026-11-18)
 
 
