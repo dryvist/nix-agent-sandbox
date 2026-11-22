@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.27.0...v1.28.0) (2026-11-22)
+
+
+### Features
+
+* **entrypoint:** open the agent PR with the newest commit's title and body ([#259](https://github.com/dryvist/nix-agent-sandbox/issues/259)) ([1b5a2da](https://github.com/dryvist/nix-agent-sandbox/commit/1b5a2da7fa782c452e8a93fc661aa7ed19963760))
+
 ## [1.27.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.26.0...v1.27.0) (2026-11-20)
 
 
