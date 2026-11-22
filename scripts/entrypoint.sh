@@ -931,16 +931,15 @@ if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
     exit 1
   fi
   # Agent PRs open ready with no label; an existing PR for the branch is success.
-  pr_created=1
-  if ! url="$(gh pr create --head "${branch}" \
-    --title "feat(agent): autonomous ${AGENT_TOOL} run ${AGENT_RUN_ID}" \
-    --body "Autonomous run by nix-agent-sandbox.
-
-Agent-authored change.
+  # The API-created commit has a fixed subject; use local HEAD for the PR title and body.
+  pr_title="$(git log -1 --format=%s)"
+  pr_body="$(git log -1 --format=%B)
 
 - Tool: ${AGENT_TOOL}
 - Run id: ${AGENT_RUN_ID}
-- Exit status: ${status}")"; then
+- Exit status: ${status}"
+  pr_created=1
+  if ! url="$(gh pr create --head "${branch}" --title "${pr_title}" --body "${pr_body}")"; then
     # A continued run pushes to the branch of the PR it already opened.
     pr_created=0
   fi

@@ -48,6 +48,7 @@ produce verifiable engineering changes and report evidence.
 
 ## Never
 
+- Do not run `git push` or create a pull request; the entrypoint publishes run changes, and the dispatcher publishes fix changes and opens any needed PR.
 - Do not use Doppler, host access, or credentials from outside this run.
 - Do not include private, employer, customer, or internal material in public files, prompts, tickets, or PRs.
 - Do not make infrastructure changes, connect to hosts, or apply/converge configuration.
