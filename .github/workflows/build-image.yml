@@ -67,12 +67,8 @@ jobs:
           gc-max-store-size-linux: 6G
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      - name: Full flake suite
-        if: steps.scope.outputs.full == 'true'
-        run: nix flake check -L
-
       - name: Focused flake checks
-        if: steps.scope.outputs.full != 'true' && steps.scope.outputs.targets != ''
+        if: steps.scope.outputs.targets != ''
         env:
           TARGETS: ${{ steps.scope.outputs.targets }}
           ARCH: ${{ matrix.arch }}
@@ -111,9 +107,46 @@ jobs:
             "ghcr.io/dryvist/nix-agent-sandbox/agent:latest-$ARCH"
           docker push "ghcr.io/dryvist/nix-agent-sandbox/agent:latest-$ARCH"
 
+  suite:
+    # The full flake suite runs beside the image build on a push to main, so
+    # neither one pushes the other past the 20-minute cap. The manifest job
+    # waits for both: the multi-arch tag moves only when the suite passes.
+    name: Full flake suite (${{ matrix.arch }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@4b040423529d49b1a19ba918742e0aa9aa95031a # v3.24.3
+
+      - name: Cache Nix Store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: |
+            nix-${{ runner.os }}-${{ matrix.arch }}-
+          gc-max-store-size-linux: 6G
+          # The build job saves this key; two writers would race for it.
+          save: false
+
+      - name: Full flake suite
+        run: nix flake check -L
+
   manifest:
     name: Multi-arch manifest
-    needs: build
+    needs: [build, suite]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 5
     runs-on: ubuntu-26.04

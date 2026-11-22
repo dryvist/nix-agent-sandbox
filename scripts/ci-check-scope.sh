@@ -5,7 +5,6 @@ event=${1:?event name required}
 ref=${2:?git ref required}
 shift 2
 
-full=false
 image=false
 targets=()
 
@@ -18,7 +17,7 @@ add_target() {
 }
 
 if [[ $event == push && $ref == refs/heads/main ]]; then
-  full=true
+  # The workflow's own suite job runs the full flake suite on this event.
   image=true
 elif [[ $event == workflow_dispatch ]]; then
   # Manual runs stay bounded; the post-merge main push owns the full suite.
@@ -70,10 +69,9 @@ fi
 targets_csv=$(IFS=,; printf '%s' "${targets[*]}")
 if [[ -n ${GITHUB_OUTPUT:-} ]]; then
   {
-    printf 'full=%s\n' "$full"
     printf 'image=%s\n' "$image"
     printf 'targets=%s\n' "$targets_csv"
   } >> "$GITHUB_OUTPUT"
 else
-  printf 'full=%s\nimage=%s\ntargets=%s\n' "$full" "$image" "$targets_csv"
+  printf 'image=%s\ntargets=%s\n' "$image" "$targets_csv"
 fi
