@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.0...v1.28.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **ci:** run the full flake suite in its own job on main ([#261](https://github.com/dryvist/nix-agent-sandbox/issues/261)) ([e6d132b](https://github.com/dryvist/nix-agent-sandbox/commit/e6d132b188d38c2c3f9c853448a5eab35a6df854))
+
 ## [1.28.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.27.0...v1.28.0) (2026-11-22)
 
 
