@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.29.0...v1.29.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **entrypoint:** send mode and type on a published deletion ([#268](https://github.com/dryvist/nix-agent-sandbox/issues/268)) ([89a16b0](https://github.com/dryvist/nix-agent-sandbox/commit/89a16b044ea6dca75fcfbb019f090daf3d79e9c1))
+
 ## [1.29.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.2...v1.29.0) (2026-11-23)
 
 
