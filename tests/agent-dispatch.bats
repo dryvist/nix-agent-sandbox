@@ -2022,7 +2022,7 @@ SH
   jq -se '. == [{content: "Y2hhbmdlCg==", encoding: "base64"}]' "$STUB_DIR/blobs.jsonl"
   jq -e --arg t "$(git -C "$origin" rev-parse "$head^{tree}")" '
     .base_tree == $t and .tree == [
-      {path: "old-file", sha: null},
+      {path: "old-file", mode: "100644", type: "blob", sha: null},
       {path: "tool-file", mode: "100644", type: "blob", sha: "blob001"}]' "$STUB_DIR/tree.json"
   jq -e --arg h "$head" '
     .message == "feat(agent): zcode run j-1\n\n- tool commit" and .tree == "tree-new" and
@@ -2060,6 +2060,29 @@ SH
     .message == "feat(agent): zcode run j-newer-head\n\n- tool commit" and .tree == "tree-new" and
     .parents == [$h]' "$STUB_DIR/commit.json"
   grep -Fq 'api -X PATCH repos/dryvist/nix-ai/git/refs/heads/agent/zcode/j-newer-head' "$STUB_DIR/gh-api.log"
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "publish posts a deletion with its old mode, type blob and a null sha" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin head
+  publish_fixture delete-only 0
+  bash_stub "$tools/zcode" <<'SH'
+git rm -q old-file
+git commit -q -m "tool commit"
+SH
+  run_publish j-delete
+  [ "$status" -eq 0 ]
+  head=$(git -C "$origin" rev-parse HEAD)
+  [ ! -e "$STUB_DIR/blobs.jsonl" ]
+  jq -e --arg t "$(git -C "$origin" rev-parse "$head^{tree}")" '
+    .base_tree == $t and .tree == [
+      {path: "old-file", mode: "100644", type: "blob", sha: null}]' "$STUB_DIR/tree.json"
+  jq -e --arg h "$head" '
+    .message == "feat(agent): zcode run j-delete\n\n- tool commit" and .tree == "tree-new" and
+    .parents == [$h]' "$STUB_DIR/commit.json"
+  grep -qx "api repos/dryvist/nix-ai/git/refs -f ref=refs/heads/agent/zcode/j-delete -f sha=commit-new" \
+    "$STUB_DIR/gh-api.log"
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
 }
 

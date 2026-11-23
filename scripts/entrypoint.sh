@@ -439,9 +439,9 @@ fi
 # One classifier for both publish paths: writes one JSON line per change
 # between $1 and the index ("cached") or $3 (a commit) to file $2. An
 # addition carries path, git mode (100644 or 100755) and base64 contents; a
-# deletion carries path and "delete": true. An optional $4 names a file of
-# NUL-separated paths, passed as a pathspec after -- so that only those
-# paths are compared. Nothing here touches the network.
+# deletion carries path, its old git mode and "delete": true. An optional
+# $4 names a file of NUL-separated paths, passed as a pathspec after -- so
+# that only those paths are compared. Nothing here touches the network.
 collect_changes() {
   local from=$1 out=$2 target=$3 paths_file=${4-} meta path old new kind
   local -a range=() paths=()
@@ -497,7 +497,7 @@ collect_changes() {
         ;;
     esac
     if [ "${kind}" = D ]; then
-      jq -cn --arg p "${path}" '{path: $p, delete: true}'
+      jq -cn --arg p "${path}" --arg m "${old}" '{path: $p, mode: $m, delete: true}'
     else
       base64 -w0 <"${path}" >"${out}.b64"
       jq -cn --arg p "${path}" --arg m "${new}" --rawfile c "${out}.b64" \
@@ -529,13 +529,13 @@ make_fix_outputs() {
     return 1
   fi
   # The dispatcher publishes these changes with createCommitOnBranch, which
-  # carries contents only, so an executable change has nowhere to keep its
-  # bit; only the start-mode publish can carry one.
+  # carries contents only, so an executable addition has nowhere to keep its
+  # bit; only the start-mode publish can carry one. A deletion keeps no bit.
   while IFS= read -r path; do
     echo "agent-entrypoint: ${path} is executable; the fix publish cannot keep the executable bit, so nothing was published." >&2
     rm -rf "${tmp}"
     return 1
-  done < <(jq -r 'select(.mode == "100755") | .path' "${tmp}/changes")
+  done < <(jq -r 'select(has("contents") and .mode == "100755") | .path' "${tmp}/changes")
   if [ ! -s "${tmp}/changes" ]; then
     rm -rf "${tmp}"
     rm -rf "${outdir}"
@@ -825,7 +825,8 @@ publish_to_branch() {
       jq -cn --arg p "${entry_path}" --arg m "${entry_mode}" --arg s "${blob_sha}" \
         '{path: $p, mode: $m, type: "blob", sha: $s}' >>"${tmp}/tree"
     else
-      jq -cn --arg p "$(jq -r '.path' <<<"${entry}")" '{path: $p, sha: null}' >>"${tmp}/tree"
+      jq -cn --arg p "$(jq -r '.path' <<<"${entry}")" --arg m "$(jq -r '.mode' <<<"${entry}")" \
+        '{path: $p, mode: $m, type: "blob", sha: null}' >>"${tmp}/tree"
     fi
   done <"${changes}"
   jq -s --arg b "${tree_sha}" '{base_tree: $b, tree: .}' "${tmp}/tree" >"${tmp}/tree.json"
