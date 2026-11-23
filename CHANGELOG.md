@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.1...v1.28.2) (2026-11-23)
+
+
+### Bug Fixes
+
+* **bao-agent:** render the tracker token only when its field exists ([#263](https://github.com/dryvist/nix-agent-sandbox/issues/263)) ([e7e72b7](https://github.com/dryvist/nix-agent-sandbox/commit/e7e72b776e95aac8c3694aac5f91f38767fdb9de))
+
 ## [1.28.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.0...v1.28.1) (2026-11-22)
 
 
