@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.29.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.2...v1.29.0) (2026-11-23)
+
+
+### Features
+
+* **agent:** opencode-qwen run j-566f305e7e22e43b ([c958d17](https://github.com/dryvist/nix-agent-sandbox/commit/c958d1727c18b9ff3992a75165390479da43d2b0))
+
+
+### Bug Fixes
+
+* **entrypoint:** publish only the agent's own paths ([#265](https://github.com/dryvist/nix-agent-sandbox/issues/265)) ([c958d17](https://github.com/dryvist/nix-agent-sandbox/commit/c958d1727c18b9ff3992a75165390479da43d2b0))
+
 ## [1.28.2](https://github.com/dryvist/nix-agent-sandbox/compare/v1.28.1...v1.28.2) (2026-11-23)
 
 
