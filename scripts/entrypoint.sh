@@ -439,14 +439,26 @@ fi
 # One classifier for both publish paths: writes one JSON line per change
 # between $1 and the index ("cached") or $3 (a commit) to file $2. An
 # addition carries path, git mode (100644 or 100755) and base64 contents; a
-# deletion carries path and "delete": true. Nothing here touches the network.
+# deletion carries path and "delete": true. An optional $4 names a file of
+# NUL-separated paths, passed as a pathspec after -- so that only those
+# paths are compared. Nothing here touches the network.
 collect_changes() {
-  local from=$1 out=$2 target=$3 meta path old new kind
-  local -a range=()
+  local from=$1 out=$2 target=$3 paths_file=${4-} meta path old new kind
+  local -a range=() paths=()
   if [ "${target}" = cached ]; then
     range=(-z --raw --no-renames --cached "${from}")
   else
     range=(-z --raw --no-renames "${from}" "${target}")
+  fi
+  if [ -n "${paths_file}" ]; then
+    while IFS= read -r -d '' path; do
+      paths+=("${path}")
+    done <"${paths_file}"
+    if [ "${#paths[@]}" -eq 0 ]; then
+      : >"${out}"
+      return 0
+    fi
+    range+=("--" "${paths[@]}")
   fi
   : >"${out}"
   while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
@@ -847,7 +859,7 @@ publish_to_branch() {
 }
 
 signed_push() {
-  local remote_head="" exists=0 tmp
+  local remote_head="" exists=0 tmp agent_paths
   local max="${AGENT_PUBLISH_MAX_BYTES:-8388608}"
   if remote_head="$(git ls-remote --exit-code origin "refs/heads/${branch}" | cut -f1)"; then
     exists=1
@@ -856,7 +868,21 @@ signed_push() {
     remote_head="$(git rev-parse origin/HEAD)"
   fi
   tmp="$(mktemp -d)"
-  if ! collect_changes "${remote_head}" "${tmp}/changes" HEAD; then
+  # The remote head may carry commits newer than the clone base (a release
+  # that landed while the run worked); publishing the full tree diff would
+  # write their contents back over origin. Restrict the comparison to the
+  # paths the agent changed since the base, and publish nothing when the
+  # agent changed none (it already published, or changed nothing).
+  agent_paths="${tmp}/agent-paths"
+  if ! git diff -z --name-only --no-renames "${base}" HEAD >"${agent_paths}"; then
+    rm -rf "${tmp}"
+    return 1
+  fi
+  if [ ! -s "${agent_paths}" ]; then
+    rm -rf "${tmp}"
+    return 0
+  fi
+  if ! collect_changes "${remote_head}" "${tmp}/changes" HEAD "${agent_paths}"; then
     rm -rf "${tmp}"
     return 1
   fi
