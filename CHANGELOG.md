@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.30.0](https://github.com/dryvist/nix-agent-sandbox/compare/v1.29.1...v1.30.0) (2026-11-24)
+
+
+### Features
+
+* **agent:** zcode run j-001126c0aaa88939 ([421d628](https://github.com/dryvist/nix-agent-sandbox/commit/421d6284fcf63db1cc1f6819b7f6b231408ace23))
+
+
+### Bug Fixes
+
+* **entrypoint:** report an existing agent PR instead of publishing a duplicate ([#271](https://github.com/dryvist/nix-agent-sandbox/issues/271)) ([421d628](https://github.com/dryvist/nix-agent-sandbox/commit/421d6284fcf63db1cc1f6819b7f6b231408ace23))
+
 ## [1.29.1](https://github.com/dryvist/nix-agent-sandbox/compare/v1.29.0...v1.29.1) (2026-11-23)
 
 
