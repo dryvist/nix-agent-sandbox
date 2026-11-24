@@ -949,34 +949,47 @@ fi
 # scans every new commit (redacted output). Any finding, or a scanner error
 # or missing binary, aborts before anything reaches origin.
 if [ -n "${branch}" ] && [ "$(git rev-parse HEAD)" != "${base}" ]; then
-  if ! gitleaks git --log-opts="${base}..HEAD" --redact --no-banner; then
-    echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
-    exit 65
+  # The tool may have pushed its own branch and opened its PR already; report
+  # that PR instead of publishing a duplicate from the run branch.
+  head_branch="$(git rev-parse --abbrev-ref HEAD)"
+  agent_pr_url=""
+  if [ -n "${head_branch}" ] && [ "${head_branch}" != "${branch}" ]; then
+    if agent_prs="$(gh pr list --head "${head_branch}" --state open --json url)"; then
+      agent_pr_url="$(jq -r '.[0].url // empty' <<<"${agent_prs}")"
+    fi
   fi
-  if ! signed_push; then
-    echo "agent-entrypoint: publishing ${branch} failed." >&2
-    exit 1
-  fi
-  # Agent PRs open ready with no label; an existing PR for the branch is success.
-  # The API-created commit has a fixed subject; use local HEAD for the PR title and body.
-  pr_title="$(git log -1 --format=%s)"
-  pr_body="$(git log -1 --format=%B)
+  if [ -n "${agent_pr_url}" ]; then
+    printf '%s\n' "${agent_pr_url}" | tee "${pr_file}"
+  else
+    if ! gitleaks git --log-opts="${base}..HEAD" --redact --no-banner; then
+      echo "agent-entrypoint: gitleaks flagged the new commits (or failed to run); refusing to push." >&2
+      exit 65
+    fi
+    if ! signed_push; then
+      echo "agent-entrypoint: publishing ${branch} failed." >&2
+      exit 1
+    fi
+    # Agent PRs open ready with no label; an existing PR for the branch is success.
+    # The API-created commit has a fixed subject; use local HEAD for the PR title and body.
+    pr_title="$(git log -1 --format=%s)"
+    pr_body="$(git log -1 --format=%B)
 
 - Tool: ${AGENT_TOOL}
 - Run id: ${AGENT_RUN_ID}
 - Exit status: ${status}"
-  pr_created=1
-  if ! url="$(gh pr create --head "${branch}" --title "${pr_title}" --body "${pr_body}")"; then
-    # A continued run pushes to the branch of the PR it already opened.
-    pr_created=0
-  fi
-  if url="$(settle_pr "${branch}")"; then
-    printf '%s\n' "${url}" | tee "${pr_file}"
-  else
-    if [ "${pr_created}" = 0 ]; then
-      echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+    pr_created=1
+    if ! url="$(gh pr create --head "${branch}" --title "${pr_title}" --body "${pr_body}")"; then
+      # A continued run pushes to the branch of the PR it already opened.
+      pr_created=0
     fi
-    [ "${status}" -ne 0 ] || status=1
+    if url="$(settle_pr "${branch}")"; then
+      printf '%s\n' "${url}" | tee "${pr_file}"
+    else
+      if [ "${pr_created}" = 0 ]; then
+        echo "agent-entrypoint: PR creation failed; branch ${branch} was published." >&2
+      fi
+      [ "${status}" -ne 0 ] || status=1
+    fi
   fi
 fi
 

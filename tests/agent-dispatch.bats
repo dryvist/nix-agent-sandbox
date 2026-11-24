@@ -31,7 +31,7 @@ setup() {
     STUB_CONTENTS_404 STUB_BASE_CONTENT STUB_BASE_TOO_LARGE STUB_HEAD_MOVED STUB_DEFAULT_BRANCH \
     STUB_FIX_PR_URL STUB_DOCKER_LOG_FILE STUB_EXIT STUB_SCOPE_REPO \
     STUB_PR_CREATE_FAIL STUB_PR_DRAFT STUB_PR_VIEW_FAIL STUB_PR_VIEW_EMPTY_URL \
-    STUB_PR_AUTO_MERGE STUB_PR_READY_FAIL STUB_PR_MERGE_FAIL \
+    STUB_PR_AUTO_MERGE STUB_PR_READY_FAIL STUB_PR_MERGE_FAIL STUB_PR_LIST_JSON \
     STUB_PROPERTY_VALUE STUB_PROPERTY_MISSING \
     STUB_PROPERTY_HTTP_ERROR STUB_PROPERTY_INVALID_JSON STUB_ROUTER_CURL_FAIL \
     STUB_ROUTER_HTTP_STATUS STUB_ROUTER_MODELS STUB_ROUTER_RESPONSE
@@ -1797,6 +1797,10 @@ case "$1 $2" in
     [ -z "${STUB_PR_CREATE_FAIL:-}" ] || exit 1
     echo https://github.com/dryvist/nix-ai/pull/7
     ;;
+  "pr list")
+    printf '%s\n' "$*" >"$STUB_DIR/pr-list.argv"
+    printf '%s\n' "${STUB_PR_LIST_JSON:-[]}"
+    ;;
   "pr view")
     [ -z "${STUB_PR_VIEW_FAIL:-}" ] || exit 1
     if [ "${STUB_PR_DRAFT:-}" = 1 ]; then draft=true; else draft=false; fi
@@ -1886,6 +1890,7 @@ run_publish() {
     STUB_PR_CREATE_FAIL="${STUB_PR_CREATE_FAIL:-}" STUB_PR_DRAFT="${STUB_PR_DRAFT:-}" \
     STUB_PR_VIEW_FAIL="${STUB_PR_VIEW_FAIL:-}" STUB_PR_AUTO_MERGE="${STUB_PR_AUTO_MERGE:-}" \
     STUB_PR_READY_FAIL="${STUB_PR_READY_FAIL:-}" STUB_PR_MERGE_FAIL="${STUB_PR_MERGE_FAIL:-}" \
+    STUB_PR_LIST_JSON="${STUB_PR_LIST_JSON:-}" \
     AGENT_SANDBOX=1 \
     AGENT_TOOL=zcode AGENT_TTY=1 AGENT_REPO=dryvist/nix-ai AGENT_RUN_ID="$id" "$@" \
     bash -euo pipefail "$ENTRYPOINT"
@@ -2099,6 +2104,46 @@ SH
   [ ! -e "$STUB_DIR/tree.json" ]
   [ ! -e "$STUB_DIR/commit.json" ]
   [ ! -e "$STUB_DIR/gh-api.log" ]
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
+}
+
+@test "the run reports the tool's own open PR instead of creating a duplicate" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture own-pr 0
+  STUB_PR_LIST_JSON='[{"url":"https://github.com/dryvist/nix-ai/pull/9"}]'
+  bash_stub "$tools/zcode" <<'SH'
+git checkout -qb test/role-include-targets
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+git push -q origin test/role-include-targets
+SH
+  run_publish j-own-pr
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr list --head test/role-include-targets --state open --json url' "$STUB_DIR/pr-list.argv"
+  [ ! -e "$STUB_DIR/pr-create.argv" ]
+  [ ! -e "$STUB_DIR/gh-api.log" ]
+  [ ! -e "$STUB_DIR/gitleaks-argv" ]
+  run ! grep -Eq 'pr (view|ready|merge)' "$STUB_DIR/gh.log"
+  [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/9 ]
+}
+
+@test "a tool branch with no open PR still publishes the run branch" {
+  : "${ENTRYPOINT:?set ENTRYPOINT to scripts/entrypoint.sh}"
+  local home tools origin
+  publish_fixture tool-branch 0
+  bash_stub "$tools/zcode" <<'SH'
+git checkout -qb test/tool-branch
+echo change >tool-file
+git add tool-file
+git commit -q -m "tool commit"
+git push -q origin test/tool-branch
+SH
+  run_publish j-tool-branch
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr list --head test/tool-branch --state open --json url' "$STUB_DIR/pr-list.argv"
+  grep -Fq 'pr create --head agent/zcode/j-tool-branch' "$STUB_DIR/pr-create.argv"
   [ "$(cat "$home/work/.agent-pr-url")" = https://github.com/dryvist/nix-ai/pull/7 ]
 }
 
